@@ -51,6 +51,7 @@ const NavbarApp = function _NavbarApp() {
     <div className="d-flex flex-row min-vh-100 position-relative">
       <HeaderMenu />
       <div className="flex-grow-1 w-0 d-flex flex-column">
+        TEST
         {globalWarning !== '' && <div className="alert-warning rounded px-2 py-1">{globalWarning}</div>}
         <Outlet />
         <BuildVersion className="text-end text-secondary build-version container-xl pb-3" />
