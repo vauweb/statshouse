@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vkcom/statshouse/internal/data_model"
 	"go.uber.org/atomic"
 )
 
@@ -22,7 +23,7 @@ type pSelectRow struct {
 
 type pointsCache struct {
 	loader            pointsLoadFunc
-	size              int
+	size              int // len(cacheEntry.rows) + cacheEntry.rowsSize
 	approxMaxSize     int
 	cacheMu           sync.RWMutex
 	cache             map[string]*cacheEntry
@@ -30,7 +31,7 @@ type pointsCache struct {
 	now               func() time.Time
 }
 
-type pointsLoadFunc func(ctx context.Context, pq *preparedPointsQuery, pointsQuery pointQuery) ([]pSelectRow, error)
+type pointsLoadFunc func(ctx context.Context, pq *preparedPointsQuery, lod data_model.LOD) ([]pSelectRow, error)
 
 type timeRange struct {
 	from int64
@@ -42,7 +43,7 @@ type cacheEntry struct {
 	lru          atomic.Int64
 	loadedAtNano int64
 	rows         map[timeRange][]pSelectRow
-	size         int
+	rowsSize     int
 }
 
 func newPointsCache(approxMaxSize int, utcOffset int64, loader pointsLoadFunc, now func() time.Time) *pointsCache {
@@ -55,15 +56,15 @@ func newPointsCache(approxMaxSize int, utcOffset int64, loader pointsLoadFunc, n
 	}
 }
 
-func (c *pointsCache) get(ctx context.Context, key string, pq *preparedPointsQuery, pointQuery pointQuery, avoidCache bool) ([]pSelectRow, error) {
+func (c *pointsCache) get(ctx context.Context, key string, pq *preparedPointsQuery, lod data_model.LOD, avoidCache bool) ([]pSelectRow, error) {
 	if !avoidCache {
-		rows, ok := c.loadCached(key, pointQuery.fromSec, pointQuery.toSec)
+		rows, ok := c.loadCached(key, lod.FromSec, lod.ToSec)
 		if ok {
 			return rows, nil
 		}
 	}
 	loadedAtNano := c.now().UnixNano()
-	rows, err := c.loader(ctx, pq, pointQuery)
+	rows, err := c.loader(ctx, pq, lod)
 	if err != nil {
 		return rows, err
 	}
@@ -73,7 +74,7 @@ func (c *pointsCache) get(ctx context.Context, key string, pq *preparedPointsQue
 	c.cacheMu.Lock()
 	defer c.cacheMu.Unlock()
 
-	for c.size >= c.approxMaxSize {
+	for c.size+len(c.cache) >= c.approxMaxSize {
 		c.size -= c.evictLocked()
 	}
 
@@ -89,11 +90,13 @@ func (c *pointsCache) get(ctx context.Context, key string, pq *preparedPointsQue
 
 	e.lru.Store(c.now().UnixNano())
 	e.loadedAtNano = loadedAtNano
-	tr := timeRange{from: pointQuery.fromSec, to: pointQuery.toSec}
+	tr := timeRange{from: lod.FromSec, to: lod.ToSec}
 	if _, ok := e.rows[tr]; !ok {
-		c.size++
+		c.size += 1 + len(rows)
+	} else {
+		c.size += len(rows)
 	}
-	e.size += len(rows)
+	e.rowsSize += len(rows)
 	e.rows[tr] = rows
 	return rows, nil
 }
@@ -150,9 +153,9 @@ func (c *pointsCache) evictLocked() int {
 		return 0
 	}
 	e := c.cache[k]
-	n := e.size
+	n := e.rowsSize
 	delete(c.cache, k)
-	return n
+	return n + len(e.rows)
 }
 
 type invalidatedSecondsCache struct {

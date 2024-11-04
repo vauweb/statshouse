@@ -5,88 +5,58 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Dashboard, ErrorMessages, PlotLayout, PlotView } from '../components';
-import { setBackgroundColor } from '../common/canvasToImage';
-import { Store, useStore } from '../store';
-import { now } from './utils';
-import { debug } from '../common/debug';
+import { ToggleButton } from 'components/UI';
+import {
+  defaultInterval,
+  selectorDisabledLive,
+  setIntervalTVMode,
+  setLiveMode,
+  Store,
+  toggleEnableTVMode,
+  useLiveModeStore,
+  useStore,
+  useTVModeStore,
+} from '../store';
 import { shallow } from 'zustand/shallow';
-import { usePlotPreview } from '../store/plot/plotPreview';
-import { useRectObserver } from '../hooks';
+import { useEmbedMessage } from '../hooks/useEmbedMessage';
+import { ReactComponent as SVGFullscreen } from 'bootstrap-icons/icons/fullscreen.svg';
+import { ReactComponent as SVGFullscreenExit } from 'bootstrap-icons/icons/fullscreen-exit.svg';
+import { ReactComponent as SVGPlayFill } from 'bootstrap-icons/icons/play-fill.svg';
+import { toNumber } from '../common/helpers';
+import { Dashboard, PlotLayout, PlotView } from '../components';
+import { ErrorMessages } from '../components/ErrorMessages';
 
-const { setPlotParams, setTimeRange, setBaseRange, setCompact } = useStore.getState();
+const { setPlotParams, setBaseRange, setCompact } = useStore.getState();
 
 export type ViewPageProps = {
   embed?: boolean;
   yAxisSize?: number;
 };
 
-const selector = ({ params, liveMode, metricsMeta, timeRange, globalNumQueriesPlot }: Store) => ({
+const selector = ({ params, metricsMeta, globalNumQueriesPlot }: Store) => ({
   params,
   activePlot: params.plots[params.tabNum],
-  liveMode,
   activePlotMeta: metricsMeta[params.plots[params.tabNum]?.metricName ?? ''] ?? undefined,
   globalNumQueriesPlot,
-  timeRange,
 });
 export const ViewPage: React.FC<ViewPageProps> = ({ embed, yAxisSize = 54 }) => {
-  const { params, activePlotMeta, activePlot, liveMode, timeRange, globalNumQueriesPlot } = useStore(selector, shallow);
-  const plotPreview = usePlotPreview((state) => state.previewList[params.tabNum]);
+  const { params, activePlotMeta, activePlot, globalNumQueriesPlot } = useStore(selector, shallow);
   const [refPage, setRefPage] = useState<HTMLDivElement | null>(null);
-  const [{ width, height }] = useRectObserver(refPage, true);
-  useEffect(() => {
-    if (embed) {
-      window.top?.postMessage({ source: 'statshouse', payload: { width, height } }, '*');
-    }
-  }, [embed, height, width]);
 
+  const { enable: tvMode, interval: tvModeInterval } = useTVModeStore((state) => state);
+
+  const tvModeIntervalChange = useCallback<React.ChangeEventHandler<HTMLSelectElement>>((event) => {
+    const value = toNumber(event.currentTarget.value, defaultInterval);
+    setIntervalTVMode(value);
+  }, []);
+
+  const live = useLiveModeStore((s) => s.live);
+  const disabledLive = useStore(selectorDisabledLive);
+
+  useEmbedMessage(refPage, embed);
   useEffect(() => {
     setCompact(!!embed);
   }, [embed]);
-
-  useEffect(() => {
-    setBackgroundColor(plotPreview ?? '', 'rgba(255,255,255,1)', 64).then((data) => {
-      let link: HTMLLinkElement | null = document.querySelector("link[rel~='icon']");
-      if (!link) {
-        link = document.createElement('link');
-        link.rel = 'icon';
-        document.getElementsByTagName('head')[0].appendChild(link);
-      }
-      link.href = data || '/favicon.ico';
-    });
-  }, [params.tabNum, plotPreview]);
-
-  const refresh = useCallback(() => {
-    if (document.visibilityState === 'visible') {
-      setTimeRange(
-        (range) => ({
-          to: range.absolute ? now() : range.getRangeUrl().to,
-          from: range.relativeFrom,
-        }),
-        true
-      );
-    }
-  }, []);
-
-  useEffect(() => {
-    if (liveMode) {
-      refresh();
-      const refreshSec =
-        -timeRange.relativeFrom <= 2 * 3600
-          ? 1
-          : -timeRange.relativeFrom <= 48 * 3600
-          ? 15
-          : -timeRange.relativeFrom <= 31 * 24 * 3600
-          ? 60
-          : 300;
-      debug.log('live mode enabled', refreshSec);
-      const id = setInterval(refresh, refreshSec * 1000);
-      return () => {
-        debug.log('live mode disabled');
-        clearInterval(id);
-      };
-    }
-  }, [liveMode, refresh, timeRange.relativeFrom]);
 
   useEffect(() => {
     if (params.tabNum >= 0 && !useStore.getState().dashboardLayoutEdit) {
@@ -98,8 +68,43 @@ export const ViewPage: React.FC<ViewPageProps> = ({ embed, yAxisSize = 54 }) => 
     return <ErrorMessages />;
   }
   return (
-    <div ref={setRefPage} className="d-flex flex-column flex-md-row">
-      <div className={embed ? 'flex-grow-1' : 'flex-grow-1 pt-3 pb-3'}>
+    <div ref={setRefPage} className="d-flex flex-column flex-md-row dashLayout">
+      <div className="flex-grow-1">
+        {tvMode && (
+          <div className="position-fixed z-1000 top-0 end-0 pt-1 pe-1 ">
+            <div className="input-group input-group-sm">
+              <ToggleButton
+                className="btn btn-outline-primary btn-sm rounded-start-1"
+                title="Follow live"
+                checked={live}
+                onChange={setLiveMode}
+                disabled={disabledLive}
+              >
+                <SVGPlayFill />
+              </ToggleButton>
+              <select className="form-select" value={tvModeInterval} onChange={tvModeIntervalChange}>
+                <option value="0">none</option>
+                <option value="5000">5 sec.</option>
+                <option value="10000">10 sec.</option>
+                <option value="15000">15 sec.</option>
+                <option value="20000">20 sec.</option>
+                <option value="30000">30 sec.</option>
+                <option value="45000">45 sec.</option>
+                <option value="60000">60 sec.</option>
+                <option value="120000">2 min.</option>
+                <option value="300000">6 min.</option>
+              </select>
+              <ToggleButton
+                className="btn btn-outline-primary btn-sm"
+                checked={tvMode}
+                onChange={toggleEnableTVMode}
+                title={tvMode ? 'TV mode Off' : 'TV mode On'}
+              >
+                {tvMode ? <SVGFullscreenExit /> : <SVGFullscreen />}
+              </ToggleButton>
+            </div>
+          </div>
+        )}
         <div className="tab-content position-relative">
           {params.tabNum >= 0 && (
             <div className={`container-xl tab-pane show active ${params.tabNum >= 0 ? '' : 'hidden-dashboard'}`}>

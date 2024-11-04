@@ -24,6 +24,7 @@ type (
 	String                                        = internal.String
 	StringBytes                                   = internal.StringBytes
 	True                                          = internal.True
+	TupleDouble2                                  = internal.TupleDouble2
 	VectorDictionaryFieldEngineMetafilesStatBoxed = internal.VectorDictionaryFieldEngineMetafilesStatBoxed
 	VectorDictionaryFieldString                   = internal.VectorDictionaryFieldString
 	VectorDictionaryFieldStringBytes              = internal.VectorDictionaryFieldStringBytes
@@ -34,13 +35,14 @@ type (
 	VectorLong                                    = internal.VectorLong
 	VectorMetadataEvent                           = internal.VectorMetadataEvent
 	VectorMetadataEventBytes                      = internal.VectorMetadataEventBytes
+	VectorMetadataHistoryShortResponseEvent       = internal.VectorMetadataHistoryShortResponseEvent
 	VectorMetadataMetricOld                       = internal.VectorMetadataMetricOld
 	VectorStatshouseApiFilter                     = internal.VectorStatshouseApiFilter
-	VectorStatshouseApiFunctionBoxed              = internal.VectorStatshouseApiFunctionBoxed
+	VectorStatshouseApiFunction                   = internal.VectorStatshouseApiFunction
 	VectorStatshouseApiPointMeta                  = internal.VectorStatshouseApiPointMeta
 	VectorStatshouseApiSeriesMeta                 = internal.VectorStatshouseApiSeriesMeta
 	VectorStatshouseApiTagValue                   = internal.VectorStatshouseApiTagValue
-	VectorStatshouseCentroid                      = internal.VectorStatshouseCentroid
+	VectorStatshouseCentroidFloat                 = internal.VectorStatshouseCentroidFloat
 	VectorStatshouseIngestionStatus2              = internal.VectorStatshouseIngestionStatus2
 	VectorStatshouseMapping                       = internal.VectorStatshouseMapping
 	VectorStatshouseMappingBytes                  = internal.VectorStatshouseMappingBytes
@@ -55,5 +57,13 @@ type (
 	VectorStatshouseTopElementBytes               = internal.VectorStatshouseTopElementBytes
 	VectorString                                  = internal.VectorString
 	VectorStringBytes                             = internal.VectorStringBytes
+	VectorTupleDouble2                            = internal.VectorTupleDouble2
 	VectorVectorDouble                            = internal.VectorVectorDouble
 )
+
+func BoolReadBoxed(w []byte, v *bool) ([]byte, error) {
+	return internal.BoolReadBoxed(w, v)
+}
+func BoolWriteBoxed(w []byte, v bool) []byte {
+	return internal.BoolWriteBoxed(w, v)
+}

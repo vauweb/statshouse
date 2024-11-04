@@ -15,7 +15,8 @@ var _ = basictl.NatWrite
 
 type StatshouseCommonProxyHeader struct {
 	// IngressProxy (TrueType) // Conditional: nat_fields_mask.31
-	// AgentEnvStaging (TrueType) // Conditional: nat_fields_mask.30
+	// AgentEnvStaging0 (TrueType) // Conditional: nat_fields_mask.30
+	// AgentEnvStaging1 (TrueType) // Conditional: nat_fields_mask.29
 	ShardReplica      int32
 	ShardReplicaTotal int32
 	AgentIp           [4]int32
@@ -40,7 +41,7 @@ func (item StatshouseCommonProxyHeader) IsSetIngressProxy(nat_fields_mask uint32
 	return nat_fields_mask&(1<<31) != 0
 }
 
-func (item *StatshouseCommonProxyHeader) SetAgentEnvStaging(v bool, nat_fields_mask *uint32) {
+func (item *StatshouseCommonProxyHeader) SetAgentEnvStaging0(v bool, nat_fields_mask *uint32) {
 	if nat_fields_mask != nil {
 		if v {
 			*nat_fields_mask |= 1 << 30
@@ -49,14 +50,27 @@ func (item *StatshouseCommonProxyHeader) SetAgentEnvStaging(v bool, nat_fields_m
 		}
 	}
 }
-func (item StatshouseCommonProxyHeader) IsSetAgentEnvStaging(nat_fields_mask uint32) bool {
+func (item StatshouseCommonProxyHeader) IsSetAgentEnvStaging0(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<30) != 0
+}
+
+func (item *StatshouseCommonProxyHeader) SetAgentEnvStaging1(v bool, nat_fields_mask *uint32) {
+	if nat_fields_mask != nil {
+		if v {
+			*nat_fields_mask |= 1 << 29
+		} else {
+			*nat_fields_mask &^= 1 << 29
+		}
+	}
+}
+func (item StatshouseCommonProxyHeader) IsSetAgentEnvStaging1(nat_fields_mask uint32) bool {
+	return nat_fields_mask&(1<<29) != 0
 }
 
 func (item *StatshouseCommonProxyHeader) Reset() {
 	item.ShardReplica = 0
 	item.ShardReplicaTotal = 0
-	TupleInt4Reset(&item.AgentIp)
+	BuiltinTuple4IntReset(&item.AgentIp)
 	item.HostName = ""
 	item.ComponentTag = 0
 	item.BuildArch = 0
@@ -69,7 +83,7 @@ func (item *StatshouseCommonProxyHeader) Read(w []byte, nat_fields_mask uint32) 
 	if w, err = basictl.IntRead(w, &item.ShardReplicaTotal); err != nil {
 		return w, err
 	}
-	if w, err = TupleInt4Read(w, &item.AgentIp); err != nil {
+	if w, err = BuiltinTuple4IntRead(w, &item.AgentIp); err != nil {
 		return w, err
 	}
 	if w, err = basictl.StringRead(w, &item.HostName); err != nil {
@@ -81,17 +95,19 @@ func (item *StatshouseCommonProxyHeader) Read(w []byte, nat_fields_mask uint32) 
 	return basictl.IntRead(w, &item.BuildArch)
 }
 
-func (item *StatshouseCommonProxyHeader) Write(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+// This method is general version of Write, use it instead!
+func (item *StatshouseCommonProxyHeader) WriteGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.Write(w, nat_fields_mask), nil
+}
+
+func (item *StatshouseCommonProxyHeader) Write(w []byte, nat_fields_mask uint32) []byte {
 	w = basictl.IntWrite(w, item.ShardReplica)
 	w = basictl.IntWrite(w, item.ShardReplicaTotal)
-	if w, err = TupleInt4Write(w, &item.AgentIp); err != nil {
-		return w, err
-	}
-	if w, err = basictl.StringWrite(w, item.HostName); err != nil {
-		return w, err
-	}
+	w = BuiltinTuple4IntWrite(w, &item.AgentIp)
+	w = basictl.StringWrite(w, item.HostName)
 	w = basictl.IntWrite(w, item.ComponentTag)
-	return basictl.IntWrite(w, item.BuildArch), nil
+	w = basictl.IntWrite(w, item.BuildArch)
+	return w
 }
 
 func (item *StatshouseCommonProxyHeader) ReadBoxed(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
@@ -101,106 +117,173 @@ func (item *StatshouseCommonProxyHeader) ReadBoxed(w []byte, nat_fields_mask uin
 	return item.Read(w, nat_fields_mask)
 }
 
-func (item *StatshouseCommonProxyHeader) WriteBoxed(w []byte, nat_fields_mask uint32) ([]byte, error) {
+// This method is general version of WriteBoxed, use it instead!
+func (item *StatshouseCommonProxyHeader) WriteBoxedGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteBoxed(w, nat_fields_mask), nil
+}
+
+func (item *StatshouseCommonProxyHeader) WriteBoxed(w []byte, nat_fields_mask uint32) []byte {
 	w = basictl.NatWrite(w, 0x6c803d07)
 	return item.Write(w, nat_fields_mask)
 }
 
-func StatshouseCommonProxyHeader__ReadJSON(item *StatshouseCommonProxyHeader, j interface{}, nat_fields_mask uint32) error {
-	return item.readJSON(j, nat_fields_mask)
-}
-func (item *StatshouseCommonProxyHeader) readJSON(j interface{}, nat_fields_mask uint32) error {
-	_jm, _ok := j.(map[string]interface{})
-	if j != nil && !_ok {
-		return ErrorInvalidJSON("statshouse.commonProxyHeader", "expected json object")
+func (item *StatshouseCommonProxyHeader) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask uint32) error {
+	var propShardReplicaPresented bool
+	var propShardReplicaTotalPresented bool
+	var propAgentIpPresented bool
+	var propHostNamePresented bool
+	var propComponentTagPresented bool
+	var propBuildArchPresented bool
+
+	if in != nil {
+		in.Delim('{')
+		if !in.Ok() {
+			return in.Error()
+		}
+		for !in.IsDelim('}') {
+			key := in.UnsafeFieldName(true)
+			in.WantColon()
+			switch key {
+			case "ingress_proxy":
+				return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'ingress_proxy' cannot be defined, set fieldmask instead")
+			case "agent_env_staging_0":
+				return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'agent_env_staging_0' cannot be defined, set fieldmask instead")
+			case "agent_env_staging_1":
+				return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'agent_env_staging_1' cannot be defined, set fieldmask instead")
+			case "shard_replica":
+				if propShardReplicaPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "shard_replica")
+				}
+				if err := Json2ReadInt32(in, &item.ShardReplica); err != nil {
+					return err
+				}
+				propShardReplicaPresented = true
+			case "shard_replica_total":
+				if propShardReplicaTotalPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "shard_replica_total")
+				}
+				if err := Json2ReadInt32(in, &item.ShardReplicaTotal); err != nil {
+					return err
+				}
+				propShardReplicaTotalPresented = true
+			case "agent_ip":
+				if propAgentIpPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "agent_ip")
+				}
+				if err := BuiltinTuple4IntReadJSON(legacyTypeNames, in, &item.AgentIp); err != nil {
+					return err
+				}
+				propAgentIpPresented = true
+			case "host_name":
+				if propHostNamePresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "host_name")
+				}
+				if err := Json2ReadString(in, &item.HostName); err != nil {
+					return err
+				}
+				propHostNamePresented = true
+			case "component_tag":
+				if propComponentTagPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "component_tag")
+				}
+				if err := Json2ReadInt32(in, &item.ComponentTag); err != nil {
+					return err
+				}
+				propComponentTagPresented = true
+			case "build_arch":
+				if propBuildArchPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "build_arch")
+				}
+				if err := Json2ReadInt32(in, &item.BuildArch); err != nil {
+					return err
+				}
+				propBuildArchPresented = true
+			default:
+				return ErrorInvalidJSONExcessElement("statshouse.commonProxyHeader", key)
+			}
+			in.WantComma()
+		}
+		in.Delim('}')
+		if !in.Ok() {
+			return in.Error()
+		}
 	}
-	_jIngressProxy := _jm["ingress_proxy"]
-	delete(_jm, "ingress_proxy")
-	_jAgentEnvStaging := _jm["agent_env_staging"]
-	delete(_jm, "agent_env_staging")
-	_jShardReplica := _jm["shard_replica"]
-	delete(_jm, "shard_replica")
-	if err := JsonReadInt32(_jShardReplica, &item.ShardReplica); err != nil {
-		return err
+	if !propShardReplicaPresented {
+		item.ShardReplica = 0
 	}
-	_jShardReplicaTotal := _jm["shard_replica_total"]
-	delete(_jm, "shard_replica_total")
-	if err := JsonReadInt32(_jShardReplicaTotal, &item.ShardReplicaTotal); err != nil {
-		return err
+	if !propShardReplicaTotalPresented {
+		item.ShardReplicaTotal = 0
 	}
-	_jAgentIp := _jm["agent_ip"]
-	delete(_jm, "agent_ip")
-	_jHostName := _jm["host_name"]
-	delete(_jm, "host_name")
-	if err := JsonReadString(_jHostName, &item.HostName); err != nil {
-		return err
+	if !propAgentIpPresented {
+		BuiltinTuple4IntReset(&item.AgentIp)
 	}
-	_jComponentTag := _jm["component_tag"]
-	delete(_jm, "component_tag")
-	if err := JsonReadInt32(_jComponentTag, &item.ComponentTag); err != nil {
-		return err
+	if !propHostNamePresented {
+		item.HostName = ""
 	}
-	_jBuildArch := _jm["build_arch"]
-	delete(_jm, "build_arch")
-	if err := JsonReadInt32(_jBuildArch, &item.BuildArch); err != nil {
-		return err
+	if !propComponentTagPresented {
+		item.ComponentTag = 0
 	}
-	for k := range _jm {
-		return ErrorInvalidJSONExcessElement("statshouse.commonProxyHeader", k)
-	}
-	if _jIngressProxy != nil {
-		return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'ingress_proxy' cannot be defined, set fieldmask instead")
-	}
-	if _jAgentEnvStaging != nil {
-		return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'agent_env_staging' cannot be defined, set fieldmask instead")
-	}
-	if err := TupleInt4ReadJSON(_jAgentIp, &item.AgentIp); err != nil {
-		return err
+	if !propBuildArchPresented {
+		item.BuildArch = 0
 	}
 	return nil
 }
 
-func (item *StatshouseCommonProxyHeader) WriteJSON(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(false, w, nat_fields_mask)
+// This method is general version of WriteJSON, use it instead!
+func (item *StatshouseCommonProxyHeader) WriteJSONGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask), nil
 }
-func (item *StatshouseCommonProxyHeader) WriteJSONOpt(short bool, w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+
+func (item *StatshouseCommonProxyHeader) WriteJSON(w []byte, nat_fields_mask uint32) []byte {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask)
+}
+func (item *StatshouseCommonProxyHeader) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask uint32) []byte {
 	w = append(w, '{')
-	if item.ShardReplica != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"shard_replica":`...)
-		w = basictl.JSONWriteInt32(w, item.ShardReplica)
+	backupIndexShardReplica := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"shard_replica":`...)
+	w = basictl.JSONWriteInt32(w, item.ShardReplica)
+	if (item.ShardReplica != 0) == false {
+		w = w[:backupIndexShardReplica]
 	}
-	if item.ShardReplicaTotal != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"shard_replica_total":`...)
-		w = basictl.JSONWriteInt32(w, item.ShardReplicaTotal)
+	backupIndexShardReplicaTotal := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"shard_replica_total":`...)
+	w = basictl.JSONWriteInt32(w, item.ShardReplicaTotal)
+	if (item.ShardReplicaTotal != 0) == false {
+		w = w[:backupIndexShardReplicaTotal]
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"agent_ip":`...)
-	if w, err = TupleInt4WriteJSONOpt(short, w, &item.AgentIp); err != nil {
-		return w, err
+	w = BuiltinTuple4IntWriteJSONOpt(newTypeNames, short, w, &item.AgentIp)
+	backupIndexHostName := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"host_name":`...)
+	w = basictl.JSONWriteString(w, item.HostName)
+	if (len(item.HostName) != 0) == false {
+		w = w[:backupIndexHostName]
 	}
-	if len(item.HostName) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"host_name":`...)
-		w = basictl.JSONWriteString(w, item.HostName)
+	backupIndexComponentTag := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"component_tag":`...)
+	w = basictl.JSONWriteInt32(w, item.ComponentTag)
+	if (item.ComponentTag != 0) == false {
+		w = w[:backupIndexComponentTag]
 	}
-	if item.ComponentTag != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"component_tag":`...)
-		w = basictl.JSONWriteInt32(w, item.ComponentTag)
+	backupIndexBuildArch := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"build_arch":`...)
+	w = basictl.JSONWriteInt32(w, item.BuildArch)
+	if (item.BuildArch != 0) == false {
+		w = w[:backupIndexBuildArch]
 	}
-	if item.BuildArch != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"build_arch":`...)
-		w = basictl.JSONWriteInt32(w, item.BuildArch)
-	}
-	return append(w, '}'), nil
+	return append(w, '}')
 }
 
 type StatshouseCommonProxyHeaderBytes struct {
 	// IngressProxy (TrueType) // Conditional: nat_fields_mask.31
-	// AgentEnvStaging (TrueType) // Conditional: nat_fields_mask.30
+	// AgentEnvStaging0 (TrueType) // Conditional: nat_fields_mask.30
+	// AgentEnvStaging1 (TrueType) // Conditional: nat_fields_mask.29
 	ShardReplica      int32
 	ShardReplicaTotal int32
 	AgentIp           [4]int32
@@ -225,7 +308,7 @@ func (item StatshouseCommonProxyHeaderBytes) IsSetIngressProxy(nat_fields_mask u
 	return nat_fields_mask&(1<<31) != 0
 }
 
-func (item *StatshouseCommonProxyHeaderBytes) SetAgentEnvStaging(v bool, nat_fields_mask *uint32) {
+func (item *StatshouseCommonProxyHeaderBytes) SetAgentEnvStaging0(v bool, nat_fields_mask *uint32) {
 	if nat_fields_mask != nil {
 		if v {
 			*nat_fields_mask |= 1 << 30
@@ -234,14 +317,27 @@ func (item *StatshouseCommonProxyHeaderBytes) SetAgentEnvStaging(v bool, nat_fie
 		}
 	}
 }
-func (item StatshouseCommonProxyHeaderBytes) IsSetAgentEnvStaging(nat_fields_mask uint32) bool {
+func (item StatshouseCommonProxyHeaderBytes) IsSetAgentEnvStaging0(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<30) != 0
+}
+
+func (item *StatshouseCommonProxyHeaderBytes) SetAgentEnvStaging1(v bool, nat_fields_mask *uint32) {
+	if nat_fields_mask != nil {
+		if v {
+			*nat_fields_mask |= 1 << 29
+		} else {
+			*nat_fields_mask &^= 1 << 29
+		}
+	}
+}
+func (item StatshouseCommonProxyHeaderBytes) IsSetAgentEnvStaging1(nat_fields_mask uint32) bool {
+	return nat_fields_mask&(1<<29) != 0
 }
 
 func (item *StatshouseCommonProxyHeaderBytes) Reset() {
 	item.ShardReplica = 0
 	item.ShardReplicaTotal = 0
-	TupleInt4Reset(&item.AgentIp)
+	BuiltinTuple4IntReset(&item.AgentIp)
 	item.HostName = item.HostName[:0]
 	item.ComponentTag = 0
 	item.BuildArch = 0
@@ -254,7 +350,7 @@ func (item *StatshouseCommonProxyHeaderBytes) Read(w []byte, nat_fields_mask uin
 	if w, err = basictl.IntRead(w, &item.ShardReplicaTotal); err != nil {
 		return w, err
 	}
-	if w, err = TupleInt4Read(w, &item.AgentIp); err != nil {
+	if w, err = BuiltinTuple4IntRead(w, &item.AgentIp); err != nil {
 		return w, err
 	}
 	if w, err = basictl.StringReadBytes(w, &item.HostName); err != nil {
@@ -266,17 +362,19 @@ func (item *StatshouseCommonProxyHeaderBytes) Read(w []byte, nat_fields_mask uin
 	return basictl.IntRead(w, &item.BuildArch)
 }
 
-func (item *StatshouseCommonProxyHeaderBytes) Write(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+// This method is general version of Write, use it instead!
+func (item *StatshouseCommonProxyHeaderBytes) WriteGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.Write(w, nat_fields_mask), nil
+}
+
+func (item *StatshouseCommonProxyHeaderBytes) Write(w []byte, nat_fields_mask uint32) []byte {
 	w = basictl.IntWrite(w, item.ShardReplica)
 	w = basictl.IntWrite(w, item.ShardReplicaTotal)
-	if w, err = TupleInt4Write(w, &item.AgentIp); err != nil {
-		return w, err
-	}
-	if w, err = basictl.StringWriteBytes(w, item.HostName); err != nil {
-		return w, err
-	}
+	w = BuiltinTuple4IntWrite(w, &item.AgentIp)
+	w = basictl.StringWriteBytes(w, item.HostName)
 	w = basictl.IntWrite(w, item.ComponentTag)
-	return basictl.IntWrite(w, item.BuildArch), nil
+	w = basictl.IntWrite(w, item.BuildArch)
+	return w
 }
 
 func (item *StatshouseCommonProxyHeaderBytes) ReadBoxed(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
@@ -286,99 +384,165 @@ func (item *StatshouseCommonProxyHeaderBytes) ReadBoxed(w []byte, nat_fields_mas
 	return item.Read(w, nat_fields_mask)
 }
 
-func (item *StatshouseCommonProxyHeaderBytes) WriteBoxed(w []byte, nat_fields_mask uint32) ([]byte, error) {
+// This method is general version of WriteBoxed, use it instead!
+func (item *StatshouseCommonProxyHeaderBytes) WriteBoxedGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteBoxed(w, nat_fields_mask), nil
+}
+
+func (item *StatshouseCommonProxyHeaderBytes) WriteBoxed(w []byte, nat_fields_mask uint32) []byte {
 	w = basictl.NatWrite(w, 0x6c803d07)
 	return item.Write(w, nat_fields_mask)
 }
 
-func StatshouseCommonProxyHeaderBytes__ReadJSON(item *StatshouseCommonProxyHeaderBytes, j interface{}, nat_fields_mask uint32) error {
-	return item.readJSON(j, nat_fields_mask)
-}
-func (item *StatshouseCommonProxyHeaderBytes) readJSON(j interface{}, nat_fields_mask uint32) error {
-	_jm, _ok := j.(map[string]interface{})
-	if j != nil && !_ok {
-		return ErrorInvalidJSON("statshouse.commonProxyHeader", "expected json object")
+func (item *StatshouseCommonProxyHeaderBytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask uint32) error {
+	var propShardReplicaPresented bool
+	var propShardReplicaTotalPresented bool
+	var propAgentIpPresented bool
+	var propHostNamePresented bool
+	var propComponentTagPresented bool
+	var propBuildArchPresented bool
+
+	if in != nil {
+		in.Delim('{')
+		if !in.Ok() {
+			return in.Error()
+		}
+		for !in.IsDelim('}') {
+			key := in.UnsafeFieldName(true)
+			in.WantColon()
+			switch key {
+			case "ingress_proxy":
+				return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'ingress_proxy' cannot be defined, set fieldmask instead")
+			case "agent_env_staging_0":
+				return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'agent_env_staging_0' cannot be defined, set fieldmask instead")
+			case "agent_env_staging_1":
+				return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'agent_env_staging_1' cannot be defined, set fieldmask instead")
+			case "shard_replica":
+				if propShardReplicaPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "shard_replica")
+				}
+				if err := Json2ReadInt32(in, &item.ShardReplica); err != nil {
+					return err
+				}
+				propShardReplicaPresented = true
+			case "shard_replica_total":
+				if propShardReplicaTotalPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "shard_replica_total")
+				}
+				if err := Json2ReadInt32(in, &item.ShardReplicaTotal); err != nil {
+					return err
+				}
+				propShardReplicaTotalPresented = true
+			case "agent_ip":
+				if propAgentIpPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "agent_ip")
+				}
+				if err := BuiltinTuple4IntReadJSON(legacyTypeNames, in, &item.AgentIp); err != nil {
+					return err
+				}
+				propAgentIpPresented = true
+			case "host_name":
+				if propHostNamePresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "host_name")
+				}
+				if err := Json2ReadStringBytes(in, &item.HostName); err != nil {
+					return err
+				}
+				propHostNamePresented = true
+			case "component_tag":
+				if propComponentTagPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "component_tag")
+				}
+				if err := Json2ReadInt32(in, &item.ComponentTag); err != nil {
+					return err
+				}
+				propComponentTagPresented = true
+			case "build_arch":
+				if propBuildArchPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "build_arch")
+				}
+				if err := Json2ReadInt32(in, &item.BuildArch); err != nil {
+					return err
+				}
+				propBuildArchPresented = true
+			default:
+				return ErrorInvalidJSONExcessElement("statshouse.commonProxyHeader", key)
+			}
+			in.WantComma()
+		}
+		in.Delim('}')
+		if !in.Ok() {
+			return in.Error()
+		}
 	}
-	_jIngressProxy := _jm["ingress_proxy"]
-	delete(_jm, "ingress_proxy")
-	_jAgentEnvStaging := _jm["agent_env_staging"]
-	delete(_jm, "agent_env_staging")
-	_jShardReplica := _jm["shard_replica"]
-	delete(_jm, "shard_replica")
-	if err := JsonReadInt32(_jShardReplica, &item.ShardReplica); err != nil {
-		return err
+	if !propShardReplicaPresented {
+		item.ShardReplica = 0
 	}
-	_jShardReplicaTotal := _jm["shard_replica_total"]
-	delete(_jm, "shard_replica_total")
-	if err := JsonReadInt32(_jShardReplicaTotal, &item.ShardReplicaTotal); err != nil {
-		return err
+	if !propShardReplicaTotalPresented {
+		item.ShardReplicaTotal = 0
 	}
-	_jAgentIp := _jm["agent_ip"]
-	delete(_jm, "agent_ip")
-	_jHostName := _jm["host_name"]
-	delete(_jm, "host_name")
-	if err := JsonReadStringBytes(_jHostName, &item.HostName); err != nil {
-		return err
+	if !propAgentIpPresented {
+		BuiltinTuple4IntReset(&item.AgentIp)
 	}
-	_jComponentTag := _jm["component_tag"]
-	delete(_jm, "component_tag")
-	if err := JsonReadInt32(_jComponentTag, &item.ComponentTag); err != nil {
-		return err
+	if !propHostNamePresented {
+		item.HostName = item.HostName[:0]
 	}
-	_jBuildArch := _jm["build_arch"]
-	delete(_jm, "build_arch")
-	if err := JsonReadInt32(_jBuildArch, &item.BuildArch); err != nil {
-		return err
+	if !propComponentTagPresented {
+		item.ComponentTag = 0
 	}
-	for k := range _jm {
-		return ErrorInvalidJSONExcessElement("statshouse.commonProxyHeader", k)
-	}
-	if _jIngressProxy != nil {
-		return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'ingress_proxy' cannot be defined, set fieldmask instead")
-	}
-	if _jAgentEnvStaging != nil {
-		return ErrorInvalidJSON("statshouse.commonProxyHeader", "implicit true field 'agent_env_staging' cannot be defined, set fieldmask instead")
-	}
-	if err := TupleInt4ReadJSON(_jAgentIp, &item.AgentIp); err != nil {
-		return err
+	if !propBuildArchPresented {
+		item.BuildArch = 0
 	}
 	return nil
 }
 
-func (item *StatshouseCommonProxyHeaderBytes) WriteJSON(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(false, w, nat_fields_mask)
+// This method is general version of WriteJSON, use it instead!
+func (item *StatshouseCommonProxyHeaderBytes) WriteJSONGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask), nil
 }
-func (item *StatshouseCommonProxyHeaderBytes) WriteJSONOpt(short bool, w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+
+func (item *StatshouseCommonProxyHeaderBytes) WriteJSON(w []byte, nat_fields_mask uint32) []byte {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask)
+}
+func (item *StatshouseCommonProxyHeaderBytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask uint32) []byte {
 	w = append(w, '{')
-	if item.ShardReplica != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"shard_replica":`...)
-		w = basictl.JSONWriteInt32(w, item.ShardReplica)
+	backupIndexShardReplica := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"shard_replica":`...)
+	w = basictl.JSONWriteInt32(w, item.ShardReplica)
+	if (item.ShardReplica != 0) == false {
+		w = w[:backupIndexShardReplica]
 	}
-	if item.ShardReplicaTotal != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"shard_replica_total":`...)
-		w = basictl.JSONWriteInt32(w, item.ShardReplicaTotal)
+	backupIndexShardReplicaTotal := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"shard_replica_total":`...)
+	w = basictl.JSONWriteInt32(w, item.ShardReplicaTotal)
+	if (item.ShardReplicaTotal != 0) == false {
+		w = w[:backupIndexShardReplicaTotal]
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"agent_ip":`...)
-	if w, err = TupleInt4WriteJSONOpt(short, w, &item.AgentIp); err != nil {
-		return w, err
+	w = BuiltinTuple4IntWriteJSONOpt(newTypeNames, short, w, &item.AgentIp)
+	backupIndexHostName := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"host_name":`...)
+	w = basictl.JSONWriteStringBytes(w, item.HostName)
+	if (len(item.HostName) != 0) == false {
+		w = w[:backupIndexHostName]
 	}
-	if len(item.HostName) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"host_name":`...)
-		w = basictl.JSONWriteStringBytes(w, item.HostName)
+	backupIndexComponentTag := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"component_tag":`...)
+	w = basictl.JSONWriteInt32(w, item.ComponentTag)
+	if (item.ComponentTag != 0) == false {
+		w = w[:backupIndexComponentTag]
 	}
-	if item.ComponentTag != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"component_tag":`...)
-		w = basictl.JSONWriteInt32(w, item.ComponentTag)
+	backupIndexBuildArch := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"build_arch":`...)
+	w = basictl.JSONWriteInt32(w, item.BuildArch)
+	if (item.BuildArch != 0) == false {
+		w = w[:backupIndexBuildArch]
 	}
-	if item.BuildArch != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"build_arch":`...)
-		w = basictl.JSONWriteInt32(w, item.BuildArch)
-	}
-	return append(w, '}'), nil
+	return append(w, '}')
 }

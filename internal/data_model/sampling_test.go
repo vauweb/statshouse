@@ -8,9 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-
+	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/vkcom/statshouse/internal/format"
-
 	"pgregory.net/rand"
 	"pgregory.net/rapid"
 )
@@ -34,7 +33,7 @@ func TestSampling(t *testing.T) {
 		var keepSumSize int64
 		m := make(map[int32]*metricInfo)
 		s := NewSampler(len(b.series), SamplerConfig{
-			KeepF: func(k Key, item *MultiItem) {
+			KeepF: func(k Key, item *MultiItem, _ uint32) {
 				keepN++
 				keepSumSize += int64(samplingTestSizeOf(k, item))
 				stat := m[k.Metric]
@@ -49,7 +48,7 @@ func TestSampling(t *testing.T) {
 					}
 				}
 			},
-			DiscardF: func(k Key, item *MultiItem) {
+			DiscardF: func(k Key, item *MultiItem, _ uint32) {
 				discardN++
 				delete(b.series, k)
 				stat := m[k.Metric]
@@ -78,19 +77,16 @@ func TestSampling(t *testing.T) {
 		}
 		budget := rapid.Int64Range(20, 20+b.sumSize*2).Draw(t, "budget")
 		metricCount := len(b.series)
-		samplerStat := b.run(&s, budget, 1)
+		b.run(&s, budget)
 		require.LessOrEqual(t, keepSumSize, budget)
-		require.Equal(t, samplerStat.Count, len(samplerStat.GetSampleFactors(nil)))
 		require.Equal(t, metricCount, keepN+discardN, "some series were neither keeped nor discarded")
 		if b.sumSize <= budget {
 			require.Zero(t, discardN)
-			require.Zero(t, samplerStat.Count)
 			require.Equal(t, metricCount, keepN)
 		} else {
 			require.NotZero(t, discardN)
-			require.NotZero(t, samplerStat.Count)
 		}
-		for _, v := range samplerStat.GetSampleFactors(nil) {
+		for _, v := range s.SampleFactors {
 			stat := m[v.Metric]
 			require.Less(t, float32(1), v.Value, "SF less or equal one should not be reported")
 			require.LessOrEqualf(t, v.Value, stat.minSF, "Reported SF shouldn't take whales into account")
@@ -125,7 +121,7 @@ func TestSamplingWithNilKeepF(t *testing.T) {
 		})
 		s := NewSampler(len(b.series), SamplerConfig{
 			KeepF: nil, // agent doesn't set it
-			DiscardF: func(k Key, item *MultiItem) {
+			DiscardF: func(k Key, item *MultiItem, _ uint32) {
 				delete(b.series, k)
 			},
 			SelectF: func(s []SamplingMultiItemPair, sf float64, _ *rand.Rand) int {
@@ -141,13 +137,7 @@ func TestSamplingWithNilKeepF(t *testing.T) {
 			},
 		})
 		budget := rapid.Int64Range(20, 20+b.sumSize*2).Draw(t, "budget")
-		samplerStat := b.run(&s, budget, 1)
-		require.Equal(t, samplerStat.Count, len(samplerStat.GetSampleFactors(nil)))
-		if b.sumSize <= budget {
-			require.Zero(t, samplerStat.Count)
-		} else {
-			require.NotZero(t, samplerStat.Count)
-		}
+		b.run(&s, budget)
 		m := map[int32]float64{}
 		for k, v := range b.series {
 			require.Less(t, 0., v.SF)
@@ -155,7 +145,7 @@ func TestSamplingWithNilKeepF(t *testing.T) {
 				m[k.Metric] = v.SF
 			}
 		}
-		for _, v := range samplerStat.GetSampleFactors(nil) {
+		for _, v := range s.SampleFactors {
 			if sf, ok := m[v.Metric]; ok {
 				require.Truef(t, v.Value == float32(sf), "Item SF %v, metric SF %v", sf, v.Value)
 				delete(m, v.Metric)
@@ -174,17 +164,17 @@ func TestNoSamplingWhenFitBudget(t *testing.T) {
 		b.generateSeriesCount(t, samplingTestSpec{maxSeriesCount: 256, maxMetricCount: 256})
 		var (
 			s = NewSampler(len(b.series), SamplerConfig{
-				KeepF: func(k Key, v *MultiItem) {
+				KeepF: func(k Key, v *MultiItem, _ uint32) {
 					delete(b.series, k)
 				},
-				DiscardF: func(k Key, _ *MultiItem) {
+				DiscardF: func(k Key, _ *MultiItem, _ uint32) {
 					t.Fatal("budget is enough but series were discarded")
 				},
 			})
 		)
-		res := b.run(&s, b.sumSize, 1)
+		b.run(&s, b.sumSize)
 		require.Empty(t, b.series, "missing keep")
-		require.Empty(t, res.GetSampleFactors(nil), "sample factors aren't empty")
+		require.Empty(t, s.SampleFactors, "sample factors aren't empty")
 	})
 }
 
@@ -194,7 +184,7 @@ func TestNormalDistributionPreserved(t *testing.T) {
 			b     = newSamplingTestBucket()
 			r     = rand.New()
 			statM = make(map[Key]*samplingTestStat, len(b.series))
-			keepF = func(k Key, item *MultiItem) {
+			keepF = func(k Key, item *MultiItem, _ uint32) {
 				var s *samplingTestStat
 				if s = statM[k]; s == nil {
 					s = &samplingTestStat{}
@@ -207,7 +197,7 @@ func TestNormalDistributionPreserved(t *testing.T) {
 		for i := 0; i < 1024; i++ {
 			b.generateNormValues(r)
 			s := NewSampler(len(b.series), SamplerConfig{KeepF: keepF, Rand: r})
-			b.run(&s, b.sumSize, 2) // budget is half size
+			b.run(&s, b.sumSize/2) // budget is half size
 		}
 		for _, v := range statM {
 			// NormFloat64 generates standard normal distribution with mean = 0, stddev = 1
@@ -216,6 +206,102 @@ func TestNormalDistributionPreserved(t *testing.T) {
 			require.Less(t, s, 2.)
 		}
 	})
+}
+
+func TestFairKeySampling(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		// generate series
+		b := newSamplingTestBucket()
+		m := Key{Metric: 1}
+		n := rapid.IntRange(1, 16).Draw(t, "fair key value count")
+		for i, v := 1, 1; i <= n; i, v = i+1, v*2 {
+			m.Tags[0] = int32(i)
+			for j := 1; j <= v; j++ {
+				m.Tags[1] = int32(j)
+				v := &MultiItem{}
+				v.Tail.Value.AddValueCounter(0, 1)
+				b.series[m] = v
+				b.sumSize += int64(m.TLSizeEstimate(m.Timestamp) + v.TLSizeEstimate())
+			}
+		}
+		// run sampling with budget enouph to store single value for each fair key
+		keepCount := make(map[Key]int)
+		sampler := NewSampler(len(b.series), SamplerConfig{
+			SampleKeys: true,
+			Meta: metaStorageMock{
+				getMetaMetric: func(metricID int32) *format.MetricMetaValue {
+					return &format.MetricMetaValue{
+						FairKey: []int{0},
+					}
+				},
+			},
+			RoundF: func(sf float64, _ *rand.Rand) float64 {
+				require.Equal(t, sf, math.Floor(sf))
+				return sf
+			},
+			SelectF: func(s []SamplingMultiItemPair, sf float64, _ *rand.Rand) int {
+				require.Equal(t, sf, math.Floor(sf))
+				return int(float64(len(s)) / sf)
+			},
+			KeepF: func(k Key, mi *MultiItem, u uint32) {
+				keepCount[k]++
+			},
+		})
+		budget := b.sumSize * int64(n) / int64(len(b.series))
+		b.run(&sampler, budget)
+		// sampler should keep single value for each fair key
+		require.Equal(t, n, len(keepCount))
+		for _, v := range keepCount {
+			require.Equal(t, 1, v)
+		}
+	})
+}
+
+type metaStorageMock struct {
+	version             func() int64
+	stateHash           func() string
+	getMetaMetric       func(metricID int32) *format.MetricMetaValue
+	getMetaMetricByName func(metricName string) *format.MetricMetaValue
+	getGroup            func(id int32) *format.MetricsGroup
+	getNamespace        func(id int32) *format.NamespaceMeta
+	getNamespaceByName  func(name string) *format.NamespaceMeta
+	getGroupByName      func(name string) *format.MetricsGroup
+}
+
+func (m metaStorageMock) Version() int64 {
+	return m.version()
+}
+
+func (m metaStorageMock) StateHash() string {
+	return m.stateHash()
+}
+
+func (m metaStorageMock) GetMetaMetric(metricID int32) *format.MetricMetaValue {
+	return m.getMetaMetric(metricID)
+}
+
+func (m metaStorageMock) GetMetaMetricDelayed(metricID int32) *format.MetricMetaValue {
+	return m.getMetaMetric(metricID)
+}
+
+func (m metaStorageMock) GetMetaMetricByName(metricName string) *format.MetricMetaValue {
+	return m.getMetaMetricByName(metricName)
+}
+
+func (m metaStorageMock) GetGroup(id int32) *format.MetricsGroup {
+	return m.getGroup(id)
+}
+
+func (m metaStorageMock) GetNamespace(id int32) *format.NamespaceMeta {
+	return m.getNamespace(id)
+}
+
+func (m metaStorageMock) GetNamespaceByName(name string) *format.NamespaceMeta {
+	return m.getNamespaceByName(name)
+}
+
+func (m metaStorageMock) GetGroupByName(name string) *format.MetricsGroup {
+	return m.getGroupByName(name)
 }
 
 func TestCompareSampleFactors(t *testing.T) {
@@ -242,16 +328,25 @@ func TestCompareSampleFactors(t *testing.T) {
 			sampleBudget:       rapid.IntRange(20, 20+sumSize*2).Draw(t, "max metric count"),
 		}
 		sizeSum := map[int]int{}
-		config.KeepF = func(k Key, v *MultiItem) {
+		config.KeepF = func(k Key, v *MultiItem, _ uint32) {
 			sizeSum[int(k.Metric)] += samplingTestSizeOf(k, v)
 		}
 		sf := sampleBucket(&bucket, config)
 		sizeSumLegacy := map[int]int{}
-		config.KeepF = func(k Key, v *MultiItem) {
+		config.KeepF = func(k Key, v *MultiItem, _ uint32) {
 			sizeSumLegacy[int(k.Metric)] += samplingTestSizeOf(k, v)
 		}
 		sfLegacy := sampleBucketLegacy(&bucket, config)
-		require.Equalf(t, sfLegacy, sf, "Sample factors mistmatch!")
+		normSF := func(s []tlstatshouse.SampleFactor) []tlstatshouse.SampleFactor {
+			if s == nil {
+				return make([]tlstatshouse.SampleFactor, 0)
+			}
+			sort.Slice(s, func(i, j int) bool {
+				return s[i].Metric < s[j].Metric
+			})
+			return s
+		}
+		require.Equalf(t, normSF(sfLegacy), normSF(sf), "Sample factors mistmatch!")
 		require.Equalf(t, sizeSumLegacy, sizeSum, "Size sum mistmatch!")
 	})
 }
@@ -320,7 +415,7 @@ func (b *samplingTestBucket) generateSeriesCount(t *rapid.T, s samplingTestSpec)
 		)
 		for i := 0; i < seriesCount; i++ {
 			var (
-				k = Key{Metric: metricID, Keys: [format.MaxTags]int32{int32(i + 1)}}
+				k = Key{Metric: metricID, Tags: [format.MaxTags]int32{int32(i + 1)}}
 				v = &MultiItem{}
 			)
 			v.Tail.Value.AddValueCounter(0, 1)
@@ -347,7 +442,7 @@ func (b *samplingTestBucket) generateSeriesSize(t *rapid.T, s samplingTestSpec) 
 		)
 		for i := int32(1); size < sizeT; i++ {
 			var (
-				k = Key{Metric: metricID, Keys: [format.MaxTags]int32{i}}
+				k = Key{Metric: metricID, Tags: [format.MaxTags]int32{i}}
 				v = &MultiItem{}
 			)
 			v.Tail.Value.AddValueCounter(0, 1)
@@ -362,21 +457,21 @@ func (b *samplingTestBucket) generateSeriesSize(t *rapid.T, s samplingTestSpec) 
 
 func (b *samplingTestBucket) generateNormValues(r *rand.Rand) {
 	for _, v := range b.series {
-		v.Tail.Value.Counter = r.NormFloat64()
+		v.Tail.Value = SimpleItemCounter(r.NormFloat64(), 0)
 	}
 }
 
-func (b *samplingTestBucket) run(s *Sampler, budgetNum, budgetDenom int64) SamplerStatistics {
+func (b *samplingTestBucket) run(s *sampler, budget int64) {
 	for k, v := range b.series {
 		s.Add(SamplingMultiItemPair{
 			Key:         k,
 			Item:        v,
-			WhaleWeight: v.FinishStringTop(20),
+			WhaleWeight: v.FinishStringTop(rand.New(), 20),
 			Size:        samplingTestSizeOf(k, v),
 			MetricID:    k.Metric,
 		})
 	}
-	return s.Run(budgetNum, budgetDenom)
+	s.Run(budget)
 }
 
 func samplingTestSizeOf(k Key, item *MultiItem) int {
@@ -390,7 +485,7 @@ type samplingTestStat struct {
 }
 
 func (s *samplingTestStat) aggregate(item *MultiItem) {
-	v := item.Tail.Value.Counter
+	v := item.Tail.Value.Count()
 	s.sum += v
 	s.sumSq += v * v
 	s.n++
@@ -424,18 +519,26 @@ func BenchmarkSampleBucket(b *testing.B) {
 	}
 }
 
-func benchmarkSampleBucket(b *testing.B, f func(*MetricsBucket, samplerConfigEx) map[int32]float32) {
+func benchmarkSampleBucket(b *testing.B, f func(*MetricsBucket, samplerConfigEx) []tlstatshouse.SampleFactor) {
 	var (
 		metricCount = 2000
 		seriesCount = 2000
 		bucket      = MetricsBucket{MultiItems: make(map[Key]*MultiItem)}
-		r           = rand.New()
+		config      = samplerConfigEx{
+			SamplerConfig: SamplerConfig{
+				SampleFactorF: func(int32, float64) {},
+				Rand:          rand.New(),
+			},
+			stringTopCountSend: 20,
+			numShards:          1,
+			sampleBudget:       10,
+		}
 	)
 	for i := 0; i < metricCount; i++ {
 		metricID := int32(i + 1)
 		for i := 0; i < seriesCount; i++ {
 			var (
-				k = Key{Metric: metricID, Keys: [format.MaxTags]int32{int32(i + 1)}}
+				k = Key{Metric: metricID, Tags: [format.MaxTags]int32{int32(i + 1)}}
 				v = &MultiItem{}
 			)
 			v.Tail.Value.AddValueCounter(0, 1)
@@ -444,29 +547,24 @@ func benchmarkSampleBucket(b *testing.B, f func(*MetricsBucket, samplerConfigEx)
 	}
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		f(&bucket, samplerConfigEx{
-			SamplerConfig:      SamplerConfig{Rand: r},
-			stringTopCountSend: 20,
-			numShards:          1,
-			sampleBudget:       10,
-		})
+		f(&bucket, config)
 	}
 }
 
-func sampleBucket(bucket *MetricsBucket, config samplerConfigEx) map[int32]float32 {
+func sampleBucket(bucket *MetricsBucket, config samplerConfigEx) []tlstatshouse.SampleFactor {
 	sampler := NewSampler(len(bucket.MultiItems), config.SamplerConfig)
 	for k, item := range bucket.MultiItems {
-		whaleWeight := item.FinishStringTop(config.stringTopCountSend) // all excess items are baked into Tail
+		whaleWeight := item.FinishStringTop(rand.New(), config.stringTopCountSend) // all excess items are baked into Tail
 		accountMetric := k.Metric
 		sz := k.TLSizeEstimate(bucket.Time) + item.TLSizeEstimate()
 		if k.Metric == format.BuiltinMetricIDIngestionStatus {
-			if k.Keys[1] != 0 {
+			if k.Tags[1] != 0 {
 				// Ingestion status and other unlimited per-metric built-ins should use its metric budget
 				// So metrics are better isolated
-				accountMetric = k.Keys[1]
+				accountMetric = k.Tags[1]
 				whaleWeight = 0 // ingestion statuses do not compete for whale status
 			}
-			if k.Keys[2] == format.TagValueIDSrcIngestionStatusOKCached {
+			if k.Tags[2] == format.TagValueIDSrcIngestionStatusOKCached {
 				// These are so common, we have transfer optimization for them
 				sz = 3 * 4 // see statshouse.ingestion_status2
 			}
@@ -481,15 +579,11 @@ func sampleBucket(bucket *MetricsBucket, config samplerConfigEx) map[int32]float
 	}
 	numShards := config.numShards
 	remainingBudget := int64((config.sampleBudget + numShards - 1) / numShards)
-	samplerStat := sampler.Run(remainingBudget, 1)
-	sampleFactors := map[int32]float32{}
-	for _, v := range samplerStat.GetSampleFactors(nil) {
-		sampleFactors[v.Metric] = v.Value
-	}
-	return sampleFactors
+	sampler.Run(remainingBudget)
+	return sampler.SampleFactors
 }
 
-func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) map[int32]float32 {
+func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) []tlstatshouse.SampleFactor {
 	// Same algorithm as in aggregator, but instead of inserting selected, we remove items which were not selected by sampling algorithm
 	metricsMap := map[int32]*samplingMetric{}
 	var metricsList []*samplingMetric
@@ -497,17 +591,17 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) map[int32
 	var remainingWeight int64
 
 	for k, item := range bucket.MultiItems {
-		whaleWeight := item.FinishStringTop(config.stringTopCountSend) // all excess items are baked into Tail, config.StringTopCountSend
+		whaleWeight := item.FinishStringTop(rand.New(), config.stringTopCountSend) // all excess items are baked into Tail, config.StringTopCountSend
 		accountMetric := k.Metric
 		sz := k.TLSizeEstimate(bucket.Time) + item.TLSizeEstimate()
 		if k.Metric == format.BuiltinMetricIDIngestionStatus {
-			if k.Keys[1] != 0 {
+			if k.Tags[1] != 0 {
 				// Ingestion status and other unlimited per-metric built-ins should use its metric budget
 				// So metrics are better isolated
-				accountMetric = k.Keys[1]
+				accountMetric = k.Tags[1]
 				whaleWeight = 0 // ingestion statuses do not compete for whale status
 			}
-			if k.Keys[2] == format.TagValueIDSrcIngestionStatusOKCached {
+			if k.Tags[2] == format.TagValueIDSrcIngestionStatusOKCached {
 				// These are so common, we have transfer optimization for them
 				sz = 3 * 4 // see statshouse.ingestion_status2
 			}
@@ -550,7 +644,7 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) map[int32
 	if remainingBudget > MaxUncompressedBucketSize/2 { // Algorithm is not exact
 		remainingBudget = MaxUncompressedBucketSize / 2
 	}
-	sampleFactors := map[int32]float32{}
+	var sampleFactors []tlstatshouse.SampleFactor
 	pos := 0
 	for ; pos < len(metricsList) && metricsList[pos].sumSize*remainingWeight <= remainingBudget*metricsList[pos].metricWeight; pos++ { // statIdCount <= totalBudget/remainedStats
 		samplingMetric := metricsList[pos]
@@ -560,7 +654,7 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) map[int32
 		// Keep all elements in bucket
 		if config.KeepF != nil {
 			for _, v := range samplingMetric.items {
-				config.KeepF(v.Key, v.Item)
+				config.KeepF(v.Key, v.Item, bucket.Time)
 			}
 		}
 	}
@@ -569,7 +663,7 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) map[int32
 		if samplingMetric.noSampleAgent {
 			if config.KeepF != nil {
 				for _, v := range samplingMetric.items {
-					config.KeepF(v.Key, v.Item)
+					config.KeepF(v.Key, v.Item, bucket.Time)
 				}
 			}
 			continue
@@ -580,13 +674,16 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) map[int32
 			if sf <= 1 { // Many sample factors are between 1 and 2, so this is worthy optimization
 				if config.KeepF != nil {
 					for _, v := range samplingMetric.items {
-						config.KeepF(v.Key, v.Item)
+						config.KeepF(v.Key, v.Item, bucket.Time)
 					}
 				}
 				continue
 			}
 		}
-		sampleFactors[samplingMetric.metricID] = float32(sf)
+		sampleFactors = append(sampleFactors, tlstatshouse.SampleFactor{
+			Metric: samplingMetric.metricID,
+			Value:  float32(sf),
+		})
 		whalesAllowed := int64(0)
 		if samplingMetric.sumSize*remainingWeight > 0 { // should be never but check is cheap
 			whalesAllowed = int64(len(samplingMetric.items)) * (samplingMetric.metricWeight * remainingBudget) / (samplingMetric.sumSize * remainingWeight) / 2 // len(items) / sf / 2
@@ -605,23 +702,23 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) map[int32
 			// Keep all whale elements in bucket
 			if config.KeepF != nil {
 				for _, v := range samplingMetric.items[:whalesAllowed] {
-					config.KeepF(v.Key, v.Item)
+					config.KeepF(v.Key, v.Item, bucket.Time)
 				}
 			}
 			samplingMetric.items = samplingMetric.items[whalesAllowed:]
+			sf *= 2 // half of space is occupied by whales now. TODO - we can be more exact here, make permutations and take as many elements as we need, saving lots of rnd calls
 		}
-		sf *= 2 // half of space is occupied by whales now. TODO - we can be more exact here, make permutations and take as many elements as we need, saving lots of rnd calls
 		pos := config.SelectF(samplingMetric.items, sf, config.Rand)
 		for _, v := range samplingMetric.items[:pos] {
 			v.Item.SF = sf // communicate selected factor to next step of processing
 			if config.KeepF != nil {
-				config.KeepF(v.Key, v.Item)
+				config.KeepF(v.Key, v.Item, bucket.Time)
 			}
 		}
 		for _, v := range samplingMetric.items[pos:] {
 			v.Item.SF = sf // communicate selected factor to next step of processing
 			if config.DiscardF != nil {
-				config.DiscardF(v.Key, v.Item)
+				config.DiscardF(v.Key, v.Item, bucket.Time)
 			}
 		}
 	}

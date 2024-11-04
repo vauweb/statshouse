@@ -1,23 +1,27 @@
 import { createStore } from '../createStore';
 import { useErrorStore } from '../errors';
-import { GET_PARAMS } from '../../api/enum';
+import { GET_PARAMS } from 'api/enum';
 import {
   apiNamespaceFetch,
   ApiNamespacePost,
   ApiNamespacePut,
   apiPostNamespaceFetch,
   apiPutNamespaceFetch,
-} from '../../api/namespace';
-import { apiNamespaceListFetch, NamespaceShort } from '../../api/namespaceList';
+} from 'api/namespace';
+import { apiNamespaceListFetch, NamespaceShort } from 'api/namespaceList';
+import { sortByKey } from 'view/utils';
 
 export const namespaceListErrors = 'groupListErrors';
 
 export type NamespaceListStore = {
   list: NamespaceShort[];
 };
-export const useNamespaceListStore = createStore<NamespaceListStore>(() => ({
-  list: [],
-}));
+export const useNamespaceListStore = createStore<NamespaceListStore>(
+  () => ({
+    list: [],
+  }),
+  'useNamespaceListStore'
+);
 
 let loadListErrorRemover: () => void;
 
@@ -29,7 +33,12 @@ export async function namespaceListLoad() {
   }
   if (response) {
     useNamespaceListStore.setState((s) => {
-      s.list = response.data.namespaces ?? [];
+      const list = response.data.namespaces ?? [];
+      list.sort(sortByKey.bind(undefined, 'name'));
+      if (!list.some((n) => n.id <= 0)) {
+        list.unshift({ id: -9999, name: 'default', weight: 1 });
+      }
+      s.list = list;
     });
   }
 }

@@ -50,6 +50,25 @@ set title "{{$d.Header}}" offset 0, -0.5
 set size ratio {{$d.Ratio}}
 set encoding utf8
 
+{{$l := len $d.Legend}}
+{{- if ne $l 0 -}}
+{{with index $d.Legend 0 -}}
+{{- if eq "second" .MetricType -}}
+set format y "%gs"
+{{- else if eq "millisecond" .MetricType -}}
+set format y "%gms"
+{{- else if eq "microsecond" .MetricType -}}
+set format y "%gus"
+{{- else if eq "nanosecond" .MetricType -}}
+set format y "%gns"
+{{- else if eq "byte" .MetricType -}}
+set format y "%.1b%BB"
+{{- else -}}
+set format y "%.1s%c"
+{{- end -}}
+{{- end -}}
+{{- end}}
+
 set style line 1 linewidth 0.3 linecolor rgb '#adb5bd' # thin grey
 set grid linestyle 1
 set border 0
@@ -75,6 +94,7 @@ $data << EOD
 EOD
 
 set xrange [{{$d.TimeFrom}}:{{$d.TimeTo}}]
+set yrange [{{$d.YL}}:{{$d.YH}}]
 {{if $d.Data.Series.SeriesMeta -}}
 plot for [n=0:{{$d.Data.Series.SeriesMeta | len}}] $data index n using 1:2 with fillsteps notitle linestyle (10+n), \
      for [n=0:{{$d.Data.Series.SeriesMeta | len}}] $data index n using 1:2 with points notitle linestyle (10+n) linewidth 0.7 pointtype 7 pointsize 0.2, \
@@ -188,9 +208,10 @@ type gnuplotTemplateData struct {
 	Legend   []QuerySeriesMetaV2
 	TimeFrom int64
 	TimeTo   int64
+	YL, YH   string // Y scale range
 
 	usedColorIndices map[string]int
-	uniqueWhat       map[queryFn]struct{}
+	uniqueWhat       map[string]struct{}
 	utcOffset        int64
 
 	// The buffer which template is printed into,
@@ -224,7 +245,7 @@ func (d *gnuplotTemplateData) LineStyle(i int) int {
 	return 10 + i
 }
 
-func (d *gnuplotTemplateData) GetUniqueWhat() map[queryFn]struct{} {
+func (d *gnuplotTemplateData) GetUniqueWhat() map[string]struct{} {
 	if len(d.uniqueWhat) > 0 {
 		return d.uniqueWhat
 	}
@@ -250,19 +271,17 @@ func (h *Handler) colorize(resp *SeriesResponse) {
 	if resp == nil {
 		return
 	}
-	var (
-		graphCount       int
-		uniqueWhat       = make(map[queryFn]struct{})
-		usedColorIndices = make(map[string]int)
-	)
+	graphCount := 0
+	uniqueWhat := make(map[string]struct{})
 	for _, meta := range resp.Series.SeriesMeta {
 		uniqueWhat[meta.What] = struct{}{}
 		if meta.TimeShift == 0 {
 			graphCount++
 		}
 	}
-	for i, meta := range resp.Series.SeriesMeta {
+	colorKeyAt := func(i int) string {
 		var (
+			meta             = resp.Series.SeriesMeta[i]
 			oneGraph         = graphCount == 1
 			uniqueWhatLength = len(uniqueWhat)
 			label            = MetaToLabel(meta, uniqueWhatLength, h.utcOffset)
@@ -280,7 +299,26 @@ func (h *Handler) colorize(resp *SeriesResponse) {
 		} else {
 			colorKey = fmt.Sprintf("%d%s%s", prefColor, metricName, baseLabel)
 		}
-		resp.Series.SeriesMeta[i].Color = selectColor(colorKey, usedColorIndices)
+		return colorKey
+	}
+	type indexKey struct {
+		index int
+		key   string
+	}
+	i := 0
+	top := make([]indexKey, 0, len(palette))
+	for ; i < len(resp.Series.SeriesMeta) && i < len(palette); i++ {
+		top = append(top, indexKey{i, colorKeyAt(i)})
+	}
+	sort.Slice(top, func(i, j int) bool {
+		return top[i].key < top[j].key
+	})
+	usedColorIndices := make(map[string]int, len(resp.Series.SeriesMeta))
+	for _, v := range top {
+		resp.Series.SeriesMeta[v.index].Color = selectColor(v.key, usedColorIndices)
+	}
+	for ; i < len(resp.Series.SeriesMeta); i++ {
+		resp.Series.SeriesMeta[i].Color = selectColor(colorKeyAt(i), usedColorIndices)
 	}
 }
 
@@ -323,12 +361,6 @@ func plot(ctx context.Context, format string, title bool, data []*SeriesResponse
 	)
 	utcOffset %= (24 * 3600) // ignore the part we use to align start of week
 	for i := 0; i < len(data); i++ {
-		timeFrom := time.Now().Add(-blankRenderInterval).Unix()
-		timeTo := time.Now().Unix()
-		if len(data[i].Series.Time) > 1 {
-			timeFrom = data[i].Series.Time[0]
-			timeTo = data[i].Series.Time[len(data[i].Series.Time)-1]
-		}
 		var (
 			legend       = data[i].Series.SeriesMeta
 			legendMaxLen = 15
@@ -336,21 +368,27 @@ func plot(ctx context.Context, format string, title bool, data []*SeriesResponse
 		if len(legend) > legendMaxLen {
 			legend = data[i].Series.SeriesMeta[:legendMaxLen]
 		}
+		effectiveName := metric[i].metricName
+		if len(metric[i].customMetricName) > 0 {
+			effectiveName = metric[i].customMetricName
+		}
 		td[i] = &gnuplotTemplateData{
 			Format:           format,
 			Title:            title,
-			Metric:           metric[i].metricWithNamespace,
+			Metric:           effectiveName,
 			Width:            width,
 			Height:           height,
 			Ratio:            1 / goldenRatio,
 			Data:             data[i],
-			TimeFrom:         timeFrom + utcOffset,
-			TimeTo:           timeTo + utcOffset,
+			TimeFrom:         metric[i].from.Unix() + utcOffset,
+			TimeTo:           metric[i].to.Unix() + utcOffset,
 			Legend:           legend,
 			usedColorIndices: map[string]int{},
-			uniqueWhat:       map[queryFn]struct{}{},
+			uniqueWhat:       map[string]struct{}{},
 			utcOffset:        utcOffset,
 			wr:               &buf,
+			YL:               metric[i].yl,
+			YH:               metric[i].yh,
 		}
 	}
 
@@ -372,6 +410,10 @@ func plot(ctx context.Context, format string, title bool, data []*SeriesResponse
 
 	out, err := gp.Output()
 	if err != nil {
+		// timeout or cancelled request
+		if cerr := ctx.Err(); cerr != nil {
+			return nil, cerr
+		}
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
 			return nil, fmt.Errorf("failed to execute gnuplot: %w (stderr: %q)", err, ee.Stderr)
@@ -501,48 +543,48 @@ func convert(kind string, input int, utcOffset int64) string {
 }
 
 // XXX: keep in sync with TypeScript
-func WhatToWhatDesc(what queryFn) string {
+func WhatToWhatDesc(what string) string {
 	switch what {
-	case queryFnP999:
+	case ParamQueryFnP999:
 		return "p99.9"
-	case queryFnCountNorm:
+	case ParamQueryFnCountNorm:
 		return "count/sec"
-	case queryFnCumulCount:
+	case ParamQueryFnCumulCount:
 		return "count (cumul)"
-	case queryFnCardinalityNorm:
+	case ParamQueryFnCardinalityNorm:
 		return "cardinality/sec"
-	case queryFnCumulCardinality:
+	case ParamQueryFnCumulCardinality:
 		return "cardinality (cumul)"
-	case queryFnCumulAvg:
+	case ParamQueryFnCumulAvg:
 		return "avg (cumul)"
-	case queryFnSumNorm:
+	case ParamQueryFnSumNorm:
 		return "sum/sec"
-	case queryFnCumulSum:
+	case ParamQueryFnCumulSum:
 		return "sum (cumul)"
-	case queryFnUniqueNorm:
+	case ParamQueryFnUniqueNorm:
 		return "unique/sec"
-	case queryFnMaxCountHost:
+	case ParamQueryFnMaxCountHost:
 		return "max(count)@host"
-	case queryFnDerivativeCount:
+	case ParamQueryFnDerivativeCount:
 		return "count (derivative)"
-	case queryFnDerivativeSum:
+	case ParamQueryFnDerivativeSum:
 		return "sum (derivative)"
-	case queryFnDerivativeAvg:
+	case ParamQueryFnDerivativeAvg:
 		return "avg (derivative)"
-	case queryFnDerivativeCountNorm:
+	case ParamQueryFnDerivativeCountNorm:
 		return "count/sec (derivative)"
-	case queryFnDerivativeSumNorm:
+	case ParamQueryFnDerivativeSumNorm:
 		return "sum/sec (derivative)"
-	case queryFnDerivativeUnique:
+	case ParamQueryFnDerivativeUnique:
 		return "unique (derivative)"
-	case queryFnDerivativeUniqueNorm:
+	case ParamQueryFnDerivativeUniqueNorm:
 		return "unique/sec (derivative)"
-	case queryFnDerivativeMin:
+	case ParamQueryFnDerivativeMin:
 		return "min (derivative)"
-	case queryFnDerivativeMax:
+	case ParamQueryFnDerivativeMax:
 		return "max (derivative)"
 	default:
-		return what.String()
+		return what
 	}
 }
 

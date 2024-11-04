@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -66,7 +66,7 @@ func testRPCMultiRoundtrip(t *rapid.T) {
 
 			for j := 0; j < numRequests; j++ {
 				req := c.GetRequest()
-				req.ActorID = uint64(j % 2)
+				req.ActorID = int64(j % 2)
 				if j%3 == 0 {
 					req.Extra.SetIntForward(int64(j))
 				}
@@ -106,7 +106,7 @@ func testRPCMultiRoundtrip(t *rapid.T) {
 				delete(queryIDs, queryID)
 
 				if queryID%2 != 0 {
-					refErr := Error{
+					refErr := &Error{
 						Code:        int32(queryID),
 						Description: strconv.Itoa(int(queryID)),
 					}
@@ -135,7 +135,7 @@ func testRPCMultiRoundtrip(t *rapid.T) {
 		t.Fatal(err)
 	}
 	err = <-serverErr
-	if err != ErrServerClosed {
+	if err != nil {
 		t.Fatal(err)
 	}
 }

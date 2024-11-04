@@ -7,10 +7,23 @@
 package aggregator
 
 import (
+	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/vkcom/statshouse/internal/data_model"
 )
+
+type ConfigAggregatorRemote struct {
+	InsertBudget         int // for single replica, in bytes per contributor, when many contributors
+	StringTopCountInsert int
+	SampleNamespaces     bool
+	SampleGroups         bool
+	SampleKeys           bool
+	DenyOldAgents        bool
+	MirrorChWrite        bool
+	StringTagProb        float64
+}
 
 type ConfigAggregator struct {
 	ShortWindow        int
@@ -20,25 +33,26 @@ type ConfigAggregator struct {
 
 	KHAddr string
 
-	InsertBudget    int // for single replica, in bytes per contributor, when many contributors
-	InsertBudget100 int // for single replica, in bytes per contributor, when 100 contributors
-
 	CardinalityWindow int
 	MaxCardinality    int
 
-	StringTopCountInsert int
+	ConfigAggregatorRemote
 
 	SimulateRandomErrors float64
 
 	MetadataNet     string
 	MetadataAddr    string
-	MetadataActorID uint64
+	MetadataActorID int64
 
 	Cluster           string
 	PreviousNumShards int
 	ExternalPort      string
 
-	AutoCreate bool
+	LocalReplica int
+
+	AutoCreate                 bool
+	AutoCreateDefaultNamespace bool
+	DisableRemoteConfig        bool
 }
 
 func DefaultConfigAggregator() ConfigAggregator {
@@ -47,15 +61,36 @@ func DefaultConfigAggregator() ConfigAggregator {
 		RecentInserters:      4,
 		HistoricInserters:    1,
 		InsertHistoricWhen:   2,
-		InsertBudget:         400,
-		InsertBudget100:      2500,
 		CardinalityWindow:    3600,
 		MaxCardinality:       50000, // will be divided by NumShardReplicas on each aggregator
-		StringTopCountInsert: 20,
 		SimulateRandomErrors: 0,
 		Cluster:              "statlogs2",
 		MetadataNet:          "tcp4",
 		MetadataAddr:         "127.0.0.1:2442",
+
+		ConfigAggregatorRemote: ConfigAggregatorRemote{
+			InsertBudget:         400,
+			StringTopCountInsert: 20,
+			SampleNamespaces:     false,
+			SampleGroups:         false,
+			SampleKeys:           false,
+			DenyOldAgents:        true,
+			MirrorChWrite:        true,
+			StringTagProb:        0,
+		},
+	}
+}
+
+func (c *ConfigAggregatorRemote) Bind(f *flag.FlagSet, d ConfigAggregatorRemote, legacyVerb bool) {
+	f.IntVar(&c.InsertBudget, "insert-budget", d.InsertBudget, "Aggregator will sample data before inserting into clickhouse. Bytes per contributor when # >> 100.")
+	f.IntVar(&c.StringTopCountInsert, "string-top-insert", d.StringTopCountInsert, "How many different strings per key is inserted by aggregator in string tops.")
+	if !legacyVerb {
+		f.BoolVar(&c.SampleNamespaces, "sample-namespaces", d.SampleNamespaces, "Statshouse will sample at namespace level.")
+		f.BoolVar(&c.SampleGroups, "sample-groups", d.SampleGroups, "Statshouse will sample at group level.")
+		f.BoolVar(&c.SampleKeys, "sample-keys", d.SampleKeys, "Statshouse will sample at key level.")
+		f.BoolVar(&c.DenyOldAgents, "deny-old-agents", d.DenyOldAgents, "Statshouse will ignore data from outdated agents")
+		f.BoolVar(&c.MirrorChWrite, "mirror-ch-writes", d.MirrorChWrite, "Write metrics into both new and old tables")
+		f.Float64Var(&c.StringTagProb, "string-tag-prob", d.StringTagProb, "0 - only mapped tags, 0.01 means replace 1% of mapped tags with fake string")
 	}
 }
 
@@ -67,12 +102,6 @@ func ValidateConfigAggregator(c ConfigAggregator) error {
 		return fmt.Errorf("short-window (%d) cannot be < 2", c.ShortWindow)
 	}
 
-	if c.InsertBudget < 1 {
-		return fmt.Errorf("insert-budget (%d) must be >= 1", c.InsertBudget)
-	}
-	if c.InsertBudget100 < 1 {
-		return fmt.Errorf("insert-budget-100 (%d) must be >= 1", c.InsertBudget100)
-	}
 	if c.CardinalityWindow < data_model.MinCardinalityWindow {
 		return fmt.Errorf("--cardinality-window (%d) must be >= %d", c.CardinalityWindow, data_model.MinCardinalityWindow)
 	}
@@ -93,9 +122,34 @@ func ValidateConfigAggregator(c ConfigAggregator) error {
 		return fmt.Errorf("--historic-inserters (%d) must be <= 4", c.HistoricInserters)
 	}
 
+	return c.ConfigAggregatorRemote.Validate()
+}
+
+func (c *ConfigAggregatorRemote) Validate() error {
+	if c.InsertBudget < 1 {
+		return fmt.Errorf("insert-budget (%d) must be >= 1", c.InsertBudget)
+	}
 	if c.StringTopCountInsert < data_model.MinStringTopInsert {
 		return fmt.Errorf("--string-top-insert (%d) must be >= %d", c.StringTopCountInsert, data_model.MinStringTopInsert)
 	}
 
 	return nil
+}
+
+func (c *ConfigAggregatorRemote) updateFromRemoteDescription(description string) error {
+	var f flag.FlagSet
+	f.Init("", flag.ContinueOnError)
+	c.Bind(&f, *c, false)
+	var s []string
+	for _, v := range strings.Split(description, "\n") {
+		v = strings.TrimSpace(v)
+		if len(v) != 0 && !strings.HasPrefix(v, "#") {
+			s = append(s, v)
+		}
+	}
+	err := f.Parse(s)
+	if err != nil {
+		return err
+	}
+	return c.Validate()
 }

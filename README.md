@@ -1,13 +1,15 @@
 # StatsHouse
 
-StatsHouse is a highly-available, scalable, multi-tenant monitoring system.
+StatsHouse is a highly available, scalable, multitenant monitoring system.
 
-## Why would I use StatsHouse?
+Visit the [StatsHouse documentation website](https://vkcom.github.io/statshouse/).
+
+## Why should I use StatsHouse?
 
 **StatsHouse is used in production at big scale**  
 StatsHouse is the main monitoring system of [vk.com](https://vk.com). As of
-December 2022, main StatsHouse cluster is receiving 650 million metrics
-per second from 15000 servers and stores 4 years of data.
+November 2023, main StatsHouse cluster is receiving 1.2 billion metrics
+per second from 22000 servers and stores 5 years of data.
 
 **StatsHouse provides high resolution, low latency data**  
 With default metric resolution of 1 second and latency of 5 seconds,
@@ -43,6 +45,9 @@ cases, StatsHouse provides a Grafana data source plugin as well.
 ![Dashboard](./docs/media/dash.webp "Dashboard")
 
 ## Documentation
+
+The [StatsHouse documentation website](https://vkcom.github.io/statshouse/) is currently in draft form,
+so please check our earlier documents as well:
 
 - [Quick start guide](./docs/quickstart.md)
 - [Internals](./docs/internals.ru.md) (in Russian)

@@ -11,7 +11,7 @@ import (
 
 	"go.uber.org/multierr"
 
-	"github.com/vkcom/statshouse/internal/sqlite/internal/sqlite0"
+	"github.com/vkcom/statshouse/internal/sqlite/sqlite0"
 )
 
 func SetLogf(fn func(code int, msg string)) {
@@ -22,8 +22,8 @@ func Version() string {
 	return sqlite0.Version()
 }
 
-func doSingleROToWALQuery(path string, f func(conn *sqliteConn) error) (err error) {
-	ro, err := openROWAL(path)
+func doSingleROToWALQuery(path string, pageSize int, f func(conn *sqliteConn) error) (err error) {
+	ro, err := openROWAL(path, pageSize)
 	if err != nil {
 		return err
 	}

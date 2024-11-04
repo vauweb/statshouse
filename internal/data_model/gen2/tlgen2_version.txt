@@ -1,1 +1,4 @@
-tlgen2 version 2022.06.30, hash of source code - 2ce975555b6e099ff2779dd03a4c090a3b447d8ff7298f312ca960b9a5a982d3
+tlgen version: v1.1.10
+schema url: 
+schema commit: 
+schema version: 0 (1970-01-01 00:00:00 +0000 UTC)

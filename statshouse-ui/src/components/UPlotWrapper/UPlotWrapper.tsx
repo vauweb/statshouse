@@ -6,10 +6,11 @@
 
 import React, { memo, ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import uPlot from 'uplot';
-import { useResizeObserver } from '../../view/utils';
 import { debug } from '../../common/debug';
+import { deepClone } from '../../common/helpers';
+import { useResizeObserver } from '../../hooks/useResizeObserver';
 
-export type LegendItem<T = Object> = {
+export type LegendItem<T = {}> = {
   label: string;
   width: number;
   fill?: string;
@@ -50,6 +51,7 @@ export type UPlotWrapperProps = {
   data?: uPlot.AlignedData;
   scales?: UPlotWrapperPropsScales;
   series?: uPlot.Series[];
+  bands?: uPlot.Band[];
   legendTarget?: HTMLDivElement | null;
   onUpdatePreview?: (u: uPlot) => void;
   onUpdateLegend?: React.Dispatch<React.SetStateAction<LegendItem[]>>;
@@ -109,12 +111,14 @@ function readLegend(u: uPlot): LegendItem[] {
 const defaultData: uPlot.AlignedData = [[]];
 const defaultSeries: uPlot.Series[] = [];
 const defaultScales: UPlotWrapperPropsScales = {};
+const defaultBands: uPlot.Band[] = [];
 
 export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
   opts,
   data = defaultData,
   series = defaultSeries,
   scales = defaultScales,
+  bands = defaultBands,
   legendTarget,
   onUpdatePreview,
   onUpdateLegend,
@@ -234,7 +238,16 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
   const updateData = useCallback((data: uPlot.AlignedData) => {
     if (uRef.current) {
       uRef.current.batch((u: uPlot) => {
-        u.setData(data);
+        u.setData(deepClone(data));
+      });
+    }
+  }, []);
+
+  const updateBands = useCallback((bands: uPlot.Band[]) => {
+    if (uRef.current) {
+      uRef.current.delBand();
+      bands.forEach((band) => {
+        uRef.current?.addBand(deepClone(band));
       });
     }
   }, []);
@@ -329,10 +342,11 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
   );
 
   useEffect(() => {
-    const legendF = legend.slice();
-    if (seriesFocus !== null) {
-      legendF[seriesFocus] = { ...legendF[seriesFocus], focus: true };
-    }
+    const legendF = legend.map((l, li) => ({
+      ...l,
+      dash: l.dash && [...l.dash],
+      focus: li === seriesFocus ? true : l.focus,
+    }));
     onUpdateLegend?.(legendF);
   }, [legend, seriesFocus, onUpdateLegend]);
 
@@ -360,22 +374,38 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
     };
     debug.log('%cUPlotWrapper create %d %d', 'color:blue;', width, height);
     uRef.current = new uPlot(opt, undefined, uRefDiv.current!);
-    updateSeries(series);
     updateData(data);
+    updateSeries(series);
+    updateBands(bands);
     updateScales(scales);
     moveLegend();
-  }, [data, height, moveLegend, opts, scales, series, uPlotPlugin, updateData, updateScales, updateSeries, width]);
+  }, [
+    bands,
+    data,
+    height,
+    moveLegend,
+    opts,
+    scales,
+    series,
+    uPlotPlugin,
+    updateBands,
+    updateData,
+    updateScales,
+    updateSeries,
+    width,
+  ]);
 
-  useLayoutEffect(
-    () => () => {
-      if (uRef.current) {
-        debug.log('%cUPlotWrapper destroy', 'color:blue;');
-        uRef.current?.destroy();
-        uRef.current = undefined;
+  useEffect(() => {
+    const redraw = () => {
+      if (window.document.visibilityState === 'visible') {
+        uRef.current?.redraw();
       }
-    },
-    [opts]
-  );
+    };
+    window.document.addEventListener('visibilitychange', redraw);
+    return () => {
+      window.document.removeEventListener('visibilitychange', redraw);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     uRef.current?.setSize({ width, height });
@@ -386,14 +416,16 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
   }, [data, updateData]);
 
   useEffect(() => {
-    updateScales(scales);
-  }, [scales, updateScales]);
+    updateSeries(series);
+  }, [series, updateSeries]);
 
   useEffect(() => {
-    updateSeries(series);
+    updateBands(bands);
+  }, [bands, updateBands]);
+
+  useEffect(() => {
     updateScales(scales);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [series, updateSeries]);
+  }, [scales, updateScales, series, bands]);
 
   useEffect(() => {
     if (uRef.current) {

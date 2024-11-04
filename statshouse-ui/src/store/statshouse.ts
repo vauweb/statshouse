@@ -4,44 +4,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import uPlot from 'uplot';
-
-import { defaultTimeRange, SetTimeRangeValue, TIME_RANGE_KEYS_TO, TimeRange } from '../common/TimeRange';
-import { dequal } from 'dequal/lite';
 import React from 'react';
+import uPlot from 'uplot';
 import { produce, setAutoFreeze } from 'immer';
+import { dequal } from 'dequal/lite';
+
 import {
-  apiGet,
-  apiPost,
-  apiPut,
-  defaultBaseRange,
-  Error403,
-  ErrorSkip,
-  fmtInputDateTime,
-  formatLegendValue,
-  formatPercent,
-  getTimeShifts,
-  loadAllMeta,
-  normalizeDashboard,
-  now,
-  paramToVariable,
-  plotLoadPrioritySort,
-  promQLMetric,
-  readJSONLD,
-  replaceVariable,
-  sortByKey,
-  tagSyncToVariableConvert,
-  timeRangeAbbrev,
-  timeRangeAbbrevExpand,
-  timeShiftAbbrevExpand,
-  timeShiftToDash,
-} from '../view/utils';
-import { globalSettings, pxPerChar } from '../common/settings';
-import { debug } from '../common/debug';
-import * as api from '../view/api';
-import {
-  DashboardInfo,
-  dashboardURL,
   metaToBaseLabel,
   metaToLabel,
   MetricsGroup,
@@ -60,23 +28,38 @@ import {
   queryTableURL,
   queryURL,
 } from '../view/api';
+import { defaultTimeRange, SetTimeRangeValue, TIME_RANGE_KEYS_TO, TimeRange } from '../common/TimeRange';
+import {
+  apiGet,
+  apiPost,
+  apiPut,
+  Error403,
+  loadAllMeta,
+  paramToVariable,
+  plotLoadPrioritySort,
+  readJSONLD,
+  replaceVariable,
+  sortByKey,
+  tagSyncToVariableConvert,
+} from '../view/utils';
+import { globalSettings, pxPerChar } from '../common/settings';
+import { debug } from '../common/debug';
 import { calcYRange2 } from '../common/calcYRange';
 import { rgba, selectColor } from '../view/palette';
 import { filterPoints } from '../common/filterPoints';
-import { SelectOptionProps, UPlotWrapperPropsScales } from '../components';
 import { getNextState } from '../common/getNextState';
 import { stackData } from '../common/stackData';
 import { ErrorCustom, useErrorStore } from './errors';
 import { apiMetricFetch, MetricMetaValue } from '../api/metric';
-import { GET_PARAMS, isQueryWhat, QueryWhat, TagKey } from '../api/enum';
-import { deepClone, mergeLeft, sortEntity, toNumber } from '../common/helpers';
+import { GET_PARAMS, isQueryWhat, METRIC_TYPE, QUERY_WHAT, type QueryWhat, TAG_KEY, type TagKey } from 'api/enum';
+import { deepClone, defaultBaseRange, mergeLeft, sortEntity, toNumber } from '../common/helpers';
 import { promiseRun } from '../common/promiseRun';
 import { appHistory } from '../common/appHistory';
 import {
   decodeDashboardIdParam,
+  decodeDashboardVersionParam,
   decodeParams,
   encodeParams,
-  fixMessageTrouble,
   freeKeyPrefix,
   getDefaultParams,
   getNewPlot,
@@ -90,8 +73,29 @@ import {
   VariableParams,
 } from '../url/queryParams';
 import { clearPlotVisibility, resortPlotVisibility, usePlotVisibilityStore } from './plot/plotVisibilityStore';
-import { clearAllPlotPreview, clearPlotPreview, resortPlotPreview } from './plot/plotPreview';
+import { clearAllPlotPreview, clearPlotPreview, resortPlotPreview } from './plot/plotPreviewStore';
 import { createStoreWithEqualityFn } from './createStore';
+import { setLiveMode, setLiveModeInterval, useLiveModeStore } from './liveMode';
+import { addStatus, removePlotHeals, resortPlotHeals, skipRequestPlot, usePlotHealsStore } from './plot/plotHealsStore';
+import { formatByMetricType, getMetricType } from '../common/formatByMetricType';
+import { dashboardURL } from '../view/dashboardURL';
+import { promQLMetric } from '../view/promQLMetric';
+import { whatToWhatDesc } from '../view/whatToWhatDesc';
+import {
+  fmtInputDateTime,
+  formatLegendValue,
+  formatPercent,
+  getTimeShifts,
+  now,
+  timeRangeAbbrev,
+  timeRangeAbbrevExpand,
+  timeShiftAbbrevExpand,
+  timeShiftToDash,
+} from '../view/utils2';
+import { DashboardInfo, normalizeDashboard } from '../view/normalizeDashboard';
+import { SelectOptionProps } from '../components/Select';
+import { UPlotWrapperPropsScales } from '../components/UPlotWrapper';
+import { fixMessageTrouble } from '../url/fixMessageTrouble';
 
 export type PlotStore = {
   nameMetric: string;
@@ -102,7 +106,9 @@ export type PlotStore = {
   errorSkipCount: number;
   data: uPlot.AlignedData;
   stacked?: uPlot.AlignedData;
+  bands?: uPlot.Band[];
   series: uPlot.Series[];
+  seriesTimeShift: number[];
   seriesShow: boolean[];
   scales: Record<string, { min: number; max: number }>;
   lastPlotParams?: PlotParams;
@@ -157,6 +163,7 @@ function getEmptyPlotData(): PlotStore {
     data: [[]],
     stacked: undefined,
     series: [],
+    seriesTimeShift: [],
     seriesShow: [],
     scales: {},
     receiveErrors: 0,
@@ -208,8 +215,6 @@ export type StatsHouseStore = {
   setDefaultParams(nextState: React.SetStateAction<QueryParams>): void;
   timeRange: TimeRange;
   params: QueryParams;
-  liveMode: boolean;
-  setLiveMode(nextStatus: React.SetStateAction<boolean>): void;
   updateParamsByUrl(abortSignal?: AbortSignal): void;
   updateUrl(replace?: boolean): void;
   updateTitle(): void;
@@ -247,7 +252,7 @@ export type StatsHouseStore = {
   setPlotParamsTagGroupBy(indexPlot: number, tagKey: TagKey, nextState: React.SetStateAction<boolean>): void;
   setPlotType(indexPlot: number, nextState: React.SetStateAction<PlotType>): void;
   serverParamsAbortController?: AbortController;
-  loadServerParams(id: number): Promise<QueryParams>;
+  loadServerParams(id: number, v?: number | null): Promise<QueryParams>;
   saveServerParams(): Promise<QueryParams>;
   removeServerParams(): Promise<QueryParams>;
   saveDashboardParams?: QueryParams;
@@ -256,6 +261,7 @@ export type StatsHouseStore = {
   dashboardLayoutEdit: boolean;
   setDashboardLayoutEdit(nextStatus: boolean): void;
   setGroupName(indexGroup: number, name: string): void;
+  setGroupDescription(indexGroup: number, description: string): void;
   setGroupShow(indexGroup: number, show: React.SetStateAction<boolean>): void;
   setGroupSize(indexGroup: number, size: React.SetStateAction<string>): void;
   listMetricsGroup: MetricsGroupShort[];
@@ -274,7 +280,7 @@ export type StatsHouseStore = {
 };
 
 export type Store = StatsHouseStore;
-export const useStore = createStoreWithEqualityFn<Store>((setState, getState) => {
+export const useStore = createStoreWithEqualityFn<Store>((setState, getState, store) => {
   let prevLocation = appHistory.location;
   let controller: AbortController;
   appHistory.listen(({ location }) => {
@@ -287,7 +293,11 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       }
     }
   });
-
+  store.subscribe((store, prevStore) => {
+    if (store.timeRange.relativeFrom !== prevStore.timeRange.relativeFrom) {
+      setLiveModeInterval(store.timeRange.relativeFrom);
+    }
+  });
   return {
     defaultParams: getDefaultParams(),
     setDefaultParams(nextState) {
@@ -323,6 +333,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       const urlSearchParams = new URLSearchParams(document.location.search);
       const searchParams = [...urlSearchParams.entries()];
       const id = decodeDashboardIdParam(urlSearchParams);
+      const dashVersion = decodeDashboardVersionParam(urlSearchParams);
       if (id && getState().params.dashboard?.dashboard_id && id !== getState().params.dashboard?.dashboard_id) {
         setState((state) => {
           state.params.plots = [];
@@ -331,7 +342,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
           state.params.eventFrom = 0;
         });
       }
-      const saveParams = id ? await getState().loadServerParams(id) : undefined;
+      const saveParams = id ? await getState().loadServerParams(id, dashVersion) : undefined;
       const localDefaultParams: QueryParams = {
         ...(saveParams ?? getDefaultParams()),
         timeRange: {
@@ -346,7 +357,6 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       };
 
       let decodeP = decodeParams(searchParams, localDefaultParams);
-
       if (!decodeP) {
         return;
       }
@@ -402,6 +412,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
 
       if (params.plots.length === 0) {
         const np: PlotParams = getNewPlot();
+        np.id = '0';
         params.plots = [np];
         reset = true;
       }
@@ -457,7 +468,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
         getState().updateUrl(true);
       }
       if (params.live) {
-        getState().setLiveMode(true);
+        setLiveMode(true);
       }
     },
     setParams(nextState, replace?, force?) {
@@ -530,8 +541,8 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             getState().loadPlot(indexPlot, force);
           }
         });
-        if (getState().params.plots.some(({ useV2 }) => !useV2) && getState().liveMode) {
-          getState().setLiveMode(false);
+        if (getState().params.plots.some(({ useV2 }) => !useV2) && useLiveModeStore.getState().live) {
+          setLiveMode(false);
         }
         getState().updateUrl(replace);
       }
@@ -565,8 +576,8 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
         if (!noUpdate) {
           getState().loadPlot(index);
         }
-        if (!next.useV2 && getState().liveMode) {
-          getState().setLiveMode(false);
+        if (!next.useV2 && useLiveModeStore.getState().live) {
+          setLiveMode(false);
         }
         if (next.metricName !== prev.metricName) {
           const metrics = getState().params.plots.map(({ metricName }) => metricName);
@@ -598,8 +609,9 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
           }
           if (params.plots.length > 1) {
             params.plots.splice(index, 1);
-            params.plots = params.plots.map((p) => ({
+            params.plots = params.plots.map((p, indexPlot) => ({
               ...p,
+              id: indexPlot.toString(), // fix fallback
               events: p.events.filter((v) => v !== index).map((v) => (v > index ? v - 1 : v)),
             }));
             params.tagSync = params.tagSync.map((g) => g.filter((tags, plot) => plot !== index));
@@ -616,18 +628,16 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                   }, 0 as number) ?? 0,
               }));
             }
-            params.variables = params.variables
-              .map((variable) => ({
-                ...variable,
-                link: variable.link
-                  .filter(([keyP]) => keyP !== plotKey)
-                  .map(([keyP, keyT]) => {
-                    const indexP = toNumber(keyP, 0);
-                    return [toPlotKey(indexP > index ? indexP - 1 : indexP, keyP), keyT];
-                  })
-                  .filter(isNotNilVariableLink),
-              }))
-              .filter(({ link }) => link.length);
+            params.variables = params.variables.map((variable) => ({
+              ...variable,
+              link: variable.link
+                .filter(([keyP]) => keyP !== plotKey)
+                .map(([keyP, keyT]) => {
+                  const indexP = toNumber(keyP, 0);
+                  return [toPlotKey(indexP > index ? indexP - 1 : indexP, keyP), keyT];
+                })
+                .filter(isNotNilVariableLink),
+            }));
           }
           if (params.tabNum > index) {
             params.tabNum--;
@@ -650,9 +660,8 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       const autoReplace =
         prevState.params.timeRange.from === defaultTimeRange.from ||
         prevState.params.timeRange.to === defaultTimeRange.to ||
-        prevState.liveMode ||
+        useLiveModeStore.getState().live ||
         prevState.timeRange.from > now();
-
       const p = encodeParams(prevState.params, prevState.defaultParams);
       const search = '?' + fixMessageTrouble(new URLSearchParams(p).toString());
       let pathname = document.location.pathname;
@@ -688,7 +697,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
               document.title =
                 s.plotsData[s.params.tabNum].nameMetric +
                 (s.plotsData[s.params.tabNum].whats.length
-                  ? ': ' + s.plotsData[s.params.tabNum].whats.map((qw) => api.whatToWhatDesc(qw)).join(',')
+                  ? ': ' + s.plotsData[s.params.tabNum].whats.map((qw) => whatToWhatDesc(qw)).join(',')
                   : '') +
                 ' — StatsHouse';
             } else {
@@ -699,7 +708,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
               (s.params.plots[s.params.tabNum] &&
                 s.params.plots[s.params.tabNum].metricName !== '' &&
                 `${s.params.plots[s.params.tabNum].metricName}: ${s.params.plots[s.params.tabNum].what
-                  .map((qw) => api.whatToWhatDesc(qw))
+                  .map((qw) => whatToWhatDesc(qw))
                   .join(',')} — StatsHouse`) ||
               '';
           }
@@ -713,22 +722,6 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       getState().updateUrl();
     },
     error: '',
-    liveMode: false,
-    setLiveMode(nextStatus) {
-      const nextState = getNextState(getState().liveMode, nextStatus);
-      setState((state) => {
-        if (state.liveMode !== nextState) {
-          state.liveMode = nextState;
-        }
-      });
-      if (!nextState) {
-        getState().setParams(
-          produce((param) => {
-            param.live = false;
-          })
-        );
-      }
-    },
     globalNumQueriesPlot: 0,
     setGlobalNumQueriesPlot(nextState) {
       setState((state) => {
@@ -756,9 +749,9 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
           state.plotsData[index] = getEmptyPlotData();
         });
       }
+      const prevStateLiveMode = useLiveModeStore.getState().live;
       const {
         numQueriesPlot: prevStateNumQueriesPlot,
-        liveMode: prevStateLiveMode,
         params: { plots: prevStatePlots, variables: prevStateVariables, timeShifts: prevStateTimeShifts },
         uPlotsWidth: prevStateuPlotsWidth,
         compact: prevStateCompact,
@@ -793,7 +786,6 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       const prev: PlotStore = getState().plotsData[index];
 
       const deltaTime = Math.floor((prevStateTo - prevStateFrom) / 5);
-
       if (
         !usePlotVisibilityStore.getState().visibilityList[index] &&
         usePlotVisibilityStore.getState().previewList[index] &&
@@ -811,10 +803,19 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       if (lastPlotParams && lastPlotParams.metricName === '' && lastPlotParams.promQL === '') {
         return;
       }
+      const changeMetric = !dequal(
+        { metricName: lastPlotParams.metricName },
+        { metricName: prev.lastPlotParams?.metricName }
+      );
+      if (!changeMetric && prev.error403) {
+        return;
+      }
+
+      const resetCache = !dequal(lastPlotParams, prev.lastPlotParams);
       if (
         width &&
         lastPlotParams &&
-        (!dequal(lastPlotParams, prev.lastPlotParams) ||
+        (resetCache ||
           getState().timeRange !== prev.lastTimeRange ||
           prevStateTimeShifts !== prev.lastTimeShifts ||
           (lastPlotParams.promQL && prevStateVariables.some(({ name }) => lastPlotParams.promQL.indexOf(name) > -1)) ||
@@ -826,6 +827,45 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             : lastPlotParams.customAgg === 0
             ? `${Math.floor(width * devicePixelRatio)}`
             : `${lastPlotParams.customAgg}s`;
+        if (!getState().metricsMeta[lastPlotParams.metricName]) {
+          getState().loadMetricsMeta(lastPlotParams.metricName);
+        }
+        getState().setNumQueriesPlot(index, (n) => n + 1);
+        const controller = new AbortController();
+        const isPromQl = lastPlotParams.metricName === promQLMetric;
+
+        const promQLForm = new FormData();
+        promQLForm.append('q', lastPlotParams.promQL);
+        const priority =
+          index === getState().params.tabNum ? 1 : usePlotVisibilityStore.getState().visibilityList[index] ? 2 : 3;
+        const url = queryURL(
+          lastPlotParams,
+          getState().timeRange,
+          getState().params.timeShifts,
+          agg,
+          !compact,
+          getState().params,
+          priority
+        );
+        setState((state) => {
+          state.plotsDataAbortController[index]?.abort();
+          state.plotsDataAbortController[index] = controller;
+          const scales: UPlotWrapperPropsScales = {};
+          scales.x = { min: getState().timeRange.from, max: getState().timeRange.to };
+          if (lastPlotParams.yLock.min !== 0 || lastPlotParams.yLock.max !== 0) {
+            scales.y = { ...lastPlotParams.yLock };
+          }
+          state.plotsData[index].scales = scales;
+          if (changeMetric || (isPromQl && !lastPlotParams.promQL)) {
+            state.plotsData[index] = getEmptyPlotData();
+            clearPlotPreview(index);
+            removePlotHeals(index.toString());
+          }
+        });
+        if ((isPromQl && !lastPlotParams.promQL) || skipRequestPlot(index.toString())) {
+          getState().setNumQueriesPlot(index, (n) => n - 1);
+          return;
+        }
         debug.log(
           '%crequesting data for %s %s %d %o %O %o %o %d',
           'color:green',
@@ -839,43 +879,6 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
           Math.round(-getState().timeRange.relativeFrom),
           lastPlotParams.maxHost
         );
-        if (!getState().metricsMeta[lastPlotParams.metricName]) {
-          getState().loadMetricsMeta(lastPlotParams.metricName);
-        }
-        getState().setNumQueriesPlot(index, (n) => n + 1);
-        const controller = new AbortController();
-        const isPromQl = lastPlotParams.metricName === promQLMetric;
-
-        const promQLForm = new FormData();
-        promQLForm.append('q', lastPlotParams.promQL);
-        const url = queryURL(
-          lastPlotParams,
-          getState().timeRange,
-          getState().params.timeShifts,
-          agg,
-          !compact,
-          getState().params
-        );
-        setState((state) => {
-          state.plotsDataAbortController[index]?.abort();
-          state.plotsDataAbortController[index] = controller;
-          const scales: UPlotWrapperPropsScales = {};
-          scales.x = { min: getState().timeRange.from, max: getState().timeRange.to };
-          if (lastPlotParams.yLock.min !== 0 || lastPlotParams.yLock.max !== 0) {
-            scales.y = { ...lastPlotParams.yLock };
-          }
-          state.plotsData[index].scales = scales;
-        });
-        if (isPromQl && !lastPlotParams.promQL) {
-          setState((state) => {
-            state.plotsData[index] = getEmptyPlotData();
-            state.liveMode = false;
-          });
-          clearPlotPreview(index);
-          getState().setNumQueriesPlot(index, (n) => n - 1);
-          return;
-        }
-
         (isPromQl
           ? apiPost<queryResult>(url, promQLForm, controller.signal, true)
           : apiGet<queryResult>(url, controller.signal, true)
@@ -885,8 +888,25 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             const uniqueWhat: Set<QueryWhat> = new Set();
             const uniqueName = new Set();
             const uniqueMetricType: Set<string> = new Set();
-            let series_meta = [...resp?.series.series_meta] ?? [];
-            let series_data = ([...resp.series.series_data] as (number | null)[][]) ?? [];
+            let series_meta = [...resp?.series.series_meta];
+            let series_data = [...resp.series.series_data] as (number | null)[][];
+            const totalLineId = lastPlotParams.totalLine ? series_meta.length : null;
+            const totalLineLabel = 'Total';
+            if (lastPlotParams.totalLine) {
+              const totalLineData = resp.series.time.map((time, idx) =>
+                series_data.reduce((res, d) => res + (d[idx] ?? 0), 0)
+              );
+              series_meta.push({
+                name: totalLineLabel,
+                time_shift: 0,
+                tags: { '0': { value: totalLineLabel } },
+                max_hosts: null,
+                what: QUERY_WHAT.sum,
+                total: 0,
+                color: '#333333',
+              });
+              series_data.push(totalLineData);
+            }
             if (lastPlotParams.type === PLOT_TYPE.Event) {
               series_meta = [];
               series_data = [];
@@ -944,6 +964,9 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             const baseColors: Record<string, string> = {};
             let changeColor = false;
             let changeType = currentPrevLastPlotParams?.type !== lastPlotParams.type;
+            const changeView =
+              currentPrevLastPlotParams?.totalLine !== lastPlotParams.totalLine ||
+              currentPrevLastPlotParams?.filledGraph !== lastPlotParams.filledGraph;
             const widthLine =
               (width ?? 0) > resp.series.time.length
                 ? devicePixelRatio > 1
@@ -957,11 +980,12 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             const maxHostLists: SelectOptionProps[][] = new Array(series_meta.length).fill([]);
             const oneGraph = series_meta.filter((s) => s.time_shift === 0).length <= 1;
             const seriesShow: boolean[] = new Array(series_meta.length).fill(true);
-
+            const seriesTimeShift: number[] = [];
             const series: uPlot.Series[] = series_meta.map((meta, indexMeta): uPlot.Series => {
               const timeShift = meta.time_shift !== 0;
-              const label = metaToLabel(meta, uniqueWhat.size);
-              const baseLabel = metaToBaseLabel(meta, uniqueWhat.size);
+              seriesTimeShift[indexMeta] = meta.time_shift;
+              const label = totalLineId !== indexMeta ? metaToLabel(meta, uniqueWhat.size) : totalLineLabel;
+              const baseLabel = totalLineId !== indexMeta ? metaToBaseLabel(meta, uniqueWhat.size) : totalLineLabel;
               const isValue = baseLabel.indexOf('Value') === 0;
               const prefColor = '9'; // it`s magic prefix
               const metricName = isValue
@@ -1006,9 +1030,11 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                     html: `<div class="d-flex"><div class="flex-grow-1 me-2 overflow-hidden text-nowrap">${host}</div><div class="text-end">${percent}</div></div>`,
                   };
                 });
-              const key = `${meta.what}|${meta.time_shift}`;
-              topInfoCounts[key] = (topInfoCounts[key] ?? 0) + 1;
-              topInfoTotals[key] = meta.total;
+              if (totalLineId !== indexMeta) {
+                const key = `${meta.what}|${meta.time_shift}`;
+                topInfoCounts[key] = (topInfoCounts[key] ?? 0) + 1;
+                topInfoTotals[key] = meta.total;
+              }
               const paths =
                 lastPlotParams.type === PLOT_TYPE.Event
                   ? uPlot.paths.bars!({ size: [0.7], gap: 0, align: 1 })
@@ -1022,7 +1048,10 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                 stroke: baseColor,
                 width: widthLine,
                 dash: timeShift ? timeShiftToDash(meta.time_shift, usedDashes) : undefined,
-                fill: rgba(baseColor, timeShift ? 0.1 : 0.15),
+                fill:
+                  totalLineId !== indexMeta && lastPlotParams.filledGraph
+                    ? rgba(baseColor, timeShift ? 0.1 : 0.15)
+                    : undefined,
                 points:
                   lastPlotParams.type === PLOT_TYPE.Event
                     ? { show: false, size: 0 }
@@ -1053,7 +1082,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                   let total = 0;
                   for (let i = 1; i < u.series.length; i++) {
                     const v = localData[i]?.[idx];
-                    if (v !== null && v !== undefined) {
+                    if (v !== null && v !== undefined && i - 1 !== totalLineId) {
                       total += v;
                     }
                   }
@@ -1074,7 +1103,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                     timeShift: meta.time_shift,
                     max_host,
                     total,
-                    percent,
+                    percent: totalLineId !== indexMeta ? percent : '100%',
                     max_host_percent,
                     top_max_host: maxHostLists[indexMeta]?.[0]?.value ?? '',
                     top_max_host_percent: maxHostLists[indexMeta]?.[0]?.title ?? '',
@@ -1117,6 +1146,8 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             scales.x = { min: getState().timeRange.from, max: getState().timeRange.to };
             if (lastPlotParams.yLock.min !== 0 || lastPlotParams.yLock.max !== 0) {
               scales.y = { ...lastPlotParams.yLock };
+            } else {
+              scales.y = { min: 0, max: 0 };
             }
 
             const maxLengthValue = series.reduce(
@@ -1154,7 +1185,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             setState((state) => {
               delete state.plotsDataAbortController[index];
               const noUpdateData = dequal(
-                stacked || data,
+                stacked?.data || data,
                 state.plotsData[index]?.stacked || state.plotsData[index]?.data
               );
               if (resp.metric != null && !dequal(state.metricsMeta[resp.metric.name], resp.metric)) {
@@ -1165,16 +1196,23 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                 nameMetric: uniqueName.size === 1 ? ([...uniqueName.keys()][0] as string) : '',
                 whats: dequal(whats, state.plotsData[index]?.whats) ? state.plotsData[index]?.whats : whats,
                 metricType,
-                error: '',
+                error: usePlotHealsStore.getState().status[index]?.status ? '' : state.plotsData[index]?.error,
                 errorSkipCount: 0,
                 data: noUpdateData ? state.plotsData[index]?.data : data,
-                stacked: noUpdateData ? state.plotsData[index]?.stacked : stacked,
+                stacked: noUpdateData ? state.plotsData[index]?.stacked : stacked?.data,
+                bands: dequal(state.plotsData[index]?.bands, stacked?.bands)
+                  ? state.plotsData[index]?.bands
+                  : stacked?.bands,
                 series:
                   dequal(resp.series.series_meta, state.plotsData[index]?.lastQuerySeriesMeta) &&
                   !changeColor &&
-                  !changeType
+                  !changeType &&
+                  !changeView
                     ? state.plotsData[index]?.series
                     : series,
+                seriesTimeShift: dequal(seriesTimeShift, state.plotsData[index].seriesTimeShift)
+                  ? state.plotsData[index].seriesTimeShift
+                  : seriesTimeShift,
                 seriesShow: dequal(seriesShow, state.plotsData[index]?.seriesShow)
                   ? state.plotsData[index]?.seriesShow
                   : seriesShow,
@@ -1200,36 +1238,33 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                 promQL: resp.promql ?? '',
               };
             });
+            addStatus(index.toString(), true);
           })
           .catch((error) => {
             if (!getState().metricsMeta[lastPlotParams.metricName]) {
               getState().loadMetricsMeta(lastPlotParams.metricName);
             }
-            if (error instanceof ErrorSkip) {
-              setState((state) => {
-                state.plotsData[index] ??= getEmptyPlotData();
-                state.plotsData[index].errorSkipCount++;
-                if (!state.liveMode || state.plotsData[index].errorSkipCount > globalSettings.skip_error_count) {
-                  state.plotsData[index].error = error.toString();
-                  state.liveMode = false;
-                }
-              });
-            } else if (error instanceof Error403) {
+            if (error instanceof Error403) {
               setState((state) => {
                 state.plotsData[index] = {
                   ...getEmptyPlotData(),
                   error403: error.toString(),
                 };
-                state.liveMode = false;
+                addStatus(index.toString(), false);
               });
             } else if (error.name !== 'AbortError') {
               debug.error(error);
               setState((state) => {
-                state.plotsData[index] = {
-                  ...getEmptyPlotData(),
-                  error: error.toString(),
-                };
-                state.liveMode = false;
+                if (resetCache) {
+                  state.plotsData[index] = {
+                    ...getEmptyPlotData(),
+                    error: error.toString(),
+                  };
+                } else {
+                  state.plotsData[index].error = error.toString();
+                }
+
+                addStatus(index.toString(), false);
               });
             }
             clearPlotPreview(index);
@@ -1396,19 +1431,37 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
               case PLOT_TYPE.Metric:
                 params.plots[indexPlot].customAgg = 0;
                 params.plots[indexPlot].eventsBy = [];
+                params.plots[indexPlot].what = [QUERY_WHAT.countNorm];
+                params.plots[indexPlot].numSeries = 5;
                 break;
               case PLOT_TYPE.Event:
+                params.plots[indexPlot].what = [QUERY_WHAT.count];
+                params.plots[indexPlot].numSeries = 0;
                 params.plots[indexPlot].customAgg = -1;
-                params.plots[indexPlot].eventsBy =
-                  (meta &&
+
+                const eventsBy = [
+                  ...((meta &&
                     meta.tags?.reduce((res, tag, index) => {
                       if (tag.description !== '-') {
                         res.push(index.toString());
                       }
                       return res;
                     }, [] as string[])) ??
-                  [];
+                    []),
+                  ...(meta?.string_top_name || meta?.string_top_description ? [TAG_KEY._s] : []),
+                ];
+                params.plots[indexPlot].eventsBy = eventsBy;
+
                 break;
+            }
+            if (params.plots[indexPlot].type === PLOT_TYPE.Metric) {
+              params.plots = params.plots.map((plot, indexP, plotList) => {
+                const eventsFilter = plot.events.filter((eventPlot) => plotList[eventPlot]?.type === PLOT_TYPE.Event);
+                return {
+                  ...plot,
+                  events: eventsFilter,
+                };
+              });
             }
             const timeShiftsSet = getTimeShifts(params.plots[indexPlot].customAgg);
             const shifts = params.timeShifts.filter(
@@ -1422,7 +1475,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       }
     },
     metricsListAbortController: undefined,
-    loadServerParams(id) {
+    loadServerParams(id, v) {
       return new Promise((resolve) => {
         const paramsLD = readJSONLD<QueryParams>('QueryParams');
         if (paramsLD?.dashboard?.dashboard_id && paramsLD.dashboard.dashboard_id === id) {
@@ -1435,7 +1488,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
           return;
         }
         getState().setSaveDashboardParams(undefined);
-        const url = dashboardURL(id);
+        const url = dashboardURL(id, v);
         getState().serverParamsAbortController?.abort();
         const controller = new AbortController();
         setState((state) => {
@@ -1587,6 +1640,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
       if (remapIndexPlot) {
         resortPlotPreview(remapIndexPlot);
         resortPlotVisibility(remapIndexPlot);
+        resortPlotHeals(remapIndexPlot);
       }
       setState((state) => {
         state.plotsData = plotsData;
@@ -1600,7 +1654,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
         state.dashboardLayoutEdit = nextStatus;
       });
       if (nextStatus) {
-        getState().setLiveMode(false);
+        setLiveMode(false);
       }
       if (!nextStatus && getState().params.tabNum < -1) {
         getState().setTabNum(-1);
@@ -1614,7 +1668,21 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             if (state.dashboard.groupInfo[indexGroup]) {
               state.dashboard.groupInfo[indexGroup].name = name;
             } else {
-              state.dashboard.groupInfo[indexGroup] = { show: true, name, count: 0, size: '2' };
+              state.dashboard.groupInfo[indexGroup] = { show: true, name, count: 0, size: '2', description: '' };
+            }
+          }
+        })
+      );
+    },
+    setGroupDescription(indexGroup, description) {
+      getState().setParams(
+        produce<QueryParams>((state) => {
+          if (state.dashboard) {
+            state.dashboard.groupInfo = state.dashboard.groupInfo ?? [];
+            if (state.dashboard.groupInfo[indexGroup]) {
+              state.dashboard.groupInfo[indexGroup].description = description;
+            } else {
+              state.dashboard.groupInfo[indexGroup] = { show: true, name: '', count: 0, size: '2', description };
             }
           }
         })
@@ -1634,6 +1702,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                 name: '',
                 count: state.dashboard.groupInfo.length ? 0 : state.plots.length,
                 size: '2',
+                description: '',
               };
             }
           }
@@ -1654,6 +1723,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                 name: '',
                 count: state.dashboard.groupInfo.length ? 0 : state.plots.length,
                 size: nextSize,
+                description: '',
               };
             }
           }
@@ -1822,6 +1892,7 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
     events: [],
     loadEvents(indexPlot, key, fromEnd = false, from) {
       return new Promise((resolve, reject) => {
+        const plotKey = toPlotKey(indexPlot);
         if (!getState().events[indexPlot]) {
           setState((state) => {
             state.events[indexPlot] = {
@@ -1835,9 +1906,13 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
         const prevState = getState();
         const prevEvent = prevState.events[indexPlot];
         const prevPlot = prevState.params.plots[indexPlot];
+        const prevStateVariables = prevState.params.variables;
         const compact = prevState.compact;
         if (compact || prevPlot.type !== PLOT_TYPE.Event || prevPlot.metricName === promQLMetric) {
           resolve(null);
+          return;
+        }
+        if (plotKey == null) {
           return;
         }
         if (fromEnd) {
@@ -1858,7 +1933,9 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
             ? `${Math.floor(width * devicePixelRatio)}`
             : `${prevPlot.customAgg}s`;
 
-        const url = queryTableURL(prevPlot, range, agg, key, fromEnd);
+        const lastPlotParams: PlotParams | undefined = replaceVariable(plotKey, prevPlot, prevStateVariables);
+
+        const url = queryTableURL(lastPlotParams, range, agg, key, fromEnd);
         setState((state) => {
           if (fromEnd) {
             state.events[indexPlot].prevAbortController = controller;
@@ -1867,7 +1944,8 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
           }
         });
         apiGet<queryTable>(url, controller.signal, true)
-          .then((resp) => {
+          .then(async (resp) => {
+            await getState().loadMetricsMeta(getState().params.plots[indexPlot].metricName);
             setState((state) => {
               state.events[indexPlot] ??= {
                 chunks: [],
@@ -1875,6 +1953,10 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                 what: [],
                 range: new TimeRange(range.getRangeUrl),
               };
+              const prevPlot = state.params.plots[indexPlot];
+              const meta = state.metricsMeta[prevPlot.metricName];
+              const metricType = getMetricType(prevPlot.what, prevPlot.metricType ?? meta?.metric_type);
+              const formatMetric = metricType !== METRIC_TYPE.none && formatByMetricType(metricType);
               const chunk: EventDataChunk = {
                 ...resp,
                 ...range.getRange(),
@@ -1920,7 +2002,15 @@ export const useStore = createStoreWithEqualityFn<Store>((setState, getState) =>
                         data: row.data,
                         time: row.time,
                         ...Object.fromEntries(
-                          state.events[indexPlot].what.map((whatKey, indexWhat) => [whatKey, row.data[indexWhat]])
+                          state.events[indexPlot].what.map((whatKey, indexWhat) => [
+                            whatKey,
+                            {
+                              value: row.data[indexWhat],
+                              formatValue: formatMetric
+                                ? formatMetric(row.data[indexWhat])
+                                : formatLegendValue(row.data[indexWhat]),
+                            },
+                          ])
                         ),
                         ...row.tags,
                       }) as EventDataRow
@@ -2061,12 +2151,12 @@ export function addDashboardGroup(indexGroup: number) {
       if (p.dashboard) {
         p.dashboard.groupInfo ??= [];
         if (p.dashboard.groupInfo.length === 0) {
-          p.dashboard.groupInfo.push({ name: '', count: p.plots.length, show: true, size: '2' });
+          p.dashboard.groupInfo.push({ name: '', count: p.plots.length, show: true, size: '2', description: '' });
         }
         if (indexGroup >= p.dashboard.groupInfo.length) {
-          p.dashboard.groupInfo.push({ name: '', count: 0, show: true, size: '2' });
+          p.dashboard.groupInfo.push({ name: '', count: 0, show: true, size: '2', description: '' });
         } else {
-          p.dashboard.groupInfo.splice(indexGroup, 0, { name: '', count: 0, show: true, size: '2' });
+          p.dashboard.groupInfo.splice(indexGroup, 0, { name: '', count: 0, show: true, size: '2', description: '' });
         }
       }
     })
@@ -2079,7 +2169,7 @@ export function removeDashboardGroup(indexGroup: number) {
       if (p.dashboard) {
         p.dashboard.groupInfo ??= [];
         if (p.dashboard.groupInfo.length === 0) {
-          p.dashboard.groupInfo.push({ name: '', count: p.plots.length, show: true, size: '2' });
+          p.dashboard.groupInfo.push({ name: '', count: p.plots.length, show: true, size: '2', description: '' });
         }
         p.dashboard.groupInfo.splice(indexGroup, 1);
       }
@@ -2174,6 +2264,7 @@ export function moveAndResortPlot(
 
     state.params.plots = plots.map((p, indexP) => ({
       ...p,
+      id: indexP.toString(), // fix fallback
       events: plotEventLink[indexP].filter((i) => i > -1) ?? [],
     }));
     state.params.tagSync = tagSync;
@@ -2193,6 +2284,7 @@ export function moveAndResortPlot(
             count: 0,
             show: true,
             size: '2',
+            description: '',
           };
         }
       }
@@ -2252,7 +2344,13 @@ export function moveGroup(indexGroup: number, direction: -1 | 1) {
       if (p.params.dashboard) {
         p.params.dashboard.groupInfo ??= [];
         if (p.params.dashboard.groupInfo.length === 0) {
-          p.params.dashboard.groupInfo.push({ name: '', count: p.params.plots.length, show: true, size: '2' });
+          p.params.dashboard.groupInfo.push({
+            name: '',
+            count: p.params.plots.length,
+            show: true,
+            size: '2',
+            description: '',
+          });
         }
         if (targetGroupIndex > p.params.dashboard.groupInfo.length) {
           p.params.dashboard.groupInfo.push({ ...group, count: 0 });
@@ -2280,7 +2378,13 @@ export function moveGroup(indexGroup: number, direction: -1 | 1) {
       if (p.params.dashboard) {
         p.params.dashboard.groupInfo ??= [];
         if (p.params.dashboard.groupInfo.length === 0) {
-          p.params.dashboard.groupInfo.push({ name: '', count: p.params.plots.length, show: true, size: '2' });
+          p.params.dashboard.groupInfo.push({
+            name: '',
+            count: p.params.plots.length,
+            show: true,
+            size: '2',
+            description: '',
+          });
         }
         p.params.dashboard.groupInfo.splice(direction > 0 ? indexGroup : indexGroup + 1, 1);
       }
@@ -2288,6 +2392,7 @@ export function moveGroup(indexGroup: number, direction: -1 | 1) {
     if (remapIndexPlot) {
       resortPlotPreview(remapIndexPlot);
       resortPlotVisibility(remapIndexPlot);
+      resortPlotHeals(remapIndexPlot);
     }
     useStore.setState((state) => {
       state.plotsData = store.plotsData;

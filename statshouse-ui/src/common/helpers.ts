@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -42,7 +42,7 @@ export function toFlatPairs<C>(
   return res;
 }
 
-export function toString(item: unknown, defaultSting?: string): string {
+export function toString(item: unknown): string {
   switch (typeof item) {
     case 'undefined':
       return 'undefined';
@@ -57,7 +57,20 @@ export function toString(item: unknown, defaultSting?: string): string {
         return 'null';
       }
   }
-  return defaultSting ?? '';
+  return '';
+}
+
+export function numberAsStr(item: string) {
+  return !!item && Number.isFinite(+item);
+}
+
+/**
+ * toNumber for map without default number
+ *
+ * @param item
+ */
+export function toNumberM(item: unknown) {
+  return toNumber(item);
 }
 
 export function toNumber(item: unknown): number | null;
@@ -81,6 +94,22 @@ export function toNumber(item: unknown, defaultNumber?: number): number | null {
 
 export function uniqueArray<T>(arr: T[]): T[] {
   return [...new Set(arr).keys()];
+}
+
+export function uniqueSortArray(arr: string[]): string[] {
+  return Object.keys(
+    arr.reduce(
+      (res, s) => {
+        res[s] = true;
+        return res;
+      },
+      {} as Record<string, boolean>
+    )
+  );
+}
+
+export function sumArray(arr: number[]) {
+  return arr.reduce((res, i) => res + i, 0);
 }
 
 export function getRandomKey(): string {
@@ -177,6 +206,10 @@ export function toEnum<T>(itemIsEnum: (s: unknown) => s is T, preConvert: (s: un
   return toEnumFull;
 }
 
+export function invertObj<K extends string, V extends string>(obj: Record<K, V>): Record<V, K> {
+  return Object.fromEntries(Object.entries(obj).map(([k, v]) => [v, k]));
+}
+
 export function objectRemoveKeyShift<T = unknown>(obj: Record<string, T>, index: number) {
   return Object.fromEntries(
     Object.entries(obj).map(([key, value]) => {
@@ -199,6 +232,12 @@ export function round(val: number, dec: number = 0, radix: number = 10) {
   return Math.round(val * p * (1 + Number.EPSILON)) / p;
 }
 
+export function floor(val: number, dec: number = 0, radix: number = 10) {
+  if (Number.isInteger(val) && dec >= 0 && radix === 10) return val;
+  let p = Math.pow(radix, dec);
+  return Math.floor(val * p * (1 + Number.EPSILON)) / p;
+}
+
 export function prepareSearchStr(str: string) {
   return str.replace(/(\s+|_+)/gi, '');
 }
@@ -216,4 +255,54 @@ export function SearchFabric<T extends string | Record<string, unknown>>(filterS
   return function (item: T) {
     return !!item && getListValues(item).some((v) => v.indexOf(orig) > -1 || v.indexOf(ru) > -1 || v.indexOf(en) > -1);
   };
+}
+
+export const searchParamsObjectValueSymbol = Symbol('value');
+export type SearchParamsObject = Partial<{
+  [key: string]: SearchParamsObject;
+  [searchParamsObjectValueSymbol]: string[];
+}>;
+export function searchParamsToObject(searchParams: [string, string][]): SearchParamsObject {
+  return searchParams.reduce((res, [key, value]) => {
+    const keys = key.split('.');
+    let target: SearchParamsObject = res;
+    keys.forEach((keyName) => {
+      target = target[keyName] ??= {};
+    });
+    (target[searchParamsObjectValueSymbol] ??= []).push(value);
+    return res;
+  }, {});
+}
+
+export function parseURLSearchParams(url: string): [string, string][] {
+  try {
+    const parseUrl = new URL(url, document.location.origin);
+    return [...parseUrl.searchParams.entries()];
+  } catch (e) {
+    return [];
+  }
+}
+
+export const emptyArray = [];
+export const emptyObject = {};
+export const emptyFunction = () => undefined;
+export const defaultBaseRange = 'last-2d';
+
+export function getClipboard(): Promise<string> {
+  return new Promise((resolve) => {
+    (navigator.clipboard.readText ? navigator.clipboard.readText() : Promise.reject())
+      .then((url) => {
+        resolve(url);
+      })
+      .catch(() => {
+        const url = prompt('Paste url') ?? '';
+        resolve(url);
+      });
+  });
+}
+
+export function skipTimeout(timeout: number = 0) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, timeout);
+  });
 }

@@ -21,6 +21,8 @@ import (
 
 	"github.com/mailru/easyjson/jwriter"
 
+	"github.com/vkcom/statshouse/internal/data_model"
+
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/promql"
 )
@@ -65,6 +67,8 @@ func httpCode(err error) int {
 		var httpErr httpError
 		var promErr promql.Error
 		switch {
+		case errors.Is(err, data_model.ErrEntityNotExists):
+			code = http.StatusNotFound
 		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
 			code = http.StatusGatewayTimeout // 504
 		case errors.As(err, &httpErr):
@@ -95,9 +99,8 @@ func cacheSeconds(d time.Duration) int {
 	return s
 }
 
-func exportCSV(w http.ResponseWriter, resp *SeriesResponse, metric string, es *endpointStat) {
-	es.serviceTime(http.StatusOK)
-	defer es.responseTime(http.StatusOK)
+func exportCSV(w *HTTPRequestHandler, resp *SeriesResponse, metric string) {
+	w.endpointStat.reportServiceTime(http.StatusOK, nil)
 
 	w.Header().Set(
 		"Content-Disposition",
@@ -116,7 +119,7 @@ func exportCSV(w http.ResponseWriter, resp *SeriesResponse, metric string, es *e
 		return
 	}
 
-	uniqueWhat := make(map[queryFn]struct{})
+	uniqueWhat := make(map[string]struct{})
 	for _, meta := range resp.Series.SeriesMeta {
 		uniqueWhat[meta.What] = struct{}{}
 	}
@@ -134,7 +137,7 @@ func exportCSV(w http.ResponseWriter, resp *SeriesResponse, metric string, es *e
 
 			err := writer.Write([]string{
 				time.Unix(resp.Series.Time[di], 0).Format("2006-01-02 15:04:05"),
-				strconv.FormatFloat(p, 'f', 2, 64),
+				strconv.FormatFloat(p, 'f', -1, 64),
 				label,
 			})
 			if err != nil {
@@ -145,13 +148,11 @@ func exportCSV(w http.ResponseWriter, resp *SeriesResponse, metric string, es *e
 	}
 }
 
-func respondJSON(w http.ResponseWriter, resp interface{}, cache time.Duration, cacheStale time.Duration, err error, verbose bool, user string, es *endpointStat) {
+func respondJSON(w *HTTPRequestHandler, resp interface{}, cache time.Duration, cacheStale time.Duration, err error) {
 	code := httpCode(err)
 	r := Response{}
 
-	if es != nil {
-		es.serviceTime(code)
-	}
+	w.endpointStat.reportServiceTime(code, nil)
 
 	if err != nil {
 		if code == 500 {
@@ -165,20 +166,21 @@ func respondJSON(w http.ResponseWriter, resp interface{}, cache time.Duration, c
 	var jw jwriter.Writer
 	r.MarshalEasyJSON(&jw)
 	if jw.Error != nil {
-		log.Printf("[error] failed to marshal JSON response for %q: %v", user, jw.Error)
+		log.Printf("[error] failed to marshal JSON response for %q: %v", w.endpointStat.user, jw.Error)
 		msg := `{"error": "failed to marshal JSON response"}`
 		w.Header().Set("Content-Length", strconv.Itoa(len(msg)))
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(ServerTimingHeaderKey, w.endpointStat.timings.String())
 		code = http.StatusInternalServerError
 		w.WriteHeader(code)
 		_, err := w.Write([]byte(msg))
 		if err != nil {
-			log.Printf("[error] failed to write HTTP response for %q: %v", user, err)
+			log.Printf("[error] failed to write HTTP response for %q: %v", w.endpointStat.user, err)
 		}
 	} else {
 		size := jw.Size()
-		if verbose {
-			log.Printf("[debug] serialized %v bytes of JSON for %q in %v", size, user, time.Since(start))
+		if w.verbose {
+			log.Printf("[debug] serialized %v bytes of JSON for %q in %v", size, w.endpointStat.user, time.Since(start))
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(size))
 		w.Header().Set("Content-Type", "application/json")
@@ -192,27 +194,23 @@ func respondJSON(w http.ResponseWriter, resp interface{}, cache time.Duration, c
 				w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d, stale-while-revalidate=%d", cacheSeconds(cache), cacheSeconds(cacheStale)))
 			}
 		}
+		w.Header().Set(ServerTimingHeaderKey, w.endpointStat.timings.String())
 		w.WriteHeader(code)
 		start := time.Now()
 		_, err := jw.DumpTo(w)
-		if verbose && err == nil {
-			log.Printf("[debug] dumped %v bytes of JSON for %q in %v", size, user, time.Since(start))
+		if w.verbose && err == nil {
+			log.Printf("[debug] dumped %v bytes of JSON for %q in %v", size, w.endpointStat.user, time.Since(start))
 		}
 		if err != nil {
-			log.Printf("[error] failed to write HTTP response for %q: %v", user, err)
+			log.Printf("[error] failed to write HTTP response for %q: %v", w.endpointStat.user, err)
 		}
-	}
-
-	if es != nil {
-		es.responseTime(code)
 	}
 }
 
-func respondPlot(w http.ResponseWriter, format string, resp []byte, cache time.Duration, cacheStale time.Duration, verbose bool, user string, es *endpointStat) {
+func respondPlot(w *HTTPRequestHandler, format string, resp []byte, cache time.Duration, cacheStale time.Duration, user string) {
 	code := http.StatusOK
-	if es != nil {
-		es.serviceTime(code)
-	}
+	w.endpointStat.reportServiceTime(code, nil)
+	w.Header().Set(ServerTimingHeaderKey, w.endpointStat.timings.String())
 
 	w.Header().Set("Content-Length", strconv.Itoa(len(resp)))
 	switch format {
@@ -235,15 +233,11 @@ func respondPlot(w http.ResponseWriter, format string, resp []byte, cache time.D
 
 	start := time.Now()
 	_, err := w.Write(resp)
-	if verbose && err == nil {
+	if w.verbose && err == nil {
 		log.Printf("[debug] dumped %v bytes of %s render for %q in %v", len(resp), format, user, time.Since(start))
 	}
 	if err != nil {
 		log.Printf("[error] failed to write HTTP response for %q: %v", user, err)
-	}
-
-	if es != nil {
-		es.responseTime(code)
 	}
 }
 
@@ -265,39 +259,6 @@ func parseFromTo(fromTS string, toTS string) (from time.Time, to time.Time, err 
 		return time.Time{}, time.Time{}, httpErr(http.StatusBadRequest, fmt.Errorf("failed to parse UNIX timestamp: %w", err))
 	}
 	if to.Before(from) {
-		err = httpErr(http.StatusBadRequest, fmt.Errorf("%q %v is before %q %v", ParamToTime, to, ParamFromTime, from))
-	}
-	return
-}
-
-func parseFromToRows(fromTS string, toTS string, f, t RowMarker) (from time.Time, to time.Time, err error) {
-	count := 0
-	fromN := f.Time
-	toN := t.Time
-	if f.Time == 0 {
-		fromN, err = strconv.ParseInt(fromTS, 10, 64)
-		if err != nil {
-			return time.Time{}, time.Time{}, httpErr(http.StatusBadRequest, fmt.Errorf("failed to parse UNIX timestamp: %w", err))
-		}
-		count++
-	}
-	if t.Time == 0 {
-		toN, err = strconv.ParseInt(toTS, 10, 64)
-		if err != nil {
-			return time.Time{}, time.Time{}, httpErr(http.StatusBadRequest, fmt.Errorf("failed to parse UNIX timestamp: %w", err))
-		}
-		count++
-	}
-
-	to, err = parseUnixTimeTo(toN)
-	if err != nil {
-		return time.Time{}, time.Time{}, httpErr(http.StatusBadRequest, fmt.Errorf("failed to parse UNIX timestamp: %w", err))
-	}
-	from, err = parseUnixTimeFrom(fromN, to)
-	if err != nil {
-		return time.Time{}, time.Time{}, httpErr(http.StatusBadRequest, fmt.Errorf("failed to parse UNIX timestamp: %w", err))
-	}
-	if (count%2) == 0 && to.Before(from) {
 		err = httpErr(http.StatusBadRequest, fmt.Errorf("%q %v is before %q %v", ParamToTime, to, ParamFromTime, from))
 	}
 	return
@@ -347,14 +308,23 @@ func parseWidth(w string, g string) (int, int, error) {
 }
 
 func parseTimeShifts(ts []string) ([]time.Duration, error) {
-	ds := []time.Duration{0} // implicit 0s
+	ds := make([]int64, 0, len(ts))
 	for _, s := range ts {
 		d, err := strconv.ParseInt(s, 10, 32)
 		if err != nil {
 			return nil, httpErr(http.StatusBadRequest, fmt.Errorf("failed to parse time shift %q: %w", s, err))
 		}
+		ds = append(ds, d)
+	}
+	return verifyTimeShifts(ds)
+
+}
+
+func verifyTimeShifts(ts []int64) ([]time.Duration, error) {
+	ds := []time.Duration{0} // implicit 0s
+	for _, d := range ts {
 		if d >= 0 {
-			return nil, httpErr(http.StatusBadRequest, fmt.Errorf("time shift %q is not negative", s))
+			return nil, httpErr(http.StatusBadRequest, fmt.Errorf("time shift %d is not negative", d))
 		}
 		ds = append(ds, time.Duration(d)*time.Second)
 	}
@@ -365,7 +335,7 @@ func parseTimeShifts(ts []string) ([]time.Duration, error) {
 	return ds, nil
 }
 
-func parseNumResults(s string, def int, max int) (int, error) {
+func parseNumResults(s string, max int) (int, error) {
 	u, err := strconv.ParseInt(s, 10, 32)
 	if err != nil {
 		return 0, httpErr(http.StatusBadRequest, fmt.Errorf("failed to parse number of results: %w", err))
@@ -396,7 +366,7 @@ func parseVersion(s string) (string, error) {
 		return Version1, nil
 	}
 
-	for _, v := range []string{Version1, Version2} {
+	for _, v := range []string{Version1, Version2, Version3} {
 		if s == v {
 			return v, nil
 		}

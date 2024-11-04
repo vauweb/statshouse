@@ -13,25 +13,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
 	"pgregory.net/rapid"
 
-	"github.com/vkcom/statshouse-go"
+	"github.com/stretchr/testify/require"
 
+	"github.com/vkcom/statshouse-go"
 	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/mapping"
 	"github.com/vkcom/statshouse/internal/receiver"
 )
 
-var (
-	_ *goMachine // for staticcheck: type goMachine is unused (U1000)
-)
+var _ *goMachine // for staticcheck: type goMachine is unused (U1000)
 
 const (
-	goStatsHouseAddr = "127.0.0.1:"
-	envName          = "abc"
+	goStatsHouseAddr     = "127.0.0.1:"
+	goStatsHouseAddrUnix = "@statshouse-test"
+	envName              = "abc"
 )
 
 type tag struct {
@@ -149,7 +147,8 @@ func (g *goMachine) init(t *rapid.T) {
 	g.counterMetrics = floatsMap{}
 	g.valueMetrics = floatsMap{}
 	g.uniqueMetrics = intsMap{}
-	recv, err := receiver.ListenUDP(goStatsHouseAddr, receiver.DefaultConnBufSize, false, nil, nil)
+	recv, err := receiver.ListenUDP("udp", goStatsHouseAddr, receiver.DefaultConnBufSize, false, nil, nil, nil)
+	//recv, err := receiver.ListenUDP("unixgram", goStatsHouseAddrUnix, receiver.DefaultConnBufSize, true, nil, nil)
 	require.NoError(t, err)
 	g.recv = recv
 	g.addr = recv.Addr()
@@ -157,7 +156,7 @@ func (g *goMachine) init(t *rapid.T) {
 	if g.envIsSet {
 		env = envName
 	}
-	g.send = statshouse.NewClient(t.Logf, g.addr, env)
+	g.send = statshouse.NewClient(t.Logf, "udp", g.addr, env)
 }
 
 func (g *goMachine) Cleanup() {
@@ -177,7 +176,7 @@ func (g *goMachine) Counter(t *rapid.T) {
 		return
 	}
 
-	g.send.Metric(name, ks).Count(value)
+	g.send.Count(name, ks, value)
 	g.counterMetrics.count(k, value)
 }
 
@@ -192,7 +191,7 @@ func (g *goMachine) CounterNamed(t *rapid.T) {
 	if len(k) > maxTSSize {
 		return
 	}
-	g.send.MetricNamed(name, tags).Count(value)
+	g.send.NamedCount(name, tags, value)
 	g.counterMetrics.count(k, value)
 }
 
@@ -208,7 +207,7 @@ func (g *goMachine) Values(t *rapid.T) {
 		return
 	}
 
-	g.send.Metric(name, ks).Values(values)
+	g.send.Values(name, ks, values)
 	g.valueMetrics.merge(k, values)
 }
 
@@ -224,7 +223,7 @@ func (g *goMachine) ValuesNamed(t *rapid.T) {
 		return
 	}
 
-	g.send.MetricNamed(name, tags).Values(values)
+	g.send.NamedValues(name, tags, values)
 	g.valueMetrics.merge(k, values)
 }
 
@@ -240,7 +239,7 @@ func (g *goMachine) Uniques(t *rapid.T) {
 		return
 	}
 
-	g.send.Metric(name, ks).Uniques(values)
+	g.send.Uniques(name, ks, values)
 	g.uniqueMetrics.merge(k, values)
 }
 
@@ -256,7 +255,7 @@ func (g *goMachine) UniquesNamed(t *rapid.T) {
 		return
 	}
 
-	g.send.MetricNamed(name, tags).Uniques(values)
+	g.send.NamedUniques(name, tags, values)
 	g.uniqueMetrics.merge(k, values)
 }
 
@@ -270,7 +269,7 @@ func (g *goMachine) STops(t *rapid.T) {
 	if len(k) > maxTSSize {
 		return
 	}
-	g.send.Metric(name, ks).StringsTop(values)
+	g.send.StringsTop(name, ks, values)
 	for _, skey := range values {
 		g.counterMetrics.count(ts(name, toTags(ks, skey, g.envIsSet)), 1)
 	}
@@ -288,7 +287,7 @@ func (g *goMachine) STopsNamed(t *rapid.T) {
 		return
 	}
 
-	g.send.MetricNamed(name, tags).StringsTop(values)
+	g.send.NamedStringsTop(name, tags, values)
 	for _, skey := range values {
 		g.counterMetrics.count(ts(name, toTagsStruct(tags, skey, g.envIsSet)), 1)
 	}
@@ -317,7 +316,7 @@ func (g *goMachine) Run(t *rapid.T) {
 	timer := time.AfterFunc(recvTimeout, func() { _ = g.recv.Close() })
 	defer timer.Stop()
 	serveErr := g.recv.Serve(receiver.CallbackHandler{
-		Metrics: func(m *tlstatshouse.MetricBytes, cb mapping.MapCallbackFunc) (h data_model.MappedMetricHeader, done bool) {
+		Metrics: func(m *tlstatshouse.MetricBytes, cb data_model.MapCallbackFunc) (h data_model.MappedMetricHeader, done bool) {
 			switch {
 			case len(m.Value) > 0:
 				valueMetrics.merge(ts(string(m.Name), receivedSlice(m.Tags, nil)), m.Value)
@@ -355,6 +354,7 @@ func TestGoRoundtrip(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		m := goMachine{}
 		m.init(t)
+		defer m.Cleanup()
 		t.Repeat(rapid.StateMachineActions(&m))
 	})
 }

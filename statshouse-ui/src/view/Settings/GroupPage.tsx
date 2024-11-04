@@ -5,13 +5,14 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { groupAdd, groupListErrors, groupListLoad, groupLoad, groupSave, useGroupListStore } from '../../store';
+import { groupAdd, groupListErrors, groupListLoad, groupLoad, groupSave, useGroupListStore } from 'store/group';
 import { ReactComponent as SVGPlus } from 'bootstrap-icons/icons/plus.svg';
 import cn from 'classnames';
-import { ErrorMessages, InputText } from '../../components';
-import { GroupInfo, GroupMetric } from '../../api/group';
-import { toNumber } from '../../common/helpers';
+import { GroupInfo, GroupMetric } from 'api/group';
+import { toNumber } from 'common/helpers';
 import { produce } from 'immer';
+import { ErrorMessages } from 'components/ErrorMessages';
+import { InputText } from 'components/UI';
 
 type SelectGroup = {
   group: Pick<GroupInfo, 'name' | 'weight' | 'namespace_id'> &
@@ -30,7 +31,7 @@ export function GroupPage() {
   const selectDisable = selectMetricsGroup?.group.disable ?? false;
 
   const { sumWeight, list } = useMemo(() => {
-    let sumWeight = 1 + (selectId == null ? selectWeight : 0);
+    let sumWeight = selectId == null ? selectWeight : 0;
     listMetricsGroup.forEach((g) => {
       if (!g.disable) {
         const weight = selectId === g.id ? selectWeight : g.weight;
@@ -43,7 +44,7 @@ export function GroupPage() {
         return { ...g, weight: 0, percent: 0 };
       }
       const weight = selectId === g.id ? selectWeight : g.weight;
-      const percent = Math.round((weight / sumWeight) * 1000) / 10 ?? 0;
+      const percent = Math.round((weight / sumWeight) * 1000) / 10;
       return { ...g, weight, percent };
     });
     return { sumWeight, list };
@@ -99,6 +100,9 @@ export function GroupPage() {
   );
   const onRemoveMetricsGroup = useCallback(() => {
     if (selectMetricsGroup) {
+      if (!window.confirm('Confirm ' + (selectMetricsGroup.group.disable ? 'restore' : 'remove'))) {
+        return;
+      }
       setSaveLoader(true);
       if (selectMetricsGroup.group.group_id != null && selectMetricsGroup.group.version != null) {
         groupSave({
@@ -129,6 +133,7 @@ export function GroupPage() {
 
   const onSelectMetricsGroup = useCallback((event: React.MouseEvent) => {
     const id = parseInt(event.currentTarget.getAttribute('data-id') ?? '-1');
+
     setLoadLoader(true);
     groupLoad(id)
       .then((g) => {
@@ -144,8 +149,6 @@ export function GroupPage() {
         setLoadLoader(false);
       });
   }, []);
-
-  const defaultMetricsGroupWeightPercent = useMemo(() => Math.round((1 / sumWeight) * 1000) / 10, [sumWeight]);
 
   const selectMetricsGroupWeightPercent = useMemo(
     () => Math.round((selectWeight / (sumWeight + (selectDisable ? selectWeight : 0))) * 1000) / 10,
@@ -195,18 +198,14 @@ export function GroupPage() {
             </button>
           </div>
           <ul className="list-group">
-            <li className="list-group-item text-secondary d-flex flex-row">
-              <div className="flex-grow-1">default</div>
-              <div>1 [{defaultMetricsGroupWeightPercent}%]</div>
-            </li>
             {list.map((item) => (
               <li
                 key={item.id}
                 data-id={item.id}
                 role="button"
                 className={cn(
-                  item.disable && 'text-secondary',
-                  'list-group-item text-black d-flex flex-row',
+                  item.disable ? 'text-secondary' : 'text-body',
+                  'list-group-item d-flex flex-row',
                   selectMetricsGroup?.group.group_id === item.id && 'text-bg-light'
                 )}
                 onClick={onSelectMetricsGroup}
@@ -242,7 +241,7 @@ export function GroupPage() {
                     type="text"
                     className="form-control"
                     id="metricsGroupName"
-                    // disabled={selectMetricsGroup.group.group_id != null}
+                    disabled={selectMetricsGroup.group.group_id != null && selectMetricsGroup.group.group_id <= 0}
                     value={selectMetricsGroup.group.name}
                     onChange={onChangeName}
                   />
@@ -302,7 +301,7 @@ export function GroupPage() {
                 >
                   Cancel
                 </button>
-                {typeof selectMetricsGroup.group.group_id !== 'undefined' && (
+                {selectMetricsGroup.group.group_id != null && selectMetricsGroup.group.group_id > 0 && (
                   <button
                     type="button"
                     className="btn btn-outline-danger ms-1 text-nowrap"
@@ -323,3 +322,5 @@ export function GroupPage() {
     </div>
   );
 }
+
+export default GroupPage;

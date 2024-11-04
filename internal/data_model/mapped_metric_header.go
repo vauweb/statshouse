@@ -9,12 +9,22 @@ package data_model
 import (
 	"time"
 
+	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/vkcom/statshouse/internal/format"
 )
 
+type HandlerArgs struct {
+	MetricBytes    *tlstatshouse.MetricBytes
+	Description    string
+	ScrapeInterval int
+	MapCallback    MapCallbackFunc
+}
+
+type MapCallbackFunc func(tlstatshouse.MetricBytes, MappedMetricHeader)
+
 type MappedMetricHeader struct {
 	ReceiveTime time.Time // Saved at mapping start and used where we need time.Now. This is different to MetricBatch.T, which is sent by clients
-	MetricInfo  *format.MetricMetaValue
+	MetricMeta  *format.MetricMetaValue
 	Key         Key
 	SValue      []byte // reference to memory inside tlstatshouse.MetricBytes.
 	HostTag     int32
@@ -22,7 +32,7 @@ type MappedMetricHeader struct {
 	CheckedTagIndex int  // we check tags one by one, remembering position here, between invocations of mapTags
 	ValuesChecked   bool // infs, nans, etc. This might be expensive, so done only once
 
-	IsKeySet  [format.MaxTags]bool // report setting keys more than once.
+	IsTagSet  [format.MaxTags]bool // report setting tags more than once.
 	IsSKeySet bool
 	IsHKeySet bool
 
@@ -33,6 +43,7 @@ type MappedMetricHeader struct {
 
 	// warnings below
 	NotFoundTagName       []byte // reference to memory inside tlstatshouse.MetricBytes. If more than 1 problem, reports the last one
+	FoundDraftTagName     []byte // reference to memory inside tlstatshouse.MetricBytes. If more than 1 problem, reports the last one
 	TagSetTwiceKey        int32  // +TagIDShift, as required by "tag_id" in builtin metric. If more than 1, remembers some
 	LegacyCanonicalTagKey int32  // +TagIDShift, as required by "tag_id" in builtin metric. If more than 1, remembers some
 	InvalidRawValue       []byte // reference to memory inside tlstatshouse.MetricBytes. If more than 1 problem, reports the last one
@@ -41,7 +52,7 @@ type MappedMetricHeader struct {
 
 // TODO - implement InvalidRawValue and InvalidRawTagKey
 
-func (h *MappedMetricHeader) SetKey(index int, id int32, tagIDKey int32) {
+func (h *MappedMetricHeader) SetTag(index int, id int32, tagIDKey int32) {
 	if index == format.HostTagIndex {
 		h.HostTag = id
 		if h.IsHKeySet {
@@ -49,12 +60,20 @@ func (h *MappedMetricHeader) SetKey(index int, id int32, tagIDKey int32) {
 		}
 		h.IsHKeySet = true
 	} else {
-		h.Key.Keys[index] = id
-		if h.IsKeySet[index] {
+		h.Key.Tags[index] = id
+		if h.IsTagSet[index] {
 			h.TagSetTwiceKey = tagIDKey
 		}
-		h.IsKeySet[index] = true
+		h.IsTagSet[index] = true
 	}
+}
+
+func (h *MappedMetricHeader) SetSTag(index int, value string, tagIDKey int32) {
+	h.Key.SetSTag(index, value)
+	if h.IsTagSet[index] {
+		h.TagSetTwiceKey = tagIDKey
+	}
+	h.IsTagSet[index] = true
 }
 
 func (h *MappedMetricHeader) SetInvalidString(ingestionStatus int32, tagIDKey int32, invalidString []byte) {

@@ -9,35 +9,40 @@ import uPlot from 'uplot';
 import { calcYRange } from '../../common/calcYRange';
 import { PlotSubMenu } from './PlotSubMenu';
 import { PlotHeader } from './PlotHeader';
-import { Button, LegendItem, PlotLegend, UPlotPluginPortal, UPlotWrapper, UPlotWrapperPropsOpts } from '../index';
-import { fmtInputDateTime, now, promQLMetric, timeRangeAbbrevExpand } from '../../view/utils';
 import { black, grey, greyDark } from '../../view/palette';
 import { produce } from 'immer';
 import {
+  createPlotPreview,
   PlotValues,
+  removePlotHeals,
   selectorBaseRange,
-  selectorLiveMode,
   selectorMetricsMetaByName,
   selectorNumQueriesPlotByIndex,
   selectorParamsPlotsByIndex,
   selectorPlotsDataByIndex,
   selectorTimeRange,
+  setLiveMode,
+  setPlotVisibility,
+  useLiveModeStore,
+  usePlotHealsStore,
   useStore,
-  useThemeStore,
-} from '../../store';
+} from 'store';
 import { font, getYAxisSize, xAxisValues, xAxisValuesCompact } from '../../common/axisValues';
 import cn from 'classnames';
 import { PlotEventOverlay } from './PlotEventOverlay';
-import { buildThresholdList, useIntersectionObserver, useUPlotPluginHooks } from '../../hooks';
+import { buildThresholdList, useIntersectionObserver, useUPlotPluginHooks } from 'hooks';
 import { dataIdxNearest } from '../../common/dataIdxNearest';
 import { shallow } from 'zustand/shallow';
-import { ReactComponent as SVGArrowCounterclockwise } from 'bootstrap-icons/icons/arrow-counterclockwise.svg';
-import { setPlotVisibility } from '../../store/plot/plotVisibilityStore';
-import { createPlotPreview } from '../../store/plot/plotPreview';
-import { formatByMetricType, getMetricType, splitByMetricType } from '../../common/formatByMetricType';
+import { formatByMetricType, getMetricType, incrs, splitByMetricType } from '../../common/formatByMetricType';
 import { METRIC_TYPE } from '../../api/enum';
 import css from './style.module.css';
 import { useLinkCSV } from '../../hooks/useLinkCSV';
+import { PlotHealsStatus } from './PlotHealsStatus';
+import { promQLMetric } from '../../view/promQLMetric';
+import { fmtInputDateTime, now, timeRangeAbbrevExpand } from '../../view/utils2';
+import { useThemeStore } from '../../store/theme';
+import { LegendItem, UPlotPluginPortal, UPlotWrapper, UPlotWrapperPropsOpts } from '../UPlotWrapper';
+import { PlotLegend } from '../PlotLegend';
 
 const unFocusAlfa = 1;
 const rightPad = 16;
@@ -62,16 +67,8 @@ function dateRangeFormat(self: uPlot, rawValue: number, seriesIdx: number, idx: 
   return fmtInputDateTime(new Date(rawValue * 1000)) + suffix;
 }
 
-const {
-  setPlotParams,
-  setTimeRange,
-  setLiveMode,
-  setPlotShow,
-  setYLockChange,
-  setPlotLastError,
-  setUPlotWidth,
-  loadPlot,
-} = useStore.getState();
+const { setPlotParams, setTimeRange, setPlotShow, setYLockChange, setPlotLastError, setUPlotWidth, loadPlot } =
+  useStore.getState();
 
 export function PlotViewMetric(props: {
   indexPlot: number;
@@ -92,7 +89,7 @@ export function PlotViewMetric(props: {
 
   const baseRange = useStore(selectorBaseRange);
 
-  const live = useStore(selectorLiveMode);
+  const { live, interval } = useLiveModeStore((s) => s);
 
   const selectorPlotsData = useMemo(() => selectorPlotsDataByIndex.bind(undefined, indexPlot), [indexPlot]);
   const {
@@ -131,6 +128,14 @@ export function PlotViewMetric(props: {
 
   const themeDark = useThemeStore((s) => s.dark);
 
+  const plotHeals = usePlotHealsStore((s) => s.status[indexPlot]);
+  const healsInfo = useMemo(() => {
+    if (plotHeals?.timout && interval < plotHeals.timout) {
+      return `plot update timeout ${plotHeals.timout} sec`;
+    }
+    return undefined;
+  }, [interval, plotHeals?.timout]);
+
   const uPlotRef = useRef<uPlot>();
   const [legend, setLegend] = useState<LegendItem[]>([]);
 
@@ -143,10 +148,12 @@ export function PlotViewMetric(props: {
 
   const clearLastError = useCallback(() => {
     setPlotLastError(indexPlot, '');
+    removePlotHeals(indexPlot.toString());
   }, [indexPlot]);
 
   const reload = useCallback(() => {
     setPlotLastError(indexPlot, '');
+    removePlotHeals(indexPlot.toString());
     loadPlot(indexPlot);
   }, [indexPlot]);
 
@@ -200,10 +207,12 @@ export function PlotViewMetric(props: {
 
   const getAxisStroke = useCallback(() => (themeDark ? grey : black), [themeDark]);
 
-  const metricType = useMemo(
-    () => getMetricType(whats?.length ? whats : sel.what, metaMetricType || meta?.metric_type),
-    [meta?.metric_type, metaMetricType, sel.what, whats]
-  );
+  const metricType = useMemo(() => {
+    if (sel.metricType != null) {
+      return sel.metricType;
+    }
+    return getMetricType(whats?.length ? whats : sel.what, metaMetricType || meta?.metric_type);
+  }, [meta?.metric_type, metaMetricType, sel.metricType, sel.what, whats]);
 
   const opts = useMemo<UPlotWrapperPropsOpts>(() => {
     const grid: uPlot.Axis.Grid = {
@@ -213,6 +222,14 @@ export function PlotViewMetric(props: {
     const sync: uPlot.Cursor.Sync | undefined = group
       ? {
           key: group,
+          filters: {
+            sub(event) {
+              return event !== 'mouseup' && event !== 'mousedown';
+            },
+            pub(event) {
+              return event !== 'mouseup' && event !== 'mousedown';
+            },
+          },
         }
       : undefined;
     return {
@@ -252,12 +269,13 @@ export function PlotViewMetric(props: {
           font: font,
           stroke: getAxisStroke,
           splits: metricType === METRIC_TYPE.none ? undefined : splitByMetricType(metricType),
+          incrs,
         },
       ],
       scales: {
         x: { auto: false, range: xRangeStatic },
         y: {
-          auto: false,
+          auto: (u) => !yLockRef.current || (yLockRef.current.min === 0 && yLockRef.current.max === 0),
           range: (u: uPlot): uPlot.Range.MinMax => {
             const min = yLockRef.current.min;
             const max = yLockRef.current.max;
@@ -377,22 +395,17 @@ export function PlotViewMetric(props: {
             style={{ width: `${yAxisSize}px` }}
             className="flex-shrink-0 d-flex justify-content-end align-items-center pe-3"
           >
-            {numQueries > 0 && (
-              <div className="text-info spinner-border spinner-border-sm" role="status" aria-hidden="true" />
-            )}
+            <PlotHealsStatus
+              numQueries={numQueries}
+              lastError={lastError}
+              clearLastError={clearLastError}
+              live={live}
+              reload={reload}
+              timeoutInfo={healsInfo}
+            />
           </div>
           {/*header*/}
           <div className="d-flex flex-column flex-grow-1 overflow-force-wrap">
-            {/*last error*/}
-            {!!lastError && (
-              <div className="alert alert-danger d-flex align-items-center justify-content-between" role="alert">
-                <Button type="button" className="btn" aria-label="Reload" onClick={reload}>
-                  <SVGArrowCounterclockwise />
-                </Button>
-                <small className="overflow-force-wrap font-monospace">{lastError}</small>
-                <Button type="button" className="btn-close" aria-label="Close" onClick={clearLastError} />
-              </div>
-            )}
             <PlotHeader
               indexPlot={indexPlot}
               setParams={setSel}
@@ -471,7 +484,8 @@ export function PlotViewMetric(props: {
             />
             {topInfo && (!compact || (fixHeight > 0 && dashboard)) && (
               <div className="pb-3">
-                Showing top {topInfo.top} out of {topInfo.total} total series{topInfo.info}
+                Showing {sel.numSeries > 0 ? 'top' : 'bottom'} {topInfo.top} out of {topInfo.total} total series
+                {topInfo.info}
               </div>
             )}
           </div>

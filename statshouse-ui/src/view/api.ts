@@ -4,18 +4,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { convert, promQLMetric, timeShiftDesc } from './utils';
 import { TimeRange } from '../common/TimeRange';
-import { Column } from 'react-data-grid';
-import { EventDataRow } from '../store';
-import {
-  EventFormatterData,
-  EventFormatterDefault,
-  EventFormatterHeaderDefault,
-  EventFormatterHeaderTime,
-} from '../components/Plot/EventFormatters';
 import { uniqueArray } from '../common/helpers';
-import { GET_PARAMS, METRIC_VALUE_BACKEND_VERSION, QueryWhat, QueryWhatSelector, TagKey } from '../api/enum';
 import {
   encodeVariableConfig,
   encodeVariableValues,
@@ -27,16 +17,25 @@ import {
   toIndexTag,
 } from '../url/queryParams';
 import { MetricMetaValue } from '../api/metric';
+import {
+  GET_PARAMS,
+  METRIC_VALUE_BACKEND_VERSION,
+  QUERY_WHAT,
+  type QueryWhat,
+  type QueryWhatSelector,
+  type TagKey,
+} from 'api/enum';
+import { promQLMetric } from './promQLMetric';
+import { whatToWhatDesc } from './whatToWhatDesc';
+import { convert, timeShiftDesc } from './utils2';
 
 export interface queryResult {
   readonly series: querySeries;
   readonly receive_errors: number;
   readonly receive_warnings: number;
-  readonly receive_errors_legacy: number;
   readonly sampling_factor_src: number;
   readonly sampling_factor_agg: number;
   readonly mapping_errors: number;
-  readonly mapping_flood_events_legacy: number;
   readonly promqltestfailed?: boolean; // only dev param
   readonly promql: string;
   readonly metric: MetricMetaValue | null;
@@ -66,11 +65,6 @@ export interface querySeriesMetaTag {
   readonly raw_kind?: RawValueKind;
 }
 
-export interface DashboardInfo {
-  dashboard: DashboardMeta;
-  delete_mark?: boolean;
-}
-
 export type queryTableRow = {
   time: number;
   data: number[];
@@ -85,16 +79,6 @@ export type queryTable = {
   more: boolean;
   what: QueryWhat[];
 };
-
-export interface DashboardMeta {
-  dashboard_id?: number;
-  name: string;
-  description: string;
-  version?: number;
-  update_time?: number;
-  deleted_time?: number;
-  data: { [key: string]: unknown };
-}
 
 export interface MetricsGroupInfo {
   group: MetricsGroup;
@@ -124,21 +108,6 @@ export interface PromConfigInfo {
   config: string;
   version: number;
 }
-
-export const eventColumnDefault: Readonly<Partial<Column<EventDataRow>>> = {
-  minWidth: 20,
-  maxWidth: 300,
-  resizable: true,
-  renderHeaderCell: EventFormatterHeaderDefault,
-  width: 'auto',
-  renderCell: EventFormatterDefault,
-  // sortable: true,
-  // headerCellClass: 'no-Focus',
-};
-export const getEventColumnsType = (what: string[] = []): Record<string, Column<EventDataRow>> => ({
-  timeString: { key: 'timeString', name: 'Time', width: 165, renderHeaderCell: EventFormatterHeaderTime },
-  ...Object.fromEntries(what.map((key) => [key, { key, name: whatToWhatDesc(key), formatter: EventFormatterData }])),
-});
 
 // XXX: keep in sync with Go
 export function formatTagValue(value: string, comment?: string, raw?: boolean, kind?: RawValueKind): string {
@@ -183,7 +152,7 @@ export function metaToBaseLabel(meta: querySeriesMeta, uniqueWhatLength: number)
   if (uniqueWhatLength > 1) {
     desc = `${desc}: ${whatToWhatDesc(meta.what)}`;
   }
-  return desc;
+  return String(desc);
 }
 
 // XXX: keep in sync with Go
@@ -194,238 +163,189 @@ export function metaToLabel(meta: querySeriesMeta, uniqueWhatLength: number): st
 }
 
 export function metricKindToWhat(kind?: metricKind): QueryWhatSelector[] {
+  //todo: change on constant enum QUERY_WHAT
   switch (kind) {
     case 'counter':
       return [
-        'count_norm',
-        'count',
-        'cu_count',
-        'max_count_host',
-        'dv_count',
-        'dv_count_norm',
+        QUERY_WHAT.countNorm,
+        QUERY_WHAT.count,
+        QUERY_WHAT.cuCount,
+        QUERY_WHAT.maxCountHost,
+        QUERY_WHAT.dvCount,
+        QUERY_WHAT.dvCountNorm,
         '-',
-        'cardinality_norm',
-        'cardinality',
-        'cu_cardinality',
+        QUERY_WHAT.cardinalityNorm,
+        QUERY_WHAT.cardinality,
+        QUERY_WHAT.cuCardinality,
       ];
     case 'value':
       return [
-        'avg',
-        'min',
-        'max',
-        'sum_norm',
-        'sum',
-        'stddev',
-        'count_norm',
-        'count',
+        QUERY_WHAT.avg,
+        QUERY_WHAT.min,
+        QUERY_WHAT.max,
+        QUERY_WHAT.sumNorm,
+        QUERY_WHAT.sum,
+        QUERY_WHAT.stddev,
+        QUERY_WHAT.countNorm,
+        QUERY_WHAT.count,
         '-',
-        'cu_avg',
-        'cu_sum',
-        'cu_count',
+        QUERY_WHAT.cuAvg,
+        QUERY_WHAT.cuSum,
+        QUERY_WHAT.cuCount,
         '-',
-        'dv_count',
-        'dv_count_norm',
-        'dv_sum',
-        'dv_sum_norm',
-        'dv_avg',
-        'dv_min',
-        'dv_max',
+        QUERY_WHAT.dvCount,
+        QUERY_WHAT.dvCountNorm,
+        QUERY_WHAT.dvSum,
+        QUERY_WHAT.dvSumNorm,
+        QUERY_WHAT.dvAvg,
+        QUERY_WHAT.dvMin,
+        QUERY_WHAT.dvMax,
         '-',
-        'cardinality_norm',
-        'cardinality',
-        'cu_cardinality',
+        QUERY_WHAT.cardinalityNorm,
+        QUERY_WHAT.cardinality,
+        QUERY_WHAT.cuCardinality,
       ];
     case 'value_p':
       return [
-        'avg',
-        'min',
-        'max',
-        'sum_norm',
-        'sum',
-        'stddev',
-        'count_norm',
-        'count',
+        QUERY_WHAT.avg,
+        QUERY_WHAT.min,
+        QUERY_WHAT.max,
+        QUERY_WHAT.sumNorm,
+        QUERY_WHAT.sum,
+        QUERY_WHAT.stddev,
+        QUERY_WHAT.countNorm,
+        QUERY_WHAT.count,
         '-',
-        'cu_avg',
-        'cu_sum',
-        'cu_count',
+        QUERY_WHAT.cuAvg,
+        QUERY_WHAT.cuSum,
+        QUERY_WHAT.cuCount,
         '-',
-        'p0_1',
-        'p1',
-        'p5',
-        'p10',
-        'p25',
-        'p50',
-        'p75',
-        'p90',
-        'p95',
-        'p99',
-        'p999',
+        QUERY_WHAT.p0_1,
+        QUERY_WHAT.p1,
+        QUERY_WHAT.p5,
+        QUERY_WHAT.p10,
+        QUERY_WHAT.p25,
+        QUERY_WHAT.p50,
+        QUERY_WHAT.p75,
+        QUERY_WHAT.p90,
+        QUERY_WHAT.p95,
+        QUERY_WHAT.p99,
+        QUERY_WHAT.p999,
         '-',
-        'dv_count',
-        'dv_count_norm',
-        'dv_sum',
-        'dv_sum_norm',
-        'dv_avg',
-        'dv_min',
-        'dv_max',
+        QUERY_WHAT.dvCount,
+        QUERY_WHAT.dvCountNorm,
+        QUERY_WHAT.dvSum,
+        QUERY_WHAT.dvSumNorm,
+        QUERY_WHAT.dvAvg,
+        QUERY_WHAT.dvMin,
+        QUERY_WHAT.dvMax,
         '-',
-        'cardinality_norm',
-        'cardinality',
-        'cu_cardinality',
+        QUERY_WHAT.cardinalityNorm,
+        QUERY_WHAT.cardinality,
+        QUERY_WHAT.cuCardinality,
       ];
     case 'unique':
       return [
-        'unique_norm',
-        'unique',
-        'count_norm',
-        'count',
+        QUERY_WHAT.uniqueNorm,
+        QUERY_WHAT.unique,
+        QUERY_WHAT.countNorm,
+        QUERY_WHAT.count,
         '-',
-        'cu_count',
+        QUERY_WHAT.cuCount,
         '-',
-        'avg',
-        'min',
-        'max',
-        'stddev',
+        QUERY_WHAT.avg,
+        QUERY_WHAT.min,
+        QUERY_WHAT.max,
+        QUERY_WHAT.stddev,
         '-',
-        'dv_count',
-        'dv_count_norm',
-        'dv_avg',
-        'dv_min',
-        'dv_max',
-        'dv_unique',
-        'dv_unique_norm',
+        QUERY_WHAT.dvCount,
+        QUERY_WHAT.dvCountNorm,
+        QUERY_WHAT.dvAvg,
+        QUERY_WHAT.dvMin,
+        QUERY_WHAT.dvMax,
+        QUERY_WHAT.dvUnique,
+        QUERY_WHAT.dvUniqueNorm,
         '-',
-        'cardinality_norm',
-        'cardinality',
-        'cu_cardinality',
+        QUERY_WHAT.cardinalityNorm,
+        QUERY_WHAT.cardinality,
+        QUERY_WHAT.cuCardinality,
       ];
     case 'mixed':
       return [
-        'count_norm',
-        'count',
-        'avg',
-        'min',
-        'max',
-        'sum_norm',
-        'sum',
-        'stddev',
-        'unique_norm',
-        'unique',
+        QUERY_WHAT.countNorm,
+        QUERY_WHAT.count,
+        QUERY_WHAT.avg,
+        QUERY_WHAT.min,
+        QUERY_WHAT.max,
+        QUERY_WHAT.sumNorm,
+        QUERY_WHAT.sum,
+        QUERY_WHAT.stddev,
+        QUERY_WHAT.uniqueNorm,
+        QUERY_WHAT.unique,
         '-',
-        'cu_count',
-        'cu_avg',
-        'cu_sum',
+        QUERY_WHAT.cuAvg,
+        QUERY_WHAT.cuSum,
+        QUERY_WHAT.cuCount,
         '-',
-        'dv_count',
-        'dv_count_norm',
-        'dv_sum',
-        'dv_sum_norm',
-        'dv_avg',
-        'dv_unique',
-        'dv_unique_norm',
-        'dv_min',
-        'dv_max',
+        QUERY_WHAT.dvCount,
+        QUERY_WHAT.dvCountNorm,
+        QUERY_WHAT.dvSum,
+        QUERY_WHAT.dvSumNorm,
+        QUERY_WHAT.dvAvg,
+        QUERY_WHAT.dvMin,
+        QUERY_WHAT.dvMax,
+        QUERY_WHAT.dvUnique,
+        QUERY_WHAT.dvUniqueNorm,
         '-',
-        'cardinality_norm',
-        'cardinality',
-        'cu_cardinality',
+        QUERY_WHAT.cardinalityNorm,
+        QUERY_WHAT.cardinality,
+        QUERY_WHAT.cuCardinality,
       ];
     case 'mixed_p':
       return [
-        'count_norm',
-        'count',
-        'avg',
-        'min',
-        'max',
-        'sum_norm',
-        'sum',
-        'stddev',
-        'unique_norm',
-        'unique',
+        QUERY_WHAT.countNorm,
+        QUERY_WHAT.count,
+        QUERY_WHAT.avg,
+        QUERY_WHAT.min,
+        QUERY_WHAT.max,
+        QUERY_WHAT.sumNorm,
+        QUERY_WHAT.sum,
+        QUERY_WHAT.stddev,
+        QUERY_WHAT.uniqueNorm,
+        QUERY_WHAT.unique,
         '-',
-        'cu_count',
-        'cu_avg',
-        'cu_sum',
+        QUERY_WHAT.cuAvg,
+        QUERY_WHAT.cuSum,
+        QUERY_WHAT.cuCount,
         '-',
-        'p0_1',
-        'p1',
-        'p5',
-        'p10',
-        'p25',
-        'p50',
-        'p75',
-        'p90',
-        'p95',
-        'p99',
-        'p999',
+        QUERY_WHAT.p0_1,
+        QUERY_WHAT.p1,
+        QUERY_WHAT.p5,
+        QUERY_WHAT.p10,
+        QUERY_WHAT.p25,
+        QUERY_WHAT.p50,
+        QUERY_WHAT.p75,
+        QUERY_WHAT.p90,
+        QUERY_WHAT.p95,
+        QUERY_WHAT.p99,
+        QUERY_WHAT.p999,
         '-',
-        'dv_count',
-        'dv_count_norm',
-        'dv_sum',
-        'dv_sum_norm',
-        'dv_avg',
-        'dv_min',
-        'dv_max',
-        'dv_unique',
-        'dv_unique_norm',
+        QUERY_WHAT.dvCount,
+        QUERY_WHAT.dvCountNorm,
+        QUERY_WHAT.dvSum,
+        QUERY_WHAT.dvSumNorm,
+        QUERY_WHAT.dvAvg,
+        QUERY_WHAT.dvMin,
+        QUERY_WHAT.dvMax,
+        QUERY_WHAT.dvUnique,
+        QUERY_WHAT.dvUniqueNorm,
         '-',
-        'cardinality_norm',
-        'cardinality',
-        'cu_cardinality',
+        QUERY_WHAT.cardinalityNorm,
+        QUERY_WHAT.cardinality,
+        QUERY_WHAT.cuCardinality,
       ];
     default:
-      return ['count_norm'];
-  }
-}
-
-// XXX: keep in sync with Go
-export function whatToWhatDesc(what: QueryWhat | string): string {
-  switch (what) {
-    case 'p0_1':
-      return 'p0.1';
-    case 'p999':
-      return 'p99.9';
-    case 'count_norm':
-      return 'count/sec';
-    case 'cu_count':
-      return 'count (cumul)';
-    case 'cardinality_norm':
-      return 'cardinality/sec';
-    case 'cu_cardinality':
-      return 'cardinality (cumul)';
-    case 'cu_avg':
-      return 'avg (cumul)';
-    case 'sum_norm':
-      return 'sum/sec';
-    case 'cu_sum':
-      return 'sum (cumul)';
-    case 'unique_norm':
-      return 'unique/sec';
-    case 'max_count_host':
-      return 'max(count)@host';
-    case 'max_host':
-      return 'max(value)@host';
-    case 'dv_count':
-      return 'count (derivative)';
-    case 'dv_sum':
-      return 'sum (derivative)';
-    case 'dv_avg':
-      return 'avg (derivative)';
-    case 'dv_count_norm':
-      return 'count/sec (derivative)';
-    case 'dv_sum_norm':
-      return 'sum/sec (derivative)';
-    case 'dv_min':
-      return 'min (derivative)';
-    case 'dv_max':
-      return 'max (derivative)';
-    case 'dv_unique':
-      return 'unique (derivative)';
-    case 'dv_unique_norm':
-      return 'unique/sec (derivative)';
-    default:
-      return what as string;
+      return [QUERY_WHAT.countNorm];
   }
 }
 
@@ -439,7 +359,8 @@ export function queryURL(
   timeShifts: number[],
   width: number | string,
   fetchBadges: boolean,
-  allParams?: QueryParams
+  allParams?: QueryParams,
+  priority?: number
 ): string {
   let params: string[][];
   if (sel.metricName === promQLMetric) {
@@ -470,6 +391,9 @@ export function queryURL(
 
   if (sel.maxHost) {
     params.push([GET_PARAMS.metricMaxHost, '1']);
+  }
+  if (priority) {
+    params.push([GET_PARAMS.priority, priority.toString()]);
   }
   params.push([GET_PARAMS.excessPoints, '1']);
   params.push([GET_PARAMS.metricVerbose, fetchBadges ? '1' : '0']);
@@ -571,15 +495,6 @@ export function queryTableURL(
   return `/api/table?${strParams}`;
 }
 
-export function dashboardURL(id?: number): string {
-  if (!id) {
-    return `/api/dashboard`;
-  }
-
-  const strParams = new URLSearchParams([[GET_PARAMS.dashboardID, id.toString()]]).toString();
-  return `/api/dashboard?${strParams}`;
-}
-
 export function metricsGroupListURL(): string {
   return '/api/group-list';
 }
@@ -641,7 +556,7 @@ export function formatFilterNotIn(tagID: string, tagValue: string): string {
   return `${freeKeyPrefix(tagID)}${filterNotInSep}${tagValue}`;
 }
 
-function filterParams(
+export function filterParams(
   filterIn: Record<string, readonly string[]>,
   filterNotIn: Record<string, readonly string[]>
 ): string[][] {

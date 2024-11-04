@@ -6,13 +6,14 @@
 
 import React, { SetStateAction, useCallback, useState } from 'react';
 import { PlotControls } from './PlotControls';
-import { promQLMetric, timeRangeAbbrev } from '../../view/utils';
 
 import { PlotControlsPromQL } from './PlotControlsPromQL';
 import cn from 'classnames';
 import css from './style.module.css';
 import { MetricMetaValue } from '../../api/metric';
 import { PlotParams } from '../../url/queryParams';
+import { promQLMetric } from '../../view/promQLMetric';
+import { timeRangeAbbrev } from '../../view/utils2';
 
 export type PlotLayoutProps = {
   embed?: boolean;
@@ -52,7 +53,7 @@ export const PlotLayout: React.FC<PlotLayoutProps> = ({
     return <div className="my-2">{children}</div>;
   }
   return (
-    <div className="row flex-wrap">
+    <div className="row flex-wrap my-3">
       <div className={cn(css.plotColumn, 'position-relative mb-3', big ? 'col-lg-5 col-xl-4' : 'col-lg-7 col-xl-8')}>
         <div className="position-relative flex-grow-1 d-flex flex-column">{children}</div>
       </div>

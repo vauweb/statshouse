@@ -10,7 +10,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"unicode"
@@ -18,30 +20,45 @@ import (
 
 	"go.uber.org/multierr"
 	"go4.org/mem"
+
+	"github.com/mailru/easyjson/opt"
+
+	"github.com/vkcom/statshouse-go"
 )
 
 const (
 	MaxTags      = 16
+	NewMaxTags   = 48
+	MaxDraftTags = 128
 	MaxStringLen = 128 // both for normal tags and _s, _h tags (string tops, hostnames)
 
-	tagValueCodePrefix      = " " // regular tag values can't start with whitespace
-	TagValueCodeZero        = tagValueCodePrefix + "0"
-	TagValueIDUnspecified   = 0
-	TagValueIDMappingFlood  = -1
-	FairKeyIndexUnspecified = -1
+	tagValueCodePrefix     = " " // regular tag values can't start with whitespace
+	TagValueCodeZero       = tagValueCodePrefix + "0"
+	TagValueIDUnspecified  = 0
+	TagValueIDMappingFlood = -1
 
-	EffectiveWeightOne = 128                      // metric.Weight is multiplied by this and rounded. Do not make too big or metric with weight set to 0 will disappear completely.
-	MaxEffectiveWeight = 100 * EffectiveWeightOne // do not make too high, we multiply this by sum of metric serialized length during sampling
+	EffectiveWeightOne          = 128                      // metric.Weight is multiplied by this and rounded. Do not make too big or metric with weight set to 0 will disappear completely.
+	MaxEffectiveWeight          = 100 * EffectiveWeightOne // do not make too high, we multiply this by sum of metric serialized length during sampling
+	MaxEffectiveGroupWeight     = 10_000 * EffectiveWeightOne
+	MaxEffectiveNamespaceWeight = 10_000 * EffectiveWeightOne
 
-	StringTopTagID = "_s"
-	HostTagID      = "_h"
-	ShardTagID     = "_shard_num"
-	EnvTagID       = "0"
-	LETagName      = "le"
+	StringTopTagID            = "_s"
+	StringTopTagIDV3          = "47" // for backward compatibility with v2 we write "_s" into "47"
+	HostTagID                 = "_h"
+	ShardTagID                = "_shard_num"
+	EnvTagID                  = "0"
+	LETagName                 = "le"
+	ScrapeNamespaceTagName    = "__scrape_namespace__"
+	HistogramBucketsStartMark = "Buckets$"
+	HistogramBucketsDelim     = ","
+	HistogramBucketsDelimC    = ','
+	HistogramBucketsEndMark   = "$"
+	HistogramBucketsEndMarkC  = '$'
 
-	LETagIndex        = 15
-	StringTopTagIndex = -1 // used as flag during mapping
-	HostTagIndex      = -2 // used as flag during mapping
+	LETagIndex          = 15
+	StringTopTagIndex   = -1 // used as flag during mapping
+	StringTopTagIndexV3 = 47
+	HostTagIndex        = -2 // used as flag during mapping
 
 	// added for lots of built-in metrics automatically
 	BuildArchTag  = 10
@@ -59,6 +76,9 @@ const (
 
 	NamespaceSeparator     = ":"
 	NamespaceSeparatorRune = ':'
+
+	// if more than 0 then agents with older commitTs will be declined
+	LeastAllowedAgentCommitTs = 0
 )
 
 // Do not change values, they are stored in DB
@@ -77,7 +97,9 @@ const (
 	MetricMicrosecond = "microsecond"
 	MetricNanosecond  = "nanosecond"
 
-	MetricByte = "byte"
+	MetricByte       = "byte"
+	MetricByteAsBits = "byte_as_bits"
+
 	/*
 		MetricBit = "bit"
 		MetricKilobyte = "kilobyte"
@@ -94,7 +116,6 @@ const (
 	LegacyStringTopTagID      = "skey"
 	legacyTagIDPrefix         = "key"
 	legacyEnvTagID            = legacyTagIDPrefix + "0"
-	legacyEnvTagName          = "env"
 	legacyMetricKindStringTop = "stop" // converted into counter during RestoreMetricInfo
 )
 
@@ -105,6 +126,7 @@ var (
 
 	errInvalidCodeTagValue = fmt.Errorf("invalid code tag value") // must be fast
 	errBadEncoding         = fmt.Errorf("bad utf-8 encoding")     // must be fast
+	reservedMetricPrefix   = []string{"host_", "__"}
 )
 
 // Legacy, left for API backward compatibility
@@ -119,8 +141,12 @@ type MetaStorageInterface interface { // agent uses this to avoid circular depen
 	Version() int64
 	StateHash() string
 	GetMetaMetric(metricID int32) *MetricMetaValue
+	GetMetaMetricDelayed(metricID int32) *MetricMetaValue
 	GetMetaMetricByName(metricName string) *MetricMetaValue
 	GetGroup(id int32) *MetricsGroup
+	GetNamespace(id int32) *NamespaceMeta
+	GetNamespaceByName(name string) *NamespaceMeta
+	GetGroupByName(name string) *MetricsGroup
 }
 
 // This struct is immutable, it is accessed by mapping code without any locking
@@ -131,9 +157,12 @@ type MetricMetaTag struct {
 	RawKind       string            `json:"raw_kind,omitempty"` // UI can show some raw values beautifully - timestamps, hex values, etc.
 	ID2Value      map[int32]string  `json:"id2value,omitempty"`
 	ValueComments map[string]string `json:"value_comments,omitempty"`
+	SkipMapping   bool              `json:"skip_mapping,omitempty"` // used only in v3 conveer
 
 	Comment2Value map[string]string `json:"-"` // Should be restored from ValueComments after reading
 	IsMetric      bool              `json:"-"` // Only for built-in metrics so never saved or parsed
+	IsGroup       bool              `json:"-"` // Only for built-in metrics so never saved or parsed
+	IsNamespace   bool              `json:"-"` // Only for built-in metrics so never saved or parsed
 	Index         int               `json:"-"` // Should be restored from position in MetricMetaValue.Tags
 }
 
@@ -184,6 +213,31 @@ type MetricsGroup struct {
 	Namespace       *NamespaceMeta `json:"-"`
 }
 
+// possible sharding strategies
+const (
+	ShardBy16MappedTagsHash   = "16_mapped_tags_hash"
+	ShardBy16MappedTagsHashId = 0
+	ShardFixed                = "fixed_shard"
+	ShardFixedId              = 1
+	ShardByTag                = "tag"
+	ShardByTagId              = 2
+	// some builtin metrics are produced direclty by aggregator, so they are written to shard in which they are produced
+	ShardAggInternal   = "agg_internal"
+	ShardAggInternalId = 3
+	// shard = metric_id % num_shards
+	// it's only used for hardware metrics, overall not recommended because shard depends on total number of shards
+	ShardByMetric   = "metric_id"
+	ShardByMetricId = 4
+)
+
+type MetricSharding struct {
+	Strategy   string `json:"strategy"` // possible values: mapped_tags, fixed_shard, tag
+	StrategyId int
+	Shard      opt.Uint32 `json:"shard,omitempty"`  // only for "fixed_shard" strategy
+	TagId      opt.Uint32 `json:"tag_id,omitempty"` // only for "tag" strategy
+	AfterTs    opt.Uint32 `json:"after_ts,omitempty"`
+}
+
 // This struct is immutable, it is accessed by mapping code without any locking
 type MetricMetaValue struct {
 	MetricID    int32  `json:"metric_id"`
@@ -192,36 +246,42 @@ type MetricMetaValue struct {
 	Version     int64  `json:"version,omitempty"`
 	UpdateTime  uint32 `json:"update_time"`
 
-	Description          string          `json:"description,omitempty"`
-	Tags                 []MetricMetaTag `json:"tags,omitempty"`
-	Visible              bool            `json:"visible,omitempty"`
-	Kind                 string          `json:"kind"`
-	Weight               float64         `json:"weight,omitempty"`
-	Resolution           int             `json:"resolution,omitempty"`             // no invariants
-	StringTopName        string          `json:"string_top_name,omitempty"`        // no invariants
-	StringTopDescription string          `json:"string_top_description,omitempty"` // no invariants
-	PreKeyTagID          string          `json:"pre_key_tag_id,omitempty"`
-	PreKeyFrom           uint32          `json:"pre_key_from,omitempty"`
-	SkipMaxHost          bool            `json:"skip_max_host,omitempty"`
-	SkipMinHost          bool            `json:"skip_min_host,omitempty"`
-	SkipSumSquare        bool            `json:"skip_sum_square,omitempty"`
-	PreKeyOnly           bool            `json:"pre_key_only,omitempty"`
-	MetricType           string          `json:"metric_type"`
+	Description          string                   `json:"description,omitempty"`
+	Tags                 []MetricMetaTag          `json:"tags,omitempty"`
+	TagsDraft            map[string]MetricMetaTag `json:"tags_draft,omitempty"`
+	Visible              bool                     `json:"visible,omitempty"`
+	Kind                 string                   `json:"kind"`
+	Weight               float64                  `json:"weight,omitempty"`
+	Resolution           int                      `json:"resolution,omitempty"`             // no invariants
+	StringTopName        string                   `json:"string_top_name,omitempty"`        // no invariants
+	StringTopDescription string                   `json:"string_top_description,omitempty"` // no invariants
+	PreKeyTagID          string                   `json:"pre_key_tag_id,omitempty"`
+	PreKeyFrom           uint32                   `json:"pre_key_from,omitempty"`
+	SkipMaxHost          bool                     `json:"skip_max_host,omitempty"`
+	SkipMinHost          bool                     `json:"skip_min_host,omitempty"`
+	SkipSumSquare        bool                     `json:"skip_sum_square,omitempty"`
+	PreKeyOnly           bool                     `json:"pre_key_only,omitempty"`
+	MetricType           string                   `json:"metric_type"`
+	FairKeyTagIDs        []string                 `json:"fair_key_tag_ids,omitempty"`
+	Sharding             []MetricSharding         `json:"sharding,omitempty"`
 
-	RawTagMask          uint32                   `json:"-"` // Should be restored from Tags after reading
-	Name2Tag            map[string]MetricMetaTag `json:"-"` // Should be restored from Tags after reading
-	EffectiveResolution int                      `json:"-"` // Should be restored from Tags after reading
-	PreKeyIndex         int                      `json:"-"` // index of tag which goes to 'prekey' column, or <0 if no tag goes
-	FairKeyIndex        int                      `json:"-"`
-	EffectiveWeight     int64                    `json:"-"`
-	HasPercentiles      bool                     `json:"-"`
-	RoundSampleFactors  bool                     `json:"-"` // Experimental, set if magic word in description is found
-	ShardUniqueValues   bool                     `json:"-"` // Experimental, set if magic word in description is found
-	NoSampleAgent       bool                     `json:"-"` // Built-in metrics with fixed/limited # of rows on agent
+	RawTagMask           uint32                   `json:"-"` // Should be restored from Tags after reading
+	Name2Tag             map[string]MetricMetaTag `json:"-"` // Should be restored from Tags after reading
+	EffectiveResolution  int                      `json:"-"` // Should be restored from Tags after reading
+	PreKeyIndex          int                      `json:"-"` // index of tag which goes to 'prekey' column, or <0 if no tag goes
+	FairKey              []int                    `json:"-"`
+	EffectiveWeight      int64                    `json:"-"`
+	HasPercentiles       bool                     `json:"-"`
+	RoundSampleFactors   bool                     `json:"-"` // Experimental, set if magic word in description is found
+	ShardUniqueValues    bool                     `json:"-"` // Experimental, set if magic word in description is found
+	NoSampleAgent        bool                     `json:"-"` // Built-in metrics with fixed/limited # of rows on agent
+	WhalesOff            bool                     `json:"-"` // "whales" sampling algorithm disabled
+	HistorgamBuckets     []float32                `json:"-"` // Prometheus histogram buckets
+	IsHardwareSlowMetric bool                     `json:"-"`
+	GroupID              int32                    `json:"-"`
 
-	GroupID   int32          `json:"-"`
-	Group     *MetricsGroup  `json:"-"`
-	Namespace *NamespaceMeta `json:"-"`
+	Group     *MetricsGroup  `json:"-"` // don't use directly
+	Namespace *NamespaceMeta `json:"-"` // don't use directly
 }
 
 type MetricMetaValueOld struct {
@@ -311,6 +371,9 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 		err = multierr.Append(err, fmt.Errorf("invalid metric type: %s", m.MetricType))
 		m.MetricType = ""
 	}
+	if !ValidMetricPrefix(m.Name) {
+		err = multierr.Append(err, fmt.Errorf("invalid metric name (reserved prefix: %s)", strings.Join(reservedMetricPrefix, ", ")))
+	}
 
 	if m.Kind == legacyMetricKindStringTop {
 		m.Kind = MetricKindCounter
@@ -337,7 +400,7 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 	if len(m.Tags) != 0 {
 		// for mast metrics in database, this name is set to "env". We do not want to continue using it.
 		// We want mapEnvironment() to work even when metric is not found, so we must not allow users to
-		// set their environment tag name. They must use canincal "0" name instead.
+		// set their environment tag name. They must use canonical "0" name instead.
 		m.Tags[0].Name = ""
 	}
 	m.PreKeyIndex = -1
@@ -374,7 +437,6 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 		m.PreKeyOnly = false
 		err = multierr.Append(err, fmt.Errorf("pre_key_only is true, but pre_key_tag_id is not defined"))
 	}
-	m.FairKeyIndex = FairKeyIndexUnspecified // TODO: read from meta
 	for i := range tags {
 		tag := &tags[i]
 		if tag.Raw {
@@ -431,8 +493,61 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 	m.HasPercentiles = m.Kind == MetricKindValuePercentiles || m.Kind == MetricKindMixedPercentiles
 	m.RoundSampleFactors = strings.Contains(m.Description, "__round_sample_factors") // Experimental
 	m.ShardUniqueValues = strings.Contains(m.Description, "__shard_unique_values")   // Experimental
-
+	m.WhalesOff = strings.Contains(m.Description, "__whales_off")                    // Experimental
+	if m.Kind == MetricKindCounter {
+		if i := strings.Index(m.Description, HistogramBucketsStartMark); i != -1 {
+			s := m.Description[i+len(HistogramBucketsStartMark):]
+			if i = strings.Index(s, HistogramBucketsEndMark); i != -1 {
+				s = s[:i]
+				m.HistorgamBuckets = make([]float32, 0, strings.Count(s, HistogramBucketsDelim)+1)
+				for i, j := 0, 1; i < len(s); {
+					for j < len(s) && s[j] != HistogramBucketsDelimC {
+						j++
+					}
+					if f, err := strconv.ParseFloat(s[i:j], 32); err == nil {
+						m.HistorgamBuckets = append(m.HistorgamBuckets, float32(f))
+					}
+					i = j + 1
+					j = i + 1
+				}
+			}
+		}
+	}
 	m.NoSampleAgent = builtinMetricsNoSamplingAgent[m.MetricID]
+	if m.GroupID == 0 || m.GroupID == BuiltinGroupIDDefault {
+		m.GroupID = BuiltinGroupIDDefault
+		m.Group = BuiltInGroupDefault[BuiltinGroupIDDefault]
+	}
+	if m.NamespaceID == 0 || m.NamespaceID == BuiltinNamespaceIDDefault {
+		m.NamespaceID = BuiltinNamespaceIDDefault
+		m.Namespace = BuiltInNamespaceDefault[BuiltinNamespaceIDDefault]
+	}
+	// restore fair key index
+	if len(m.FairKeyTagIDs) != 0 {
+		m.FairKey = make([]int, 0, len(m.FairKeyTagIDs))
+		for _, v := range m.FairKeyTagIDs {
+			if tag, ok := m.Name2Tag[v]; ok {
+				m.FairKey = append(m.FairKey, tag.Index)
+			}
+		}
+	}
+	// default strategy if it's not configured
+	if len(m.Sharding) == 0 {
+		m.Sharding = []MetricSharding{{Strategy: ShardBy16MappedTagsHash}}
+	}
+	for _, sh := range m.Sharding {
+		if id, validationErr := ShardingStrategyId(sh); validationErr != nil {
+			err = multierr.Append(err, validationErr)
+			break
+		} else {
+			sh.StrategyId = id
+		}
+	}
+
+	if slowHostMetricID[m.MetricID] {
+		m.IsHardwareSlowMetric = true
+	}
+
 	return err
 }
 
@@ -460,52 +575,65 @@ func (m *MetricMetaValue) APICompatGetTagFromBytes(tagNameOrID []byte) (tag Metr
 	return MetricMetaTag{}, false, false
 }
 
+func (m *MetricMetaValue) GetTagDraft(tagName []byte) (tag MetricMetaTag, ok bool) {
+	if m.TagsDraft == nil {
+		return MetricMetaTag{}, false
+	}
+	tag, ok = m.TagsDraft[string(tagName)]
+	return tag, ok
+}
+
 // Always restores maximum info, if error is returned, group is non-canonical and should not be saved
-func (m *MetricsGroup) RestoreCachedInfo() error {
+func (m *MetricsGroup) RestoreCachedInfo(builtin bool) error {
 	var err error
-	if !ValidGroupName(m.Name) {
-		err = fmt.Errorf("invalid group name: %q", m.Name)
+	if !builtin {
+		if !ValidGroupName(m.Name) {
+			err = fmt.Errorf("invalid group name: %q", m.Name)
+		}
 	}
 	if math.IsNaN(m.Weight) || m.Weight < 0 || m.Weight > math.MaxInt32 {
 		err = fmt.Errorf("weight must be from %d to %d", 0, math.MaxInt32)
 	}
-	rw := m.Weight * EffectiveWeightOne
-	if rw < 1 {
+	m.EffectiveWeight = int64(m.Weight * EffectiveWeightOne)
+	if m.EffectiveWeight < 1 {
 		m.EffectiveWeight = 1
 	}
-	if rw > MaxEffectiveWeight {
-		m.EffectiveWeight = MaxEffectiveWeight
+	if m.EffectiveWeight > MaxEffectiveGroupWeight {
+		m.EffectiveWeight = MaxEffectiveGroupWeight
 	}
-	m.EffectiveWeight = int64(rw)
-
+	if m.NamespaceID == 0 || m.NamespaceID == BuiltinNamespaceIDDefault {
+		m.NamespaceID = BuiltinNamespaceIDDefault
+		m.Namespace = BuiltInNamespaceDefault[BuiltinNamespaceIDDefault]
+	}
 	return err
 }
 
 // Always restores maximum info, if error is returned, group is non-canonical and should not be saved
-func (m *NamespaceMeta) RestoreCachedInfo() error {
+func (m *NamespaceMeta) RestoreCachedInfo(builtin bool) error {
 	var err error
-	if !ValidGroupName(m.Name) {
-		err = fmt.Errorf("invalid namespace name: %q", m.Name)
+	if !builtin {
+		if !ValidGroupName(m.Name) {
+			err = fmt.Errorf("invalid namespace name: %q", m.Name)
+		}
 	}
 	if math.IsNaN(m.Weight) || m.Weight < 0 || m.Weight > math.MaxInt32 {
 		err = fmt.Errorf("weight must be from %d to %d", 0, math.MaxInt32)
 	}
-	rw := m.Weight * EffectiveWeightOne
-	if rw < 1 {
+	m.EffectiveWeight = int64(m.Weight * EffectiveWeightOne)
+	if m.EffectiveWeight < 1 {
 		m.EffectiveWeight = 1
 	}
-	if rw > MaxEffectiveWeight {
-		m.EffectiveWeight = MaxEffectiveWeight
+	if m.EffectiveWeight > MaxEffectiveNamespaceWeight {
+		m.EffectiveWeight = MaxEffectiveNamespaceWeight
 	}
-	m.EffectiveWeight = int64(rw)
-
 	return err
 }
 
 func (m *MetricsGroup) MetricIn(metric *MetricMetaValue) bool {
-	return strings.HasPrefix(metric.Name, m.Name)
+	return !m.Disable && strings.HasPrefix(metric.Name, m.Name)
 }
 
+// '@' is reserved by api access.Do not use it here
 func ValidMetricName(s mem.RO) bool {
 	if s.Len() == 0 || s.Len() > MaxStringLen || !isLetter(s.At(0)) {
 		return false
@@ -527,17 +655,38 @@ func ValidMetricName(s mem.RO) bool {
 	return true
 }
 
+func ValidMetricPrefix(s string) bool {
+	for _, p := range reservedMetricPrefix {
+		if strings.HasPrefix(s, p) {
+			return false
+		}
+	}
+	return true
+}
+
 func ValidGroupName(s string) bool {
 	return ValidMetricName(mem.S(s))
 }
 
+var validDashboardSymbols = map[uint8]bool{
+	'_': true,
+	'-': true,
+	' ': true,
+	'[': true,
+	']': true,
+	'{': true,
+	'}': true,
+	':': true,
+	'.': true,
+}
+
 func ValidDashboardName(s string) bool {
-	if len(s) == 0 || len(s) > MaxStringLen || !isLetter(s[0]) {
+	if len(s) == 0 || len(s) > MaxStringLen || s[0] == ' ' {
 		return false
 	}
 	for i := 1; i < len(s); i++ {
 		c := s[i]
-		if !isLetter(c) && c != '_' && !(c >= '0' && c <= '9') && c != ' ' {
+		if !isLetter(c) && !(c >= '0' && c <= '9') && !validDashboardSymbols[c] {
 			return false
 		}
 	}
@@ -576,6 +725,43 @@ func ValidRawKind(s string) bool {
 	return false
 }
 
+func ShardingStrategyId(sharding MetricSharding) (int, error) {
+	switch sharding.Strategy {
+	case ShardBy16MappedTagsHash:
+		if sharding.Shard.IsDefined() || sharding.TagId.IsDefined() {
+			return -1, fmt.Errorf("%s strategy is incompative with shard or tag_id", sharding.Strategy)
+		}
+		return ShardBy16MappedTagsHashId, nil
+	case ShardAggInternal:
+		if sharding.Shard.IsDefined() || sharding.TagId.IsDefined() {
+			return -1, fmt.Errorf("%s strategy is incompative with shard or tag_id", sharding.Strategy)
+		}
+		return ShardAggInternalId, nil
+	case ShardByMetric:
+		if sharding.Shard.IsDefined() || sharding.TagId.IsDefined() {
+			return -1, fmt.Errorf("%s strategy is incompative with shard or tag_id", sharding.Strategy)
+		}
+		return ShardByMetricId, nil
+	case ShardFixed:
+		if !sharding.Shard.IsDefined() || sharding.TagId.IsDefined() {
+			return -1, fmt.Errorf("%s strategy requires shard to be set", ShardFixed)
+		}
+		if sharding.TagId.IsDefined() {
+			return -1, fmt.Errorf("%s strategy is incompative with tag_id", ShardFixed)
+		}
+		return ShardFixedId, nil
+	case ShardByTag:
+		if !sharding.TagId.IsDefined() {
+			return -1, fmt.Errorf("%s strategy requires tag_id to be set", ShardByTag)
+		}
+		if sharding.Shard.IsDefined() {
+			return -1, fmt.Errorf("%s strategy is incompative with shard", ShardByTag)
+		}
+		return ShardByTagId, nil
+	}
+	return -1, fmt.Errorf("unknown strategy %s", sharding.Strategy)
+}
+
 func TagIndex(tagID string) int { // inverse of 'TagID'
 	i, ok := tagIDToIndex[tagID]
 	if !ok {
@@ -593,6 +779,10 @@ func TagID(i int) string {
 }
 
 func AllowedResolution(r int) int {
+	return allowedResolutionTable(r)
+}
+
+func allowedResolutionSwitch(r int) int {
 	// 60 must be divisible by allowed resolution
 	switch {
 	case r <= 1: // fast path
@@ -611,6 +801,19 @@ func AllowedResolution(r int) int {
 		return 30
 	}
 	return 60
+}
+
+const resolutionsTableStr = "\x01\x01\x02\x03\x04\x05\x06\x0a\x0a\x0a\x0a\x0c\x0c\x0f\x0f\x0f\x14\x14\x14\x14\x14\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x1e\x3c"
+
+func allowedResolutionTable(r int) int {
+	if r < 0 {
+		return 1
+	}
+	if r >= len(resolutionsTableStr) {
+		return 60
+	}
+	// 60 must be divisible by allowed resolution
+	return int(resolutionsTableStr[r])
 }
 
 func isLetter(c byte) bool {
@@ -644,6 +847,26 @@ func ClampFloatValue(f float64) float64 {
 	return f
 }
 
+func ClampCounter(f float64) (_ float64, errorTag int32) {
+	if !ValidFloatValue(f) {
+		return f, TagValueIDSrcIngestionStatusErrNanInfCounter
+	}
+	if f < 0 {
+		return f, TagValueIDSrcIngestionStatusErrNegativeCounter
+	}
+	if f > math.MaxFloat32 {
+		return math.MaxFloat32, 0
+	}
+	return f, 0
+}
+
+func ClampValue(f float64) (_ float64, errorTag int32) {
+	if !ValidFloatValue(f) {
+		return f, TagValueIDSrcIngestionStatusErrNanInfValue
+	}
+	return ClampFloatValue(f), 0
+}
+
 // Legacy rules replaced non-printables including whitespaces (except ASCII space) into roadsigns
 // This was found to be not ideal set of rules, so they were changed
 func ValidStringValueLegacy(s mem.RO) bool {
@@ -659,8 +882,8 @@ func ValidStringValueLegacy(s mem.RO) bool {
 //
 // Often, scripts insert tags with extra spaces, new line, some trash, etc.
 // We help people by replacing slightly invalid tag values with valid tag values.
-// 1. trim
-// 2. replace all consecutive whitespaces inside with single ASCII space
+// 1. trim unicode whitespaces to the left and right
+// 2. replace all consecutive unicode whitespaces inside with single ASCII space
 // 3. trim to MaxStringLen (if las utf symbol fits only partly, we remove it completely)
 // 4. non-printable characters are replaced by roadsign (invalid rune)
 // but invalid UTF-8 is still error
@@ -717,56 +940,18 @@ func validStringValue(s mem.RO, maxLen int) bool {
 	return true
 }
 
-func AppendValidStringValueLegacy(dst []byte, src []byte) ([]byte, error) {
-	return appendValidStringValueLegacy(dst, src, MaxStringLen, false)
-}
-
+// We have a lot of 1251 encoding still, also we have java people saving strings in default UTF-16 encoding,
+// so we consider rejecting large percentage of such strings is good.
+// Let's consider using ForceValidStringValue everywhere after last component using 1251 encoding is removed.
+// Do not forget to eliminate difference in speed between functions then.
 func AppendValidStringValue(dst []byte, src []byte) ([]byte, error) {
 	return appendValidStringValue(dst, src, MaxStringLen, false)
 }
 
-// We use this function only to validate host names. Can be slow, this is OK.
+// We use this function only to validate host names and args for now.
 func ForceValidStringValue(src string) []byte {
 	dst, _ := appendValidStringValue(nil, []byte(src), MaxStringLen, true)
 	return dst
-}
-
-func appendValidStringValueLegacy(dst []byte, src []byte, maxLen int, force bool) ([]byte, error) {
-	// trim
-	src = bytes.TrimSpace(src) // packet is limited, so this will not be too slow
-	// fast path
-	if len(src) <= maxLen { // if we cut by maxLen, we will have to trim right side again, which is slow
-		fastPath := true
-		for _, c := range src {
-			if !bytePrint(c) {
-				fastPath = false
-				break
-			}
-		}
-		if fastPath {
-			return append(dst, src...), nil
-		}
-	}
-	// slow path
-	var buf [MaxStringLen + utf8.UTFMax]byte
-	w := 0
-	for r := 0; r < len(src); {
-		c, nr := utf8.DecodeRune(src[r:])
-		if c == utf8.RuneError && nr <= 1 && !force {
-			return dst, errBadEncoding
-		}
-		if !unicode.IsPrint(c) {
-			c = utf8.RuneError
-		}
-		nw := utf8.EncodeRune(buf[w:], c)
-		if w+nw > maxLen {
-			break
-		}
-		r += nr
-		w += nw
-	}
-	dst = append(dst, buf[:w]...)
-	return bytes.TrimRightFunc(dst, unicode.IsSpace), nil
 }
 
 func appendValidStringValue(dst []byte, src []byte, maxLen int, force bool) ([]byte, error) {
@@ -911,10 +1096,6 @@ func AddRawValuePrefix(s string) string {
 	return tagValueCodePrefix + s
 }
 
-func IsValueCodeZero(s string) bool {
-	return TagValueCodeZero == s
-}
-
 // 'APICompat' functions are expected to be used to handle user input, exists for backward compatibility
 func APICompatNormalizeTagID(tagID string) (string, error) {
 	res, ok := apiCompatTagID[tagID]
@@ -959,7 +1140,7 @@ func ISO8601Date2BuildDateKey(str string) int32 {
 
 func IsValidMetricType(typ_ string) bool {
 	switch typ_ {
-	case MetricSecond, MetricMillisecond, MetricMicrosecond, MetricNanosecond, MetricByte, "":
+	case MetricSecond, MetricMillisecond, MetricMicrosecond, MetricNanosecond, MetricByte, MetricByteAsBits, "":
 		return true
 	}
 	return false
@@ -995,4 +1176,9 @@ func EventTypeToName(typ int32) string {
 	default:
 		return "unknown"
 	}
+}
+
+func ReportAPIPanic(r any) {
+	log.Println("panic:", string(debug.Stack()))
+	statshouse.StringTop(BuiltinMetricNameStatsHouseErrors, statshouse.Tags{1: strconv.FormatInt(TagValueIDAPIPanicError, 10)}, fmt.Sprintf("%v", r))
 }

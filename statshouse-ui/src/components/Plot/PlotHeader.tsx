@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { Dispatch, memo, SetStateAction, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { PlotNavigate } from './PlotNavigate';
 import { SetTimeRangeValue } from '../../common/TimeRange';
 import { produce } from 'immer';
@@ -19,17 +19,18 @@ import { ReactComponent as SVGCheckLg } from 'bootstrap-icons/icons/check-lg.svg
 import { ReactComponent as SVGX } from 'bootstrap-icons/icons/x.svg';
 import { ReactComponent as SVGPencil } from 'bootstrap-icons/icons/pencil.svg';
 import { MetricMetaValue } from '../../api/metric';
-import { promQLMetric } from '../../view/utils';
-import { encodeParams, fixMessageTrouble, lockRange, PlotParams, toPlotKey } from '../../url/queryParams';
-import { whatToWhatDesc } from '../../view/api';
+import { encodeParams, lockRange, PlotParams, toPlotKey } from '../../url/queryParams';
 import { shallow } from 'zustand/shallow';
 import { PlotName } from './PlotName';
 import { PlotLink } from './PlotLink';
 import { Link } from 'react-router-dom';
 import { ReactComponent as SVGTrash } from 'bootstrap-icons/icons/trash.svg';
 import { ReactComponent as SVGBoxArrowUpRight } from 'bootstrap-icons/icons/box-arrow-up-right.svg';
-import { useOnClickOutside } from '../../hooks/useOnClickOutside';
+import { useOnClickOutside } from '../../hooks';
 import { PlotHeaderTooltipContent } from './PlotHeaderTooltipContent';
+import { promQLMetric } from '../../view/promQLMetric';
+import { whatToWhatDesc } from '../../view/whatToWhatDesc';
+import { fixMessageTrouble } from '../../url/fixMessageTrouble';
 
 const { removePlot, setPlotParams, setPlotType } = useStore.getState();
 const stopPropagation = (e: React.MouseEvent) => {
@@ -54,7 +55,7 @@ export type PlotHeaderProps = {
   meta?: MetricMetaValue;
   live: boolean;
   setParams: (nextState: React.SetStateAction<PlotParams>, replace?: boolean | undefined) => void;
-  setLive: Dispatch<SetStateAction<boolean>>;
+  setLive: (status: boolean) => void;
   setTimeRange: (value: SetTimeRangeValue, force?: boolean) => void;
   yLock: lockRange;
   onResetZoom?: () => void;
@@ -418,9 +419,11 @@ export const _PlotHeader: React.FC<PlotHeaderProps> = ({
             autoHeight
           />
         ) : (
-          <small className="overflow-force-wrap text-secondary flex-grow-0" style={{ whiteSpace: 'pre-wrap' }}>
-            {plot.customDescription || meta?.description}
-          </small>
+          <Tooltip className="d-flex" title={plot.customDescription || meta?.description} hover>
+            <small className="text-secondary w-0 flex-grow-1 text-truncate no-tooltip-safari-fix">
+              {plot.customDescription || meta?.description}
+            </small>
+          </Tooltip>
         ))}
     </div>
   );

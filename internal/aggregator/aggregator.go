@@ -22,19 +22,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"pgregory.net/rand"
 
 	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/aggregator/prometheus"
 	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/metajournal"
 	"github.com/vkcom/statshouse/internal/pcache"
-
-	"pgregory.net/rand"
+	"github.com/vkcom/statshouse/internal/util"
+	"github.com/vkcom/statshouse/internal/vkgo/build"
+	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/vkcom/statshouse/internal/vkgo/semaphore"
 )
 
 type (
@@ -51,9 +51,9 @@ type (
 		time   uint32
 		shards [data_model.AggregationShardsPerSecond]aggregatorShard
 
-		contributors         map[*rpc.HandlerContext]struct{} // Protected by mu, can be removed if client disconnects
-		contributorsOriginal data_model.ItemValue             // Not recorded for keep-alive, protected by aggregator mutex
-		contributorsSpare    data_model.ItemValue             // Not recorded for keep-alive, protected by aggregator mutex
+		contributors       map[*rpc.HandlerContext]struct{} // Protected by mu, can be removed if client disconnects
+		historicHosts      [2][2]map[int32]int64            // [role][route] Protected by mu
+		contributorsMetric [2][2]data_model.ItemValue       // [role][route] Not recorded for keep-alive, protected by aggregator mutex
 
 		usedMetrics map[int32]struct{}
 		mu          sync.Mutex // Protects everything, except shards
@@ -63,6 +63,7 @@ type (
 		contributorsSimulatedErrors map[*rpc.HandlerContext]struct{} // put into most future bucket, so receive error after >7 seconds
 	}
 	Aggregator struct {
+		h               tlstatshouse.Handler
 		recentBuckets   []*aggregatorBucket          // We collect into several buckets before sending
 		historicBuckets map[uint32]*aggregatorBucket // timestamp->bucket. Each agent sends not more than X historic buckets, so size is limited.
 		bucketsToSend   chan *aggregatorBucket
@@ -77,6 +78,11 @@ type (
 		startTimestamp  uint32
 		addresses       []string
 
+		cancelInsertsFunc context.CancelFunc
+		cancelInsertsCtx  context.Context
+		insertsSema       *semaphore.Weighted
+		insertsSemaSize   int64 // configured value might change
+
 		tagMappingBootstrapResponse []byte // sending large responses to thousands of clients at once, so must be very efficient
 
 		sh2 *agent.Agent // set to not nil some time after launching aggregator
@@ -85,17 +91,26 @@ type (
 
 		estimator data_model.Estimator
 
+		// we potentially have 100+ buckets with 20000+ contributors each,
+		// so we have to maintain a sum of waiting hosts if we want accurate and fast metric.
+		historicHosts [2][2]map[int32]int64 // [role][route] Protected by mu
+
 		recentSenders   int
 		historicSenders int
 
 		config ConfigAggregator
 
+		// Remote config
+		configR  ConfigAggregatorRemote
+		configS  string
+		configMu sync.RWMutex
+
 		metricStorage  *metajournal.MetricsStorage
 		testConnection *TestConnection
 		tagsMapper     *TagsMapper
 
-		promUpdater *prometheus.Updater
-		autoCreate  *autoCreate
+		scrape     *scrapeServer
+		autoCreate *autoCreate
 	}
 	BuiltInStatRecord struct {
 		Key  data_model.Key
@@ -104,20 +119,35 @@ type (
 	}
 )
 
+const aggregatorMaxInflightPackets = (data_model.MaxConveyorDelay + data_model.MaxHistorySendStreams) * 3 * 3 // *3 is additional load for spares, when original aggregator is down
+
 func (b *aggregatorBucket) CancelHijack(hctx *rpc.HandlerContext) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// we cannot remove merged data or merged set
 	delete(b.contributors, hctx)
 	delete(b.contributorsSimulatedErrors, hctx)
 }
 
-func RunAggregator(dc *pcache.DiskCache, storageDir string, listenAddr string, aesPwd string, config ConfigAggregator, hostName string, logTrace bool) error {
+// aggregator is also run in this method
+func MakeAggregator(dc *pcache.DiskCache, storageDir string, listenAddr string, aesPwd string, config ConfigAggregator, hostName string, logTrace bool) (*Aggregator, error) {
 	if dc == nil { // TODO - make sure aggregator works without cache dir?
-		return fmt.Errorf("aggregator cannot run without -cache-dir for now")
+		return nil, fmt.Errorf("aggregator cannot run without -cache-dir for now")
 	}
+	localAddresses := strings.Split(listenAddr, ",")
+	if len(localAddresses) != 1 {
+		if len(localAddresses) != 3 {
+			return nil, fmt.Errorf("you must set exactly one address or three comma separated addresses in --agg-addr")
+		}
+		if config.LocalReplica < 1 || config.LocalReplica > 3 {
+			return nil, fmt.Errorf("seetting three --agg-addr require setting --local-replica to 1, 2 or 3")
+		}
+		listenAddr = localAddresses[config.LocalReplica-1]
+	}
+
 	_, listenPort, err := net.SplitHostPort(listenAddr)
 	if err != nil {
-		return fmt.Errorf("failed to split --agg-addr (%q) into host and port for autoconfiguration: %v", listenAddr, err)
+		return nil, fmt.Errorf("failed to split --agg-addr (%q) into host and port for autoconfiguration: %v", listenAddr, err)
 	}
 	if config.ExternalPort == "" {
 		config.ExternalPort = listenPort
@@ -128,17 +158,23 @@ func RunAggregator(dc *pcache.DiskCache, storageDir string, listenAddr string, a
 	if config.KHAddr != "" {
 		shardKey, replicaKey, addresses, err = selectShardReplica(config.KHAddr, config.Cluster, config.ExternalPort)
 		if err != nil {
-			return fmt.Errorf("failed to find out local shard and replica in cluster %q, probably wrong --cluster command line parameter set: %v", config.Cluster, err)
+			return nil, fmt.Errorf("failed to find out local shard and replica in cluster %q, probably wrong --cluster command line parameter set: %v", config.Cluster, err)
 		}
 	}
 	withoutCluster := false
 	if len(addresses) == 1 { // mostly demo runs with local non-replicated clusters
-		addresses = []string{addresses[0], addresses[0], addresses[0]}
-		withoutCluster = true
-		log.Printf("[warning] running with single-host cluster, probably demo")
+		if len(localAddresses) == 3 {
+			addresses = localAddresses
+			replicaKey = int32(config.LocalReplica)
+			log.Printf("[warning] running as a local replica %d with single-host cluster, probably demo", replicaKey)
+		} else {
+			addresses = []string{addresses[0], addresses[0], addresses[0]}
+			withoutCluster = true
+			log.Printf("[warning] running with single-host cluster, probably demo")
+		}
 	}
 	if len(addresses)%3 != 0 {
-		return fmt.Errorf("failed configuration - must have exactly 3 replicas in cluster %q per shard, probably wrong --cluster command line parameter set: %v", config.Cluster, err)
+		return nil, fmt.Errorf("failed configuration - must have exactly 3 replicas in cluster %q per shard, probably wrong --cluster command line parameter set: %v", config.Cluster, err)
 	}
 	log.Printf("success autoconfiguration in cluster %q, localShard=%d localReplica=%d address list is (%q)", config.Cluster, shardKey, replicaKey, strings.Join(addresses, ","))
 
@@ -157,16 +193,22 @@ func RunAggregator(dc *pcache.DiskCache, storageDir string, listenAddr string, a
 		if !withoutCluster {
 			// in prod, running without bootstrap is dangerous and can leave large gap in all metrics
 			// if agent disk caches are erased
-			return fmt.Errorf("failed to load mapping bootstrap: %v", err)
+			return nil, fmt.Errorf("failed to load mapping bootstrap: %v", err)
 		}
 		// ok, empty bootstrap is good for us for running locally
 		tagMappingBootstrapResponse, _ = (&tlmetadata.GetTagMappingBootstrap{}).WriteResult(nil, tlstatshouse.GetTagMappingBootstrapResult{})
 	}
 
+	cancelInsertCtx, cancelInsertFunc := context.WithCancel(context.Background())
+
 	a := &Aggregator{
+		cancelInsertsCtx:            cancelInsertCtx,
+		cancelInsertsFunc:           cancelInsertFunc,
 		bucketsToSend:               make(chan *aggregatorBucket),
 		historicBuckets:             map[uint32]*aggregatorBucket{},
+		historicHosts:               [2][2]map[int32]int64{{map[int32]int64{}, map[int32]int64{}}, {map[int32]int64{}, map[int32]int64{}}},
 		config:                      config,
+		configR:                     config.ConfigAggregatorRemote,
 		hostName:                    format.ForceValidStringValue(hostName), // worse alternative is do not run at all
 		withoutCluster:              withoutCluster,
 		shardKey:                    shardKey,
@@ -175,9 +217,40 @@ func RunAggregator(dc *pcache.DiskCache, storageDir string, listenAddr string, a
 		addresses:                   addresses,
 		tagMappingBootstrapResponse: tagMappingBootstrapResponse,
 	}
-	if len(a.hostName) == 0 {
-		return fmt.Errorf("failed configuration - aggregator machine must have valid non-empty host name")
+	errNoAutoCreate := &rpc.Error{Code: data_model.RPCErrorNoAutoCreate}
+	a.h = tlstatshouse.Handler{
+		GetConfig2: a.handleGetConfig2,
+		RawGetMetrics3: func(ctx context.Context, hctx *rpc.HandlerContext) error {
+			return a.metricStorage.Journal().HandleGetMetrics3(ctx, hctx)
+		},
+		RawGetTagMapping2: func(ctx context.Context, hctx *rpc.HandlerContext) error {
+			return a.tagsMapper.handleCreateTagMapping(ctx, hctx)
+		},
+		RawGetTagMappingBootstrap: func(_ context.Context, hctx *rpc.HandlerContext) error {
+			hctx.Response = append(hctx.Response, a.tagMappingBootstrapResponse...)
+			return nil
+		},
+		RawSendKeepAlive2:    a.handleSendKeepAlive2,
+		RawSendSourceBucket2: a.handleSendSourceBucket2,
+		RawTestConnection2: func(ctx context.Context, hctx *rpc.HandlerContext) error {
+			return a.testConnection.handleTestConnection(ctx, hctx)
+		},
+		RawGetTargets2: func(ctx context.Context, hctx *rpc.HandlerContext) error {
+			return a.scrape.handleGetTargets(ctx, hctx)
+		},
+		RawAutoCreate: func(ctx context.Context, hctx *rpc.HandlerContext) error {
+			if a.autoCreate != nil {
+				return a.autoCreate.handleAutoCreate(ctx, hctx)
+			} else {
+				return errNoAutoCreate
+			}
+		},
 	}
+	if len(a.hostName) == 0 {
+		return nil, fmt.Errorf("failed configuration - aggregator machine must have valid non-empty host name")
+	}
+	metrics := util.NewRPCServerMetrics("statshouse_aggregator")
+	a.scrape = newScrapeServer()
 	a.server = rpc.NewServer(rpc.ServerWithCryptoKeys([]string{aesPwd}),
 		rpc.ServerWithLogf(log.Printf),
 		rpc.ServerWithMaxWorkers(-1),
@@ -186,31 +259,41 @@ func RunAggregator(dc *pcache.DiskCache, storageDir string, listenAddr string, a
 		rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
 		rpc.ServerWithVersion(build.Info()),
 		rpc.ServerWithDefaultResponseTimeout(data_model.MaxConveyorDelay*time.Second),
-		rpc.ServerWithMaxInflightPackets((data_model.MaxConveyorDelay+data_model.MaxHistorySendStreams)*3), // *3 is additional load for spares, when original aggregator is down
+		rpc.ServerWithMaxInflightPackets(aggregatorMaxInflightPackets),
 		rpc.ServerWithResponseBufSize(1024),
 		rpc.ServerWithResponseMemEstimate(1024),
-		rpc.ServerWithRequestMemoryLimit(2<<30))
-
+		rpc.ServerWithRequestMemoryLimit(2<<33),
+		rpc.ServerWithStatsHandler(a.scrape.reportStats),
+		metrics.ServerWithMetrics,
+	)
+	// 1. we do not bother to stop collection
+	// 2. we must not use statshouse lib in aggregator, there is nobody listening 13337
+	// _ = metrics.Run(a.server)
 	metricMetaLoader := metajournal.NewMetricMetaLoader(metadataClient, metajournal.DefaultMetaTimeout)
-	log.Println("starting prom updater")
-	a.promUpdater, err = prometheus.RunPromUpdaterAsync(hostName, logTrace)
-	a.metricStorage = metajournal.MakeMetricsStorage(a.config.Cluster, dc, a.promUpdater.ApplyConfigFromJournal)
-	a.metricStorage.Journal().Start(a.sh2, a.appendInternalLog, metricMetaLoader.LoadJournal)
-	if err != nil {
-		return fmt.Errorf("failed to run prom updater: %s", err)
+	if config.AutoCreate {
+		a.autoCreate = newAutoCreate(a, metadataClient, config.AutoCreateDefaultNamespace)
 	}
-	log.Println("prom updater started")
+	a.metricStorage = metajournal.MakeMetricsStorage(a.config.Cluster, dc, func(configID int32, configS string) {
+		a.scrape.applyConfig(configID, configS)
+		if a.autoCreate != nil {
+			a.autoCreate.applyConfig(configID, configS)
+		}
+	})
 	agentConfig := agent.DefaultConfig()
 	agentConfig.Cluster = a.config.Cluster
 	// We use agent instance for aggregator built-in metrics
 	getConfigResult := a.getConfigResult() // agent will use this config instead of getting via RPC, because our RPC is not started yet
-	// TODO - pass storage dir after design is fixed
 	sh2, err := agent.MakeAgent("tcp4", storageDir, aesPwd, agentConfig, hostName,
-		format.TagValueIDComponentAggregator, a.metricStorage, log.Printf, a.agentBeforeFlushBucketFunc, &getConfigResult)
+		format.TagValueIDComponentAggregator, a.metricStorage, nil, log.Printf, a.agentBeforeFlushBucketFunc, &getConfigResult, nil)
 	if err != nil {
-		return fmt.Errorf("built-in agent failed to start: %v", err)
+		return nil, fmt.Errorf("built-in agent failed to start: %v", err)
 	}
 	a.sh2 = sh2
+	a.scrape.run(a.metricStorage, metricMetaLoader, sh2)
+	if a.autoCreate != nil {
+		a.autoCreate.run(a.metricStorage)
+	}
+	a.metricStorage.Journal().Start(a.sh2, a.appendInternalLog, metricMetaLoader.LoadJournal)
 
 	a.testConnection = MakeTestConnection()
 	a.tagsMapper = NewTagsMapper(a, a.sh2, a.metricStorage, dc, a, metricMetaLoader, a.config.Cluster)
@@ -224,19 +307,56 @@ func RunAggregator(dc *pcache.DiskCache, storageDir string, listenAddr string, a
 	_ = a.advanceRecentBuckets(now, true) // Just create initial set of buckets and set LastHour
 	a.appendInternalLog("start", "", build.Commit(), build.Info(), strings.Join(os.Args[1:], " "), strings.Join(addresses, ","), "", "Started")
 
+	a.insertsSemaSize = int64(a.config.RecentInserters)
+	a.insertsSema = semaphore.NewWeighted(a.insertsSemaSize)
+	_ = a.insertsSema.Acquire(context.Background(), a.insertsSemaSize)
+
 	go a.goTicker()
 	for i := 0; i < a.config.RecentInserters; i++ {
-		go a.goSend(i)
+		go a.goInsert(a.insertsSema, a.cancelInsertsCtx, a.bucketsToSend, i)
 	}
 	go a.goInternalLog()
-	if config.AutoCreate {
-		a.autoCreate = newAutoCreate(metadataClient, a.metricStorage)
-		defer a.autoCreate.shutdown()
-	}
 
 	sh2.Run(a.aggregatorHost, a.shardKey, a.replicaKey)
 
-	return a.server.ListenAndServe("tcp4", listenAddr)
+	go func() {
+		_ = a.server.ListenAndServe("tcp4", listenAddr)
+	}()
+	return a, nil
+}
+
+func (a *Aggregator) Agent() *agent.Agent {
+	return a.sh2
+}
+
+// Also effectively disables all incoming data
+func (a *Aggregator) DisableNewInsert() {
+	a.mu.Lock()
+	close(a.bucketsToSend)
+	a.bucketsToSend = nil
+	a.mu.Unlock()
+}
+
+func (a *Aggregator) WaitInsertsFinish(timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if err := a.insertsSema.Acquire(ctx, a.insertsSemaSize); err != nil {
+		log.Printf("WaitInsertsFinish timeout after %v: %v", timeout, err)
+	}
+	// either timeout passes or all recent senders quit
+}
+
+func (a *Aggregator) ShutdownRPCServer() {
+	a.server.Shutdown()
+}
+
+func (a *Aggregator) WaitRPCServer(timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := a.server.CloseWait(ctx); err != nil {
+		log.Printf("WaitRPCServer timeout after %v: %v", timeout, err)
+	}
 }
 
 func loadBoostrap(dc *pcache.DiskCache, client *tlmetadata.Client) ([]byte, error) {
@@ -253,7 +373,7 @@ func loadBoostrap(dc *pcache.DiskCache, client *tlmetadata.Client) ([]byte, erro
 			return nil, fmt.Errorf("bootstrap data failed to load with error %v, and failed to get from disk cache: %w", err, errDiskCache)
 		}
 		if !ok {
-			return nil, fmt.Errorf("bootstrap data failed to load, and not int disk cache: %w", err)
+			return nil, fmt.Errorf("bootstrap data failed to load, and not in disk cache: %w", err)
 		}
 		log.Printf("Loaded bootstrap mappings from cache of size %d", len(cacheData))
 		return cacheData, nil // from cache
@@ -268,6 +388,11 @@ func loadBoostrap(dc *pcache.DiskCache, client *tlmetadata.Client) ([]byte, erro
 	}
 	log.Printf("Loaded bootstrap of %d mappings of size %d", len(ret.Mappings), len(cacheData))
 	return cacheData, nil
+}
+
+func (b *aggregatorBucket) contributorsCount() float64 {
+	return b.contributorsMetric[0][0].Count() + b.contributorsMetric[0][1].Count() +
+		b.contributorsMetric[1][0].Count() + b.contributorsMetric[1][1].Count()
 }
 
 func (b *aggregatorBucket) lockShard(lockedShard *int, sID int) *aggregatorShard {
@@ -306,37 +431,55 @@ func addrIPString(remoteAddr net.Addr) (uint32, string) {
 	}
 }
 
-func (a *Aggregator) agentBeforeFlushBucketFunc(_ *agent.Agent, now time.Time) {
-	nowUnix := uint32(now.Unix())
+func (a *Aggregator) agentBeforeFlushBucketFunc(_ *agent.Agent, nowUnix uint32) {
+	rng := rand.New()
+	a.scrape.reportConfigHash(nowUnix)
+
 	a.mu.Lock()
 	recentSenders := a.recentSenders
 	historicSends := a.historicSenders
-	var original data_model.ItemValue
-	var spare data_model.ItemValue
-	var original_unique data_model.ItemValue
-	var spare_unique data_model.ItemValue
+	var bucketsWaiting [2][2]data_model.ItemValue
+	var secondsWaiting [2][2]data_model.ItemValue
+	var hostsWaiting [2][2]data_model.ItemValue
 	for _, v := range a.historicBuckets {
-		// v.contributorsOriginal and v.contributorsSpare are counters, while ItemValues above are values
-		original.AddValueCounterHost(float64(nowUnix-v.time), v.contributorsOriginal.Counter, v.contributorsOriginal.MaxCounterHostTag)
-		spare.AddValueCounterHost(float64(nowUnix-v.time), v.contributorsSpare.Counter, v.contributorsSpare.MaxCounterHostTag)
-		original_unique.AddValueCounterHost(float64(nowUnix-v.time), 1, v.contributorsOriginal.MaxCounterHostTag)
-		spare_unique.AddValueCounterHost(float64(nowUnix-v.time), 1, v.contributorsSpare.MaxCounterHostTag)
+		for i, cc := range v.contributorsMetric {
+			for j, bb := range cc {
+				// v.contributorsOriginal and v.contributorsSpare are counters, while ItemValues above are values
+				bucketsWaiting[i][j].AddValueCounterHost(rng, float64(nowUnix-v.time), bb.Count(), bb.MaxCounterHostTagId)
+				if bb.Count() > 0 {
+					secondsWaiting[i][j].AddValueCounterHost(rng, float64(nowUnix-v.time), 1, bb.MaxCounterHostTagId)
+				}
+			}
+		}
+	}
+	for i, cc := range a.historicHosts {
+		for j, bb := range cc {
+			for h := range bb { // random sample host every second is very good for max_host combobox under plot
+				hostsWaiting[i][j].AddValueCounterHost(rng, float64(len(bb)), 1, h)
+				break
+			}
+		}
 	}
 	a.mu.Unlock()
 
-	writeWaiting := func(metricID int32, key4 int32, item *data_model.ItemValue) {
-		key := data_model.AggKey(0, metricID, [16]int32{0, 0, 0, 0, key4}, a.aggregatorHost, a.shardKey, a.replicaKey)
-		a.sh2.MergeItemValue(key, item, nil)
+	writeWaiting := func(metricID int32, meta *format.MetricMetaValue, item *[2][2]data_model.ItemValue) {
+		tagsRole := [2]int32{format.TagValueIDAggregatorOriginal, format.TagValueIDAggregatorSpare}
+		tagsRoute := [2]int32{format.TagValueIDRouteDirect, format.TagValueIDRouteIngressProxy}
+		for i, cc := range *item {
+			for j, bb := range cc {
+				key := a.aggKey(nowUnix, metricID, [16]int32{0, 0, 0, 0, tagsRole[i], tagsRoute[j]})
+				a.sh2.MergeItemValue(key, &bb, meta)
+			}
+		}
 	}
-	writeWaiting(format.BuiltinMetricIDAggHistoricBucketsWaiting, format.TagValueIDAggregatorOriginal, &original)
-	writeWaiting(format.BuiltinMetricIDAggHistoricBucketsWaiting, format.TagValueIDAggregatorSpare, &spare)
-	writeWaiting(format.BuiltinMetricIDAggHistoricSecondsWaiting, format.TagValueIDAggregatorOriginal, &original_unique)
-	writeWaiting(format.BuiltinMetricIDAggHistoricSecondsWaiting, format.TagValueIDAggregatorSpare, &spare_unique)
+	writeWaiting(format.BuiltinMetricIDAggHistoricBucketsWaiting, format.BuiltinMetricMetaAggHistoricBucketsWaiting, &bucketsWaiting)
+	writeWaiting(format.BuiltinMetricIDAggHistoricSecondsWaiting, format.BuiltinMetricMetaAggHistoricSecondsWaiting, &secondsWaiting)
+	writeWaiting(format.BuiltinMetricIDAggHistoricHostsWaiting, format.BuiltinMetricMetaAggHistoricHostsWaiting, &hostsWaiting)
 
-	key := data_model.AggKey(0, format.BuiltinMetricIDAggActiveSenders, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorRecent}, a.aggregatorHost, a.shardKey, a.replicaKey)
-	a.sh2.AddValueCounterHost(key, float64(recentSenders), 1, a.aggregatorHost)
-	key = data_model.AggKey(0, format.BuiltinMetricIDAggActiveSenders, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorHistoric}, a.aggregatorHost, a.shardKey, a.replicaKey)
-	a.sh2.AddValueCounterHost(key, float64(historicSends), 1, a.aggregatorHost)
+	key := a.aggKey(nowUnix, format.BuiltinMetricIDAggActiveSenders, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorRecent})
+	a.sh2.AddValueCounterHost(key, float64(recentSenders), 1, a.aggregatorHost, format.BuiltinMetricMetaAggActiveSenders)
+	key = a.aggKey(nowUnix, format.BuiltinMetricIDAggActiveSenders, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorHistoric})
+	a.sh2.AddValueCounterHost(key, float64(historicSends), 1, a.aggregatorHost, format.BuiltinMetricMetaAggActiveSenders)
 
 	/* TODO - replace with direct agent call
 
@@ -378,7 +521,7 @@ func (a *Aggregator) checkShardConfiguration(shardReplica int32, shardReplicaTot
 
 func selectShardReplica(khAddr string, cluster string, listenPort string) (shardKey int32, replicaKey int32, addresses []string, err error) {
 	log.Printf("[debug] starting autoconfiguration by making SELECT to clickhouse address %q", khAddr)
-	httpClient := makeHTTPClient(data_model.ClickHouseTimeoutConfig)
+	httpClient := makeHTTPClient()
 	backoffTimeout := time.Duration(0)
 	for i := 0; ; i++ {
 		// motivation for several attempts is random clickhouse errors, plus starting before clickhouse is ready to process requests in demo mode
@@ -397,7 +540,9 @@ func selectShardReplicaImpl(httpClient *http.Client, khAddr string, cluster stri
 	queryPrefix := url.PathEscape(fmt.Sprintf("SELECT shard_num, replica_num, is_local, host_name FROM system.clusters where cluster='%s' and replica_num <= 3 order by shard_num, replica_num", cluster))
 	URL := fmt.Sprintf("http://%s/?input_format_values_interpret_expressions=0&query=%s", khAddr, queryPrefix)
 
-	req, err := http.NewRequest("POST", URL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), data_model.ClickHouseTimeoutConfig)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", URL, nil)
 	if err != nil {
 		return 0, 0, nil, err
 	}
@@ -446,14 +591,36 @@ func selectShardReplicaImpl(httpClient *http.Client, khAddr string, cluster stri
 	return 0, 0, nil, fmt.Errorf("HTTP get from clickhouse %q for cluster %q returned body with no local replicas - %q", khAddr, cluster, string(body))
 }
 
-func (a *Aggregator) goSend(senderID int) {
+func (a *Aggregator) updateHistoricHostLocked(my map[int32]int64, del map[int32]int64) {
+	for k, v := range del {
+		value := my[k] - v
+		if value == 0 {
+			delete(my, k)
+		} else {
+			my[k] = value
+		}
+	}
+}
+
+func (a *Aggregator) updateHistoricHostsLocked(my [2][2]map[int32]int64, del [2][2]map[int32]int64) {
+	for i, m1 := range my {
+		for j, m2 := range m1 {
+			a.updateHistoricHostLocked(m2, del[i][j])
+		}
+	}
+}
+
+func (a *Aggregator) goInsert(insertsSema *semaphore.Weighted, cancelCtx context.Context, bucketsToSend chan *aggregatorBucket, senderID int) {
+	defer log.Printf("clickhouse inserter %d quit", senderID)
+	defer insertsSema.Release(1)
+
 	rnd := rand.New()
-	httpClient := makeHTTPClient(data_model.ClickHouseTimeout)
+	httpClient := makeHTTPClient()
 
 	var aggBuckets []*aggregatorBucket
 	var bodyStorage []byte
 
-	for aggBucket := range a.bucketsToSend {
+	for aggBucket := range bucketsToSend {
 		aggBuckets = aggBuckets[:0]
 		bodyStorage = bodyStorage[:0]
 
@@ -472,10 +639,9 @@ func (a *Aggregator) goSend(senderID int) {
 		a.mu.Unlock()
 
 		aggBuckets = append(aggBuckets, aggBucket) // first bucket is always recent
-		a.estimator.ReportHourCardinality(aggBucket.time, aggBucket.usedMetrics, &aggBucket.shards[0].multiItems, a.aggregatorHost, a.shardKey, a.replicaKey, len(a.addresses))
-		bodyStorage = a.RowDataMarshalAppendPositions(aggBucket, rnd, bodyStorage[:0], false)
+		a.estimator.ReportHourCardinality(rnd, aggBucket.time, aggBucket.usedMetrics, &aggBucket.shards[0].multiItems, a.aggregatorHost, a.shardKey, a.replicaKey, len(a.addresses))
 
-		recentContributors := aggBucket.contributorsOriginal.Counter + aggBucket.contributorsSpare.Counter
+		recentContributors := aggBucket.contributorsCount()
 		historicContributors := 0.0
 		maxHistoricInsertBatch := data_model.MaxHistorySendStreams / (1 + a.config.HistoricInserters)
 		// each historic inserter takes not more than maxHistoricInsertBatch the oldest buckets, so for example with 2 inserters
@@ -503,18 +669,21 @@ func (a *Aggregator) goSend(senderID int) {
 				for hctx := range b.contributors { // compiles into map_clear
 					delete(b.contributors, hctx)
 				}
+				historicHosts := b.historicHosts
 				b.mu.Unlock()
-				key := data_model.AggKey(0, format.BuiltinMetricIDTimingErrors, [16]int32{0, format.TagValueIDTimingLongWindowThrownAggregatorLater}, a.aggregatorHost, a.shardKey, a.replicaKey)
-				a.sh2.AddValueCounterHost(key, float64(newestTime-b.time), 1, a.aggregatorHost) // This bucket is combination of many hosts
+				a.mu.Lock()
+				a.updateHistoricHostsLocked(a.historicHosts, historicHosts)
+				a.mu.Unlock()
+				key := a.aggKey(nowUnix, format.BuiltinMetricIDTimingErrors, [16]int32{0, format.TagValueIDTimingLongWindowThrownAggregatorLater})
+				a.sh2.AddValueCounterHost(key, float64(newestTime-b.time), 1, a.aggregatorHost, format.BuiltinMetricMetaTimingErrors) // This bucket is combination of many hosts
 			}
 			if historicBucket == nil {
 				break
 			}
-			historicContributors += historicBucket.contributorsOriginal.Counter + historicBucket.contributorsSpare.Counter
+			historicContributors += historicBucket.contributorsCount()
 
 			aggBuckets = append(aggBuckets, historicBucket)
-			a.estimator.ReportHourCardinality(historicBucket.time, historicBucket.usedMetrics, &historicBucket.shards[0].multiItems, a.aggregatorHost, a.shardKey, a.replicaKey, len(a.addresses))
-			bodyStorage = a.RowDataMarshalAppendPositions(historicBucket, rnd, bodyStorage, true)
+			a.estimator.ReportHourCardinality(rnd, historicBucket.time, historicBucket.usedMetrics, &historicBucket.shards[0].multiItems, a.aggregatorHost, a.shardKey, a.replicaKey, len(a.addresses))
 
 			if historicContributors > (recentContributors-0.5)*data_model.MaxHistoryInsertContributorsScale {
 				// We cannot compare buckets by size, because we can have very little data now, while waiting historic buckets are large
@@ -524,23 +693,34 @@ func (a *Aggregator) goSend(senderID int) {
 				break
 			}
 		}
+		bodyStorage = a.RowDataMarshalAppendPositions(aggBuckets, rnd, bodyStorage[:0], false, 0)
+
+		a.configMu.RLock()
+		mirrorChWrite := a.configR.MirrorChWrite
+		stringTagProb := a.configR.StringTagProb
+		a.configMu.RUnlock()
 
 		// Never empty, because adds value stats
-		status, exception, dur, sendErr := sendToClickhouse(httpClient, a.config.KHAddr, getTableDesc(), bodyStorage)
+		ctx, cancelSendToCh := context.WithTimeout(cancelCtx, data_model.ClickHouseTimeoutInsert)
+		status, exception, dur, sendErr := sendToClickhouse(ctx, httpClient, a.config.KHAddr, getTableDesc(), bodyStorage)
+		// if we are mirriring that will happen after second ch write
+		if !mirrorChWrite {
+			cancelSendToCh()
+		}
+
 		a.mu.Lock()
 		if willInsertHistoric {
 			a.historicSenders--
 		} else {
 			a.recentSenders--
 		}
-		numContributors := int(aggBucket.contributorsOriginal.Counter + aggBucket.contributorsSpare.Counter)
 		a.mu.Unlock()
 
 		if sendErr != nil {
-			comment := fmt.Sprintf("time=%d (delta = %d), contributors %d Sender %d", aggBucket.time, int64(nowUnix)-int64(aggBucket.time), numContributors, senderID)
+			comment := fmt.Sprintf("time=%d (delta = %d), contributors (recent %v, historic %v) Sender %d", aggBucket.time, int64(nowUnix)-int64(aggBucket.time), recentContributors, historicContributors, senderID)
 			a.appendInternalLog("insert_error", "", strconv.Itoa(status), strconv.Itoa(exception), "statshouse_value_incoming_arg_min_max", "", comment, sendErr.Error())
 			log.Print(sendErr)
-			sendErr = rpc.Error{
+			sendErr = &rpc.Error{
 				Code:        data_model.RPCErrorInsert,
 				Description: sendErr.Error(),
 			}
@@ -555,13 +735,34 @@ func (a *Aggregator) goSend(senderID int) {
 			for hctx := range b.contributors { // compiles into map_clear
 				delete(b.contributors, hctx)
 			}
+			historicHosts := b.historicHosts
 			b.mu.Unlock()
+			a.mu.Lock()
+			a.updateHistoricHostsLocked(a.historicHosts, historicHosts)
+			a.mu.Unlock()
 			// format.BuiltinMetricIDAggInsertSize was added during each bucket marshal
-			a.sh2.AddValueCounterHost(a.reportInsertKeys(b.time, format.BuiltinMetricIDAggInsertTime, i != 0, sendErr, status, exception), dur, 1, 0)
+			a.sh2.AddValueCounterHost(a.reportInsertKeys(b.time, format.BuiltinMetricIDAggInsertTime, i != 0, sendErr, status, exception), dur, 1, 0, format.BuiltinMetricMetaAggInsertTime)
 		}
 		// insert of all buckets is also accounted into single event at aggBucket.time second, so the graphic will be smoother
-		a.sh2.AddValueCounterHost(a.reportInsertKeys(aggBucket.time, format.BuiltinMetricIDAggInsertSizeReal, willInsertHistoric, sendErr, status, exception), float64(len(bodyStorage)), 1, 0)
-		a.sh2.AddValueCounterHost(a.reportInsertKeys(aggBucket.time, format.BuiltinMetricIDAggInsertTimeReal, willInsertHistoric, sendErr, status, exception), dur, 1, 0)
+		a.sh2.AddValueCounterHost(a.reportInsertKeys(aggBucket.time, format.BuiltinMetricIDAggInsertSizeReal, willInsertHistoric, sendErr, status, exception), float64(len(bodyStorage)), 1, 0, format.BuiltinMetricMetaAggInsertSizeReal)
+		a.sh2.AddValueCounterHost(a.reportInsertKeys(aggBucket.time, format.BuiltinMetricIDAggInsertTimeReal, willInsertHistoric, sendErr, status, exception), dur, 1, 0, format.BuiltinMetricMetaAggInsertTimeReal)
+
+		if mirrorChWrite {
+			bodyStorage = a.RowDataMarshalAppendPositions(aggBuckets, rnd, bodyStorage[:0], true, stringTagProb)
+			status, exception, dur, sendErr := sendToClickhouse(ctx, httpClient, a.config.KHAddr, getNewTableDesc(), bodyStorage)
+			cancelSendToCh()
+			if sendErr != nil {
+				comment := fmt.Sprintf("time=%d (delta = %d), contributors (recent %v, historic %v) Sender %d", aggBucket.time, int64(nowUnix)-int64(aggBucket.time), recentContributors, historicContributors, senderID)
+				a.appendInternalLog("insert_error_exp_table", "", strconv.Itoa(status), strconv.Itoa(exception), "statshouse_value_incoming_arg_min_max", "", comment, sendErr.Error())
+				log.Print(sendErr)
+				sendErr = &rpc.Error{
+					Code:        data_model.RPCErrorInsert,
+					Description: sendErr.Error(),
+				}
+			}
+			a.sh2.AddValueCounterHost(a.reportExpInsertKeys(aggBucket.time, format.BuiltinMetricIDAggInsertSizeReal, willInsertHistoric, sendErr, status, exception), float64(len(bodyStorage)), 1, 0, format.BuiltinMetricMetaAggInsertSizeReal)
+			a.sh2.AddValueCounterHost(a.reportExpInsertKeys(aggBucket.time, format.BuiltinMetricIDAggInsertTimeReal, willInsertHistoric, sendErr, status, exception), dur, 1, 0, format.BuiltinMetricMetaAggInsertTimeReal)
+		}
 
 		sendErr = fmt.Errorf("simulated error")
 		aggBucket.mu.Lock()
@@ -623,6 +824,7 @@ func (a *Aggregator) advanceRecentBuckets(now time.Time, initial bool) []*aggreg
 			time:                        nowUnix - uint32(a.config.ShortWindow),
 			contributors:                map[*rpc.HandlerContext]struct{}{},
 			contributorsSimulatedErrors: map[*rpc.HandlerContext]struct{}{},
+			historicHosts:               [2][2]map[int32]int64{{map[int32]int64{}, map[int32]int64{}}, {map[int32]int64{}, map[int32]int64{}}},
 		}
 		a.recentBuckets = append(a.recentBuckets, b)
 	}
@@ -631,6 +833,7 @@ func (a *Aggregator) advanceRecentBuckets(now time.Time, initial bool) []*aggreg
 			time:                        a.recentBuckets[0].time + uint32(len(a.recentBuckets)),
 			contributors:                map[*rpc.HandlerContext]struct{}{},
 			contributorsSimulatedErrors: map[*rpc.HandlerContext]struct{}{},
+			historicHosts:               [2][2]map[int32]int64{{map[int32]int64{}, map[int32]int64{}}, {map[int32]int64{}, map[int32]int64{}}},
 		}
 		a.recentBuckets = append(a.recentBuckets, b)
 	}
@@ -643,11 +846,14 @@ func (a *Aggregator) advanceRecentBuckets(now time.Time, initial bool) []*aggreg
 }
 
 func (a *Aggregator) goTicker() {
+	defer log.Printf("clickhouse bucket queue ticket quit")
+
 	now := time.Now()
 	for { // TODO - quit
 		tick := time.After(data_model.TillStartOfNextSecond(now))
 		now = <-tick // We synchronize with calendar second boundary
 
+		a.updateConfigRemotelyExperimental()
 		readyBuckets := a.advanceRecentBuckets(now, false)
 		for _, aggBucket := range readyBuckets {
 			aggBucket.sendMu.Lock()   // Lock/Unlock waits all clients to finish aggregation
@@ -659,13 +865,23 @@ func (a *Aggregator) goTicker() {
 				}
 				continue
 			}
+			a.mu.Lock() // be careful to unlock on all paths below
+			if a.bucketsToSend == nil {
+				a.mu.Unlock()
+				return // aggregator in shutdown
+			}
 			select {
-			case a.bucketsToSend <- aggBucket:
+			case a.bucketsToSend <- aggBucket: // have to send under lock
+				a.mu.Unlock()
 			default:
-				numContributors := int(aggBucket.contributorsOriginal.Counter + aggBucket.contributorsSpare.Counter)
-				err := fmt.Errorf("insert conveyor is full for Bucket time=%d, contributors %d", aggBucket.time, numContributors)
+				a.mu.Unlock()
+				numContributors := aggBucket.contributorsCount()
+				err := fmt.Errorf("insert conveyor is full for Bucket time=%d, contributors %f", aggBucket.time, numContributors)
 				fmt.Printf("%s\n", err)
 				aggBucket.mu.Lock()
+				// there must be exactly 0 historic hosts in this bucket, so can skip the next lines
+				// historicHosts := aggBucket.historicHosts
+				// (under aggregator lock): a.updateHistoricHostsLocked(a.historicHosts, historicHosts)
 				for hctx := range aggBucket.contributors {
 					hctx.SendHijackedResponse(err)
 				}
@@ -680,4 +896,28 @@ func (a *Aggregator) goTicker() {
 			a.estimator.GarbageCollect(oldestTime)
 		}
 	}
+}
+
+func (a *Aggregator) updateConfigRemotelyExperimental() {
+	if a.config.DisableRemoteConfig || a.metricStorage == nil {
+		return
+	}
+	description := ""
+	if mv := a.metricStorage.GetMetaMetricByName(data_model.StatshouseAggregatorRemoteConfigMetric); mv != nil {
+		description = mv.Description
+	}
+	if description == a.configS {
+		return
+	}
+	a.configS = description
+	log.Printf("Remote config:\n%s", description)
+	config := a.config.ConfigAggregatorRemote
+	if err := config.updateFromRemoteDescription(description); err != nil {
+		log.Printf("[error] Remote config: error updating config from metric %q: %v", data_model.StatshouseAggregatorRemoteConfigMetric, err)
+		return
+	}
+	log.Printf("Remote config: updated config from metric %q", data_model.StatshouseAggregatorRemoteConfigMetric)
+	a.configMu.Lock()
+	a.configR = config
+	a.configMu.Unlock()
 }

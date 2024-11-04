@@ -13,6 +13,144 @@ import (
 
 var _ = basictl.NatWrite
 
+func BuiltinVectorStatshousePromTargetRead(w []byte, vec *[]StatshousePromTarget, nat_t uint32) (_ []byte, err error) {
+	var l uint32
+	if w, err = basictl.NatRead(w, &l); err != nil {
+		return w, err
+	}
+	if err = basictl.CheckLengthSanity(w, l, 4); err != nil {
+		return w, err
+	}
+	if uint32(cap(*vec)) < l {
+		*vec = make([]StatshousePromTarget, l)
+	} else {
+		*vec = (*vec)[:l]
+	}
+	for i := range *vec {
+		if w, err = (*vec)[i].Read(w, nat_t); err != nil {
+			return w, err
+		}
+	}
+	return w, nil
+}
+
+func BuiltinVectorStatshousePromTargetWrite(w []byte, vec []StatshousePromTarget, nat_t uint32) []byte {
+	w = basictl.NatWrite(w, uint32(len(vec)))
+	for _, elem := range vec {
+		w = elem.Write(w, nat_t)
+	}
+	return w
+}
+
+func BuiltinVectorStatshousePromTargetReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]StatshousePromTarget, nat_t uint32) error {
+	*vec = (*vec)[:cap(*vec)]
+	index := 0
+	if in != nil {
+		in.Delim('[')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[]StatshousePromTarget", "expected json array")
+		}
+		for ; !in.IsDelim(']'); index++ {
+			if len(*vec) <= index {
+				var newValue StatshousePromTarget
+				*vec = append(*vec, newValue)
+				*vec = (*vec)[:cap(*vec)]
+			}
+			if err := (*vec)[index].ReadJSON(legacyTypeNames, in, nat_t); err != nil {
+				return err
+			}
+			in.WantComma()
+		}
+		in.Delim(']')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[]StatshousePromTarget", "expected json array's end")
+		}
+	}
+	*vec = (*vec)[:index]
+	return nil
+}
+
+func BuiltinVectorStatshousePromTargetWriteJSON(w []byte, vec []StatshousePromTarget, nat_t uint32) []byte {
+	return BuiltinVectorStatshousePromTargetWriteJSONOpt(true, false, w, vec, nat_t)
+}
+func BuiltinVectorStatshousePromTargetWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []StatshousePromTarget, nat_t uint32) []byte {
+	w = append(w, '[')
+	for _, elem := range vec {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = elem.WriteJSONOpt(newTypeNames, short, w, nat_t)
+	}
+	return append(w, ']')
+}
+
+func BuiltinVectorStatshousePromTargetBytesRead(w []byte, vec *[]StatshousePromTargetBytes, nat_t uint32) (_ []byte, err error) {
+	var l uint32
+	if w, err = basictl.NatRead(w, &l); err != nil {
+		return w, err
+	}
+	if err = basictl.CheckLengthSanity(w, l, 4); err != nil {
+		return w, err
+	}
+	if uint32(cap(*vec)) < l {
+		*vec = make([]StatshousePromTargetBytes, l)
+	} else {
+		*vec = (*vec)[:l]
+	}
+	for i := range *vec {
+		if w, err = (*vec)[i].Read(w, nat_t); err != nil {
+			return w, err
+		}
+	}
+	return w, nil
+}
+
+func BuiltinVectorStatshousePromTargetBytesWrite(w []byte, vec []StatshousePromTargetBytes, nat_t uint32) []byte {
+	w = basictl.NatWrite(w, uint32(len(vec)))
+	for _, elem := range vec {
+		w = elem.Write(w, nat_t)
+	}
+	return w
+}
+
+func BuiltinVectorStatshousePromTargetBytesReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]StatshousePromTargetBytes, nat_t uint32) error {
+	*vec = (*vec)[:cap(*vec)]
+	index := 0
+	if in != nil {
+		in.Delim('[')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[]StatshousePromTargetBytes", "expected json array")
+		}
+		for ; !in.IsDelim(']'); index++ {
+			if len(*vec) <= index {
+				var newValue StatshousePromTargetBytes
+				*vec = append(*vec, newValue)
+				*vec = (*vec)[:cap(*vec)]
+			}
+			if err := (*vec)[index].ReadJSON(legacyTypeNames, in, nat_t); err != nil {
+				return err
+			}
+			in.WantComma()
+		}
+		in.Delim(']')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[]StatshousePromTargetBytes", "expected json array's end")
+		}
+	}
+	*vec = (*vec)[:index]
+	return nil
+}
+
+func BuiltinVectorStatshousePromTargetBytesWriteJSON(w []byte, vec []StatshousePromTargetBytes, nat_t uint32) []byte {
+	return BuiltinVectorStatshousePromTargetBytesWriteJSONOpt(true, false, w, vec, nat_t)
+}
+func BuiltinVectorStatshousePromTargetBytesWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []StatshousePromTargetBytes, nat_t uint32) []byte {
+	w = append(w, '[')
+	for _, elem := range vec {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = elem.WriteJSONOpt(newTypeNames, short, w, nat_t)
+	}
+	return append(w, ']')
+}
+
 type StatshousePromTarget struct {
 	FieldsMask     uint32
 	JobName        string
@@ -27,6 +165,7 @@ type StatshousePromTarget struct {
 	LabelNameLengthLimit  int64
 	LabelValueLengthLimit int64
 	HttpClientConfig      string
+	MetricRelabelConfigs  string // Conditional: nat_fields_mask_arg.1
 }
 
 func (StatshousePromTarget) TLName() string { return "statshouse.promTarget" }
@@ -50,11 +189,27 @@ func (item *StatshousePromTarget) SetHonorLabels(v bool) {
 }
 func (item StatshousePromTarget) IsSetHonorLabels() bool { return item.FieldsMask&(1<<1) != 0 }
 
+func (item *StatshousePromTarget) SetMetricRelabelConfigs(v string, nat_fields_mask_arg *uint32) {
+	item.MetricRelabelConfigs = v
+	if nat_fields_mask_arg != nil {
+		*nat_fields_mask_arg |= 1 << 1
+	}
+}
+func (item *StatshousePromTarget) ClearMetricRelabelConfigs(nat_fields_mask_arg *uint32) {
+	item.MetricRelabelConfigs = ""
+	if nat_fields_mask_arg != nil {
+		*nat_fields_mask_arg &^= 1 << 1
+	}
+}
+func (item StatshousePromTarget) IsSetMetricRelabelConfigs(nat_fields_mask_arg uint32) bool {
+	return nat_fields_mask_arg&(1<<1) != 0
+}
+
 func (item *StatshousePromTarget) Reset() {
 	item.FieldsMask = 0
 	item.JobName = ""
 	item.Url = ""
-	VectorDictionaryFieldString0Reset(item.Labels)
+	BuiltinVectorDictionaryFieldStringReset(item.Labels)
 	item.ScrapeInterval = 0
 	item.ScrapeTimeout = 0
 	item.BodySizeLimit = 0
@@ -62,9 +217,10 @@ func (item *StatshousePromTarget) Reset() {
 	item.LabelNameLengthLimit = 0
 	item.LabelValueLengthLimit = 0
 	item.HttpClientConfig = ""
+	item.MetricRelabelConfigs = ""
 }
 
-func (item *StatshousePromTarget) Read(w []byte) (_ []byte, err error) {
+func (item *StatshousePromTarget) Read(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
 	}
@@ -74,7 +230,7 @@ func (item *StatshousePromTarget) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.StringRead(w, &item.Url); err != nil {
 		return w, err
 	}
-	if w, err = VectorDictionaryFieldString0Read(w, &item.Labels); err != nil {
+	if w, err = BuiltinVectorDictionaryFieldStringRead(w, &item.Labels); err != nil {
 		return w, err
 	}
 	if w, err = basictl.LongRead(w, &item.ScrapeInterval); err != nil {
@@ -95,175 +251,312 @@ func (item *StatshousePromTarget) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.LongRead(w, &item.LabelValueLengthLimit); err != nil {
 		return w, err
 	}
-	return basictl.StringRead(w, &item.HttpClientConfig)
+	if w, err = basictl.StringRead(w, &item.HttpClientConfig); err != nil {
+		return w, err
+	}
+	if nat_fields_mask_arg&(1<<1) != 0 {
+		if w, err = basictl.StringRead(w, &item.MetricRelabelConfigs); err != nil {
+			return w, err
+		}
+	} else {
+		item.MetricRelabelConfigs = ""
+	}
+	return w, nil
 }
 
-func (item *StatshousePromTarget) Write(w []byte) (_ []byte, err error) {
+// This method is general version of Write, use it instead!
+func (item *StatshousePromTarget) WriteGeneral(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
+	return item.Write(w, nat_fields_mask_arg), nil
+}
+
+func (item *StatshousePromTarget) Write(w []byte, nat_fields_mask_arg uint32) []byte {
 	w = basictl.NatWrite(w, item.FieldsMask)
-	if w, err = basictl.StringWrite(w, item.JobName); err != nil {
-		return w, err
-	}
-	if w, err = basictl.StringWrite(w, item.Url); err != nil {
-		return w, err
-	}
-	if w, err = VectorDictionaryFieldString0Write(w, item.Labels); err != nil {
-		return w, err
-	}
+	w = basictl.StringWrite(w, item.JobName)
+	w = basictl.StringWrite(w, item.Url)
+	w = BuiltinVectorDictionaryFieldStringWrite(w, item.Labels)
 	w = basictl.LongWrite(w, item.ScrapeInterval)
 	w = basictl.LongWrite(w, item.ScrapeTimeout)
 	w = basictl.LongWrite(w, item.BodySizeLimit)
 	w = basictl.LongWrite(w, item.LabelLimit)
 	w = basictl.LongWrite(w, item.LabelNameLengthLimit)
 	w = basictl.LongWrite(w, item.LabelValueLengthLimit)
-	return basictl.StringWrite(w, item.HttpClientConfig)
+	w = basictl.StringWrite(w, item.HttpClientConfig)
+	if nat_fields_mask_arg&(1<<1) != 0 {
+		w = basictl.StringWrite(w, item.MetricRelabelConfigs)
+	}
+	return w
 }
 
-func (item *StatshousePromTarget) ReadBoxed(w []byte) (_ []byte, err error) {
+func (item *StatshousePromTarget) ReadBoxed(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xac5296df); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.Read(w, nat_fields_mask_arg)
 }
 
-func (item *StatshousePromTarget) WriteBoxed(w []byte) ([]byte, error) {
+// This method is general version of WriteBoxed, use it instead!
+func (item *StatshousePromTarget) WriteBoxedGeneral(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
+	return item.WriteBoxed(w, nat_fields_mask_arg), nil
+}
+
+func (item *StatshousePromTarget) WriteBoxed(w []byte, nat_fields_mask_arg uint32) []byte {
 	w = basictl.NatWrite(w, 0xac5296df)
-	return item.Write(w)
+	return item.Write(w, nat_fields_mask_arg)
 }
 
-func (item StatshousePromTarget) String() string {
-	w, err := item.WriteJSON(nil)
-	if err != nil {
-		return err.Error()
-	}
-	return string(w)
-}
+func (item *StatshousePromTarget) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask_arg uint32) error {
+	var propFieldsMaskPresented bool
+	var propJobNamePresented bool
+	var propUrlPresented bool
+	var propLabelsPresented bool
+	var propScrapeIntervalPresented bool
+	var trueTypeHonorTimestampsPresented bool
+	var trueTypeHonorTimestampsValue bool
+	var trueTypeHonorLabelsPresented bool
+	var trueTypeHonorLabelsValue bool
+	var propScrapeTimeoutPresented bool
+	var propBodySizeLimitPresented bool
+	var propLabelLimitPresented bool
+	var propLabelNameLengthLimitPresented bool
+	var propLabelValueLengthLimitPresented bool
+	var propHttpClientConfigPresented bool
+	var propMetricRelabelConfigsPresented bool
 
-func StatshousePromTarget__ReadJSON(item *StatshousePromTarget, j interface{}) error {
-	return item.readJSON(j)
-}
-func (item *StatshousePromTarget) readJSON(j interface{}) error {
-	_jm, _ok := j.(map[string]interface{})
-	if j != nil && !_ok {
-		return ErrorInvalidJSON("statshouse.promTarget", "expected json object")
-	}
-	_jFieldsMask := _jm["fields_mask"]
-	delete(_jm, "fields_mask")
-	if err := JsonReadUint32(_jFieldsMask, &item.FieldsMask); err != nil {
-		return err
-	}
-	_jJobName := _jm["job_name"]
-	delete(_jm, "job_name")
-	if err := JsonReadString(_jJobName, &item.JobName); err != nil {
-		return err
-	}
-	_jUrl := _jm["url"]
-	delete(_jm, "url")
-	if err := JsonReadString(_jUrl, &item.Url); err != nil {
-		return err
-	}
-	_jLabels := _jm["labels"]
-	delete(_jm, "labels")
-	_jScrapeInterval := _jm["scrape_interval"]
-	delete(_jm, "scrape_interval")
-	if err := JsonReadInt64(_jScrapeInterval, &item.ScrapeInterval); err != nil {
-		return err
-	}
-	_jHonorTimestamps := _jm["honor_timestamps"]
-	delete(_jm, "honor_timestamps")
-	_jHonorLabels := _jm["honor_labels"]
-	delete(_jm, "honor_labels")
-	_jScrapeTimeout := _jm["scrape_timeout"]
-	delete(_jm, "scrape_timeout")
-	if err := JsonReadInt64(_jScrapeTimeout, &item.ScrapeTimeout); err != nil {
-		return err
-	}
-	_jBodySizeLimit := _jm["body_size_limit"]
-	delete(_jm, "body_size_limit")
-	if err := JsonReadInt64(_jBodySizeLimit, &item.BodySizeLimit); err != nil {
-		return err
-	}
-	_jLabelLimit := _jm["label_limit"]
-	delete(_jm, "label_limit")
-	if err := JsonReadInt64(_jLabelLimit, &item.LabelLimit); err != nil {
-		return err
-	}
-	_jLabelNameLengthLimit := _jm["label_name_length_limit"]
-	delete(_jm, "label_name_length_limit")
-	if err := JsonReadInt64(_jLabelNameLengthLimit, &item.LabelNameLengthLimit); err != nil {
-		return err
-	}
-	_jLabelValueLengthLimit := _jm["label_value_length_limit"]
-	delete(_jm, "label_value_length_limit")
-	if err := JsonReadInt64(_jLabelValueLengthLimit, &item.LabelValueLengthLimit); err != nil {
-		return err
-	}
-	_jHttpClientConfig := _jm["http_client_config"]
-	delete(_jm, "http_client_config")
-	if err := JsonReadString(_jHttpClientConfig, &item.HttpClientConfig); err != nil {
-		return err
-	}
-	for k := range _jm {
-		return ErrorInvalidJSONExcessElement("statshouse.promTarget", k)
-	}
-	if _jHonorTimestamps != nil {
-		_bit := false
-		if err := JsonReadBool(_jHonorTimestamps, &_bit); err != nil {
-			return err
+	if in != nil {
+		in.Delim('{')
+		if !in.Ok() {
+			return in.Error()
 		}
-		if _bit {
+		for !in.IsDelim('}') {
+			key := in.UnsafeFieldName(true)
+			in.WantColon()
+			switch key {
+			case "fields_mask":
+				if propFieldsMaskPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "fields_mask")
+				}
+				if err := Json2ReadUint32(in, &item.FieldsMask); err != nil {
+					return err
+				}
+				propFieldsMaskPresented = true
+			case "job_name":
+				if propJobNamePresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "job_name")
+				}
+				if err := Json2ReadString(in, &item.JobName); err != nil {
+					return err
+				}
+				propJobNamePresented = true
+			case "url":
+				if propUrlPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "url")
+				}
+				if err := Json2ReadString(in, &item.Url); err != nil {
+					return err
+				}
+				propUrlPresented = true
+			case "labels":
+				if propLabelsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "labels")
+				}
+				if err := BuiltinVectorDictionaryFieldStringReadJSON(legacyTypeNames, in, &item.Labels); err != nil {
+					return err
+				}
+				propLabelsPresented = true
+			case "scrape_interval":
+				if propScrapeIntervalPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "scrape_interval")
+				}
+				if err := Json2ReadInt64(in, &item.ScrapeInterval); err != nil {
+					return err
+				}
+				propScrapeIntervalPresented = true
+			case "honor_timestamps":
+				if trueTypeHonorTimestampsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "honor_timestamps")
+				}
+				if err := Json2ReadBool(in, &trueTypeHonorTimestampsValue); err != nil {
+					return err
+				}
+				trueTypeHonorTimestampsPresented = true
+			case "honor_labels":
+				if trueTypeHonorLabelsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "honor_labels")
+				}
+				if err := Json2ReadBool(in, &trueTypeHonorLabelsValue); err != nil {
+					return err
+				}
+				trueTypeHonorLabelsPresented = true
+			case "scrape_timeout":
+				if propScrapeTimeoutPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "scrape_timeout")
+				}
+				if err := Json2ReadInt64(in, &item.ScrapeTimeout); err != nil {
+					return err
+				}
+				propScrapeTimeoutPresented = true
+			case "body_size_limit":
+				if propBodySizeLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "body_size_limit")
+				}
+				if err := Json2ReadInt64(in, &item.BodySizeLimit); err != nil {
+					return err
+				}
+				propBodySizeLimitPresented = true
+			case "label_limit":
+				if propLabelLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "label_limit")
+				}
+				if err := Json2ReadInt64(in, &item.LabelLimit); err != nil {
+					return err
+				}
+				propLabelLimitPresented = true
+			case "label_name_length_limit":
+				if propLabelNameLengthLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "label_name_length_limit")
+				}
+				if err := Json2ReadInt64(in, &item.LabelNameLengthLimit); err != nil {
+					return err
+				}
+				propLabelNameLengthLimitPresented = true
+			case "label_value_length_limit":
+				if propLabelValueLengthLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "label_value_length_limit")
+				}
+				if err := Json2ReadInt64(in, &item.LabelValueLengthLimit); err != nil {
+					return err
+				}
+				propLabelValueLengthLimitPresented = true
+			case "http_client_config":
+				if propHttpClientConfigPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "http_client_config")
+				}
+				if err := Json2ReadString(in, &item.HttpClientConfig); err != nil {
+					return err
+				}
+				propHttpClientConfigPresented = true
+			case "metric_relabel_configs":
+				if propMetricRelabelConfigsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "metric_relabel_configs")
+				}
+				if nat_fields_mask_arg&(1<<1) == 0 {
+					return ErrorInvalidJSON("statshouse.promTarget", "field 'metric_relabel_configs' is defined, while corresponding implicit fieldmask bit is 0")
+				}
+				if err := Json2ReadString(in, &item.MetricRelabelConfigs); err != nil {
+					return err
+				}
+				propMetricRelabelConfigsPresented = true
+			default:
+				return ErrorInvalidJSONExcessElement("statshouse.promTarget", key)
+			}
+			in.WantComma()
+		}
+		in.Delim('}')
+		if !in.Ok() {
+			return in.Error()
+		}
+	}
+	if !propFieldsMaskPresented {
+		item.FieldsMask = 0
+	}
+	if !propJobNamePresented {
+		item.JobName = ""
+	}
+	if !propUrlPresented {
+		item.Url = ""
+	}
+	if !propLabelsPresented {
+		BuiltinVectorDictionaryFieldStringReset(item.Labels)
+	}
+	if !propScrapeIntervalPresented {
+		item.ScrapeInterval = 0
+	}
+	if !propScrapeTimeoutPresented {
+		item.ScrapeTimeout = 0
+	}
+	if !propBodySizeLimitPresented {
+		item.BodySizeLimit = 0
+	}
+	if !propLabelLimitPresented {
+		item.LabelLimit = 0
+	}
+	if !propLabelNameLengthLimitPresented {
+		item.LabelNameLengthLimit = 0
+	}
+	if !propLabelValueLengthLimitPresented {
+		item.LabelValueLengthLimit = 0
+	}
+	if !propHttpClientConfigPresented {
+		item.HttpClientConfig = ""
+	}
+	if !propMetricRelabelConfigsPresented {
+		item.MetricRelabelConfigs = ""
+	}
+	if trueTypeHonorTimestampsPresented {
+		if trueTypeHonorTimestampsValue {
 			item.FieldsMask |= 1 << 0
-		} else {
-			item.FieldsMask &^= 1 << 0
 		}
 	}
-	if _jHonorLabels != nil {
-		_bit := false
-		if err := JsonReadBool(_jHonorLabels, &_bit); err != nil {
-			return err
-		}
-		if _bit {
+	if trueTypeHonorLabelsPresented {
+		if trueTypeHonorLabelsValue {
 			item.FieldsMask |= 1 << 1
-		} else {
-			item.FieldsMask &^= 1 << 1
 		}
 	}
-	if err := VectorDictionaryFieldString0ReadJSON(_jLabels, &item.Labels); err != nil {
-		return err
+	// tries to set bit to zero if it is 1
+	if trueTypeHonorTimestampsPresented && !trueTypeHonorTimestampsValue && (item.FieldsMask&(1<<0) != 0) {
+		return ErrorInvalidJSON("statshouse.promTarget", "fieldmask bit fields_mask.0 is indefinite because of the contradictions in values")
+	}
+	// tries to set bit to zero if it is 1
+	if trueTypeHonorLabelsPresented && !trueTypeHonorLabelsValue && (item.FieldsMask&(1<<1) != 0) {
+		return ErrorInvalidJSON("statshouse.promTarget", "fieldmask bit fields_mask.0 is indefinite because of the contradictions in values")
 	}
 	return nil
 }
 
-func (item *StatshousePromTarget) WriteJSON(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(false, w)
+// This method is general version of WriteJSON, use it instead!
+func (item *StatshousePromTarget) WriteJSONGeneral(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask_arg), nil
 }
-func (item *StatshousePromTarget) WriteJSONOpt(short bool, w []byte) (_ []byte, err error) {
+
+func (item *StatshousePromTarget) WriteJSON(w []byte, nat_fields_mask_arg uint32) []byte {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask_arg)
+}
+func (item *StatshousePromTarget) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask_arg uint32) []byte {
 	w = append(w, '{')
-	if item.FieldsMask != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"fields_mask":`...)
-		w = basictl.JSONWriteUint32(w, item.FieldsMask)
+	backupIndexFieldsMask := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"fields_mask":`...)
+	w = basictl.JSONWriteUint32(w, item.FieldsMask)
+	if (item.FieldsMask != 0) == false {
+		w = w[:backupIndexFieldsMask]
 	}
-	if len(item.JobName) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"job_name":`...)
-		w = basictl.JSONWriteString(w, item.JobName)
+	backupIndexJobName := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"job_name":`...)
+	w = basictl.JSONWriteString(w, item.JobName)
+	if (len(item.JobName) != 0) == false {
+		w = w[:backupIndexJobName]
 	}
-	if len(item.Url) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"url":`...)
-		w = basictl.JSONWriteString(w, item.Url)
+	backupIndexUrl := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"url":`...)
+	w = basictl.JSONWriteString(w, item.Url)
+	if (len(item.Url) != 0) == false {
+		w = w[:backupIndexUrl]
 	}
-	if len(item.Labels) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"labels":`...)
-		if w, err = VectorDictionaryFieldString0WriteJSONOpt(short, w, item.Labels); err != nil {
-			return w, err
-		}
+	backupIndexLabels := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"labels":`...)
+	w = BuiltinVectorDictionaryFieldStringWriteJSONOpt(newTypeNames, short, w, item.Labels)
+	if (len(item.Labels) != 0) == false {
+		w = w[:backupIndexLabels]
 	}
-	if item.ScrapeInterval != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"scrape_interval":`...)
-		w = basictl.JSONWriteInt64(w, item.ScrapeInterval)
+	backupIndexScrapeInterval := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"scrape_interval":`...)
+	w = basictl.JSONWriteInt64(w, item.ScrapeInterval)
+	if (item.ScrapeInterval != 0) == false {
+		w = w[:backupIndexScrapeInterval]
 	}
 	if item.FieldsMask&(1<<0) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -273,52 +566,54 @@ func (item *StatshousePromTarget) WriteJSONOpt(short bool, w []byte) (_ []byte, 
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"honor_labels":true`...)
 	}
-	if item.ScrapeTimeout != 0 {
+	backupIndexScrapeTimeout := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"scrape_timeout":`...)
+	w = basictl.JSONWriteInt64(w, item.ScrapeTimeout)
+	if (item.ScrapeTimeout != 0) == false {
+		w = w[:backupIndexScrapeTimeout]
+	}
+	backupIndexBodySizeLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"body_size_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.BodySizeLimit)
+	if (item.BodySizeLimit != 0) == false {
+		w = w[:backupIndexBodySizeLimit]
+	}
+	backupIndexLabelLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"label_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.LabelLimit)
+	if (item.LabelLimit != 0) == false {
+		w = w[:backupIndexLabelLimit]
+	}
+	backupIndexLabelNameLengthLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"label_name_length_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.LabelNameLengthLimit)
+	if (item.LabelNameLengthLimit != 0) == false {
+		w = w[:backupIndexLabelNameLengthLimit]
+	}
+	backupIndexLabelValueLengthLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"label_value_length_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.LabelValueLengthLimit)
+	if (item.LabelValueLengthLimit != 0) == false {
+		w = w[:backupIndexLabelValueLengthLimit]
+	}
+	backupIndexHttpClientConfig := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"http_client_config":`...)
+	w = basictl.JSONWriteString(w, item.HttpClientConfig)
+	if (len(item.HttpClientConfig) != 0) == false {
+		w = w[:backupIndexHttpClientConfig]
+	}
+	if nat_fields_mask_arg&(1<<1) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"scrape_timeout":`...)
-		w = basictl.JSONWriteInt64(w, item.ScrapeTimeout)
+		w = append(w, `"metric_relabel_configs":`...)
+		w = basictl.JSONWriteString(w, item.MetricRelabelConfigs)
 	}
-	if item.BodySizeLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"body_size_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.BodySizeLimit)
-	}
-	if item.LabelLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"label_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.LabelLimit)
-	}
-	if item.LabelNameLengthLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"label_name_length_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.LabelNameLengthLimit)
-	}
-	if item.LabelValueLengthLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"label_value_length_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.LabelValueLengthLimit)
-	}
-	if len(item.HttpClientConfig) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"http_client_config":`...)
-		w = basictl.JSONWriteString(w, item.HttpClientConfig)
-	}
-	return append(w, '}'), nil
-}
-
-func (item *StatshousePromTarget) MarshalJSON() ([]byte, error) {
-	return item.WriteJSON(nil)
-}
-
-func (item *StatshousePromTarget) UnmarshalJSON(b []byte) error {
-	j, err := JsonBytesToInterface(b)
-	if err != nil {
-		return ErrorInvalidJSON("statshouse.promTarget", err.Error())
-	}
-	if err = item.readJSON(j); err != nil {
-		return ErrorInvalidJSON("statshouse.promTarget", err.Error())
-	}
-	return nil
+	return append(w, '}')
 }
 
 type StatshousePromTargetBytes struct {
@@ -335,6 +630,7 @@ type StatshousePromTargetBytes struct {
 	LabelNameLengthLimit  int64
 	LabelValueLengthLimit int64
 	HttpClientConfig      []byte
+	MetricRelabelConfigs  []byte // Conditional: nat_fields_mask_arg.1
 }
 
 func (StatshousePromTargetBytes) TLName() string { return "statshouse.promTarget" }
@@ -358,6 +654,22 @@ func (item *StatshousePromTargetBytes) SetHonorLabels(v bool) {
 }
 func (item StatshousePromTargetBytes) IsSetHonorLabels() bool { return item.FieldsMask&(1<<1) != 0 }
 
+func (item *StatshousePromTargetBytes) SetMetricRelabelConfigs(v []byte, nat_fields_mask_arg *uint32) {
+	item.MetricRelabelConfigs = v
+	if nat_fields_mask_arg != nil {
+		*nat_fields_mask_arg |= 1 << 1
+	}
+}
+func (item *StatshousePromTargetBytes) ClearMetricRelabelConfigs(nat_fields_mask_arg *uint32) {
+	item.MetricRelabelConfigs = item.MetricRelabelConfigs[:0]
+	if nat_fields_mask_arg != nil {
+		*nat_fields_mask_arg &^= 1 << 1
+	}
+}
+func (item StatshousePromTargetBytes) IsSetMetricRelabelConfigs(nat_fields_mask_arg uint32) bool {
+	return nat_fields_mask_arg&(1<<1) != 0
+}
+
 func (item *StatshousePromTargetBytes) Reset() {
 	item.FieldsMask = 0
 	item.JobName = item.JobName[:0]
@@ -370,9 +682,10 @@ func (item *StatshousePromTargetBytes) Reset() {
 	item.LabelNameLengthLimit = 0
 	item.LabelValueLengthLimit = 0
 	item.HttpClientConfig = item.HttpClientConfig[:0]
+	item.MetricRelabelConfigs = item.MetricRelabelConfigs[:0]
 }
 
-func (item *StatshousePromTargetBytes) Read(w []byte) (_ []byte, err error) {
+func (item *StatshousePromTargetBytes) Read(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
 	}
@@ -382,7 +695,7 @@ func (item *StatshousePromTargetBytes) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.StringReadBytes(w, &item.Url); err != nil {
 		return w, err
 	}
-	if w, err = VectorDictionaryFieldString0BytesRead(w, &item.Labels); err != nil {
+	if w, err = BuiltinVectorDictionaryFieldStringBytesRead(w, &item.Labels); err != nil {
 		return w, err
 	}
 	if w, err = basictl.LongRead(w, &item.ScrapeInterval); err != nil {
@@ -403,175 +716,312 @@ func (item *StatshousePromTargetBytes) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.LongRead(w, &item.LabelValueLengthLimit); err != nil {
 		return w, err
 	}
-	return basictl.StringReadBytes(w, &item.HttpClientConfig)
+	if w, err = basictl.StringReadBytes(w, &item.HttpClientConfig); err != nil {
+		return w, err
+	}
+	if nat_fields_mask_arg&(1<<1) != 0 {
+		if w, err = basictl.StringReadBytes(w, &item.MetricRelabelConfigs); err != nil {
+			return w, err
+		}
+	} else {
+		item.MetricRelabelConfigs = item.MetricRelabelConfigs[:0]
+	}
+	return w, nil
 }
 
-func (item *StatshousePromTargetBytes) Write(w []byte) (_ []byte, err error) {
+// This method is general version of Write, use it instead!
+func (item *StatshousePromTargetBytes) WriteGeneral(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
+	return item.Write(w, nat_fields_mask_arg), nil
+}
+
+func (item *StatshousePromTargetBytes) Write(w []byte, nat_fields_mask_arg uint32) []byte {
 	w = basictl.NatWrite(w, item.FieldsMask)
-	if w, err = basictl.StringWriteBytes(w, item.JobName); err != nil {
-		return w, err
-	}
-	if w, err = basictl.StringWriteBytes(w, item.Url); err != nil {
-		return w, err
-	}
-	if w, err = VectorDictionaryFieldString0BytesWrite(w, item.Labels); err != nil {
-		return w, err
-	}
+	w = basictl.StringWriteBytes(w, item.JobName)
+	w = basictl.StringWriteBytes(w, item.Url)
+	w = BuiltinVectorDictionaryFieldStringBytesWrite(w, item.Labels)
 	w = basictl.LongWrite(w, item.ScrapeInterval)
 	w = basictl.LongWrite(w, item.ScrapeTimeout)
 	w = basictl.LongWrite(w, item.BodySizeLimit)
 	w = basictl.LongWrite(w, item.LabelLimit)
 	w = basictl.LongWrite(w, item.LabelNameLengthLimit)
 	w = basictl.LongWrite(w, item.LabelValueLengthLimit)
-	return basictl.StringWriteBytes(w, item.HttpClientConfig)
+	w = basictl.StringWriteBytes(w, item.HttpClientConfig)
+	if nat_fields_mask_arg&(1<<1) != 0 {
+		w = basictl.StringWriteBytes(w, item.MetricRelabelConfigs)
+	}
+	return w
 }
 
-func (item *StatshousePromTargetBytes) ReadBoxed(w []byte) (_ []byte, err error) {
+func (item *StatshousePromTargetBytes) ReadBoxed(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xac5296df); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.Read(w, nat_fields_mask_arg)
 }
 
-func (item *StatshousePromTargetBytes) WriteBoxed(w []byte) ([]byte, error) {
+// This method is general version of WriteBoxed, use it instead!
+func (item *StatshousePromTargetBytes) WriteBoxedGeneral(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
+	return item.WriteBoxed(w, nat_fields_mask_arg), nil
+}
+
+func (item *StatshousePromTargetBytes) WriteBoxed(w []byte, nat_fields_mask_arg uint32) []byte {
 	w = basictl.NatWrite(w, 0xac5296df)
-	return item.Write(w)
+	return item.Write(w, nat_fields_mask_arg)
 }
 
-func (item StatshousePromTargetBytes) String() string {
-	w, err := item.WriteJSON(nil)
-	if err != nil {
-		return err.Error()
-	}
-	return string(w)
-}
+func (item *StatshousePromTargetBytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask_arg uint32) error {
+	var propFieldsMaskPresented bool
+	var propJobNamePresented bool
+	var propUrlPresented bool
+	var propLabelsPresented bool
+	var propScrapeIntervalPresented bool
+	var trueTypeHonorTimestampsPresented bool
+	var trueTypeHonorTimestampsValue bool
+	var trueTypeHonorLabelsPresented bool
+	var trueTypeHonorLabelsValue bool
+	var propScrapeTimeoutPresented bool
+	var propBodySizeLimitPresented bool
+	var propLabelLimitPresented bool
+	var propLabelNameLengthLimitPresented bool
+	var propLabelValueLengthLimitPresented bool
+	var propHttpClientConfigPresented bool
+	var propMetricRelabelConfigsPresented bool
 
-func StatshousePromTargetBytes__ReadJSON(item *StatshousePromTargetBytes, j interface{}) error {
-	return item.readJSON(j)
-}
-func (item *StatshousePromTargetBytes) readJSON(j interface{}) error {
-	_jm, _ok := j.(map[string]interface{})
-	if j != nil && !_ok {
-		return ErrorInvalidJSON("statshouse.promTarget", "expected json object")
-	}
-	_jFieldsMask := _jm["fields_mask"]
-	delete(_jm, "fields_mask")
-	if err := JsonReadUint32(_jFieldsMask, &item.FieldsMask); err != nil {
-		return err
-	}
-	_jJobName := _jm["job_name"]
-	delete(_jm, "job_name")
-	if err := JsonReadStringBytes(_jJobName, &item.JobName); err != nil {
-		return err
-	}
-	_jUrl := _jm["url"]
-	delete(_jm, "url")
-	if err := JsonReadStringBytes(_jUrl, &item.Url); err != nil {
-		return err
-	}
-	_jLabels := _jm["labels"]
-	delete(_jm, "labels")
-	_jScrapeInterval := _jm["scrape_interval"]
-	delete(_jm, "scrape_interval")
-	if err := JsonReadInt64(_jScrapeInterval, &item.ScrapeInterval); err != nil {
-		return err
-	}
-	_jHonorTimestamps := _jm["honor_timestamps"]
-	delete(_jm, "honor_timestamps")
-	_jHonorLabels := _jm["honor_labels"]
-	delete(_jm, "honor_labels")
-	_jScrapeTimeout := _jm["scrape_timeout"]
-	delete(_jm, "scrape_timeout")
-	if err := JsonReadInt64(_jScrapeTimeout, &item.ScrapeTimeout); err != nil {
-		return err
-	}
-	_jBodySizeLimit := _jm["body_size_limit"]
-	delete(_jm, "body_size_limit")
-	if err := JsonReadInt64(_jBodySizeLimit, &item.BodySizeLimit); err != nil {
-		return err
-	}
-	_jLabelLimit := _jm["label_limit"]
-	delete(_jm, "label_limit")
-	if err := JsonReadInt64(_jLabelLimit, &item.LabelLimit); err != nil {
-		return err
-	}
-	_jLabelNameLengthLimit := _jm["label_name_length_limit"]
-	delete(_jm, "label_name_length_limit")
-	if err := JsonReadInt64(_jLabelNameLengthLimit, &item.LabelNameLengthLimit); err != nil {
-		return err
-	}
-	_jLabelValueLengthLimit := _jm["label_value_length_limit"]
-	delete(_jm, "label_value_length_limit")
-	if err := JsonReadInt64(_jLabelValueLengthLimit, &item.LabelValueLengthLimit); err != nil {
-		return err
-	}
-	_jHttpClientConfig := _jm["http_client_config"]
-	delete(_jm, "http_client_config")
-	if err := JsonReadStringBytes(_jHttpClientConfig, &item.HttpClientConfig); err != nil {
-		return err
-	}
-	for k := range _jm {
-		return ErrorInvalidJSONExcessElement("statshouse.promTarget", k)
-	}
-	if _jHonorTimestamps != nil {
-		_bit := false
-		if err := JsonReadBool(_jHonorTimestamps, &_bit); err != nil {
-			return err
+	if in != nil {
+		in.Delim('{')
+		if !in.Ok() {
+			return in.Error()
 		}
-		if _bit {
+		for !in.IsDelim('}') {
+			key := in.UnsafeFieldName(true)
+			in.WantColon()
+			switch key {
+			case "fields_mask":
+				if propFieldsMaskPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "fields_mask")
+				}
+				if err := Json2ReadUint32(in, &item.FieldsMask); err != nil {
+					return err
+				}
+				propFieldsMaskPresented = true
+			case "job_name":
+				if propJobNamePresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "job_name")
+				}
+				if err := Json2ReadStringBytes(in, &item.JobName); err != nil {
+					return err
+				}
+				propJobNamePresented = true
+			case "url":
+				if propUrlPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "url")
+				}
+				if err := Json2ReadStringBytes(in, &item.Url); err != nil {
+					return err
+				}
+				propUrlPresented = true
+			case "labels":
+				if propLabelsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "labels")
+				}
+				if err := BuiltinVectorDictionaryFieldStringBytesReadJSON(legacyTypeNames, in, &item.Labels); err != nil {
+					return err
+				}
+				propLabelsPresented = true
+			case "scrape_interval":
+				if propScrapeIntervalPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "scrape_interval")
+				}
+				if err := Json2ReadInt64(in, &item.ScrapeInterval); err != nil {
+					return err
+				}
+				propScrapeIntervalPresented = true
+			case "honor_timestamps":
+				if trueTypeHonorTimestampsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "honor_timestamps")
+				}
+				if err := Json2ReadBool(in, &trueTypeHonorTimestampsValue); err != nil {
+					return err
+				}
+				trueTypeHonorTimestampsPresented = true
+			case "honor_labels":
+				if trueTypeHonorLabelsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "honor_labels")
+				}
+				if err := Json2ReadBool(in, &trueTypeHonorLabelsValue); err != nil {
+					return err
+				}
+				trueTypeHonorLabelsPresented = true
+			case "scrape_timeout":
+				if propScrapeTimeoutPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "scrape_timeout")
+				}
+				if err := Json2ReadInt64(in, &item.ScrapeTimeout); err != nil {
+					return err
+				}
+				propScrapeTimeoutPresented = true
+			case "body_size_limit":
+				if propBodySizeLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "body_size_limit")
+				}
+				if err := Json2ReadInt64(in, &item.BodySizeLimit); err != nil {
+					return err
+				}
+				propBodySizeLimitPresented = true
+			case "label_limit":
+				if propLabelLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "label_limit")
+				}
+				if err := Json2ReadInt64(in, &item.LabelLimit); err != nil {
+					return err
+				}
+				propLabelLimitPresented = true
+			case "label_name_length_limit":
+				if propLabelNameLengthLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "label_name_length_limit")
+				}
+				if err := Json2ReadInt64(in, &item.LabelNameLengthLimit); err != nil {
+					return err
+				}
+				propLabelNameLengthLimitPresented = true
+			case "label_value_length_limit":
+				if propLabelValueLengthLimitPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "label_value_length_limit")
+				}
+				if err := Json2ReadInt64(in, &item.LabelValueLengthLimit); err != nil {
+					return err
+				}
+				propLabelValueLengthLimitPresented = true
+			case "http_client_config":
+				if propHttpClientConfigPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "http_client_config")
+				}
+				if err := Json2ReadStringBytes(in, &item.HttpClientConfig); err != nil {
+					return err
+				}
+				propHttpClientConfigPresented = true
+			case "metric_relabel_configs":
+				if propMetricRelabelConfigsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.promTarget", "metric_relabel_configs")
+				}
+				if nat_fields_mask_arg&(1<<1) == 0 {
+					return ErrorInvalidJSON("statshouse.promTarget", "field 'metric_relabel_configs' is defined, while corresponding implicit fieldmask bit is 0")
+				}
+				if err := Json2ReadStringBytes(in, &item.MetricRelabelConfigs); err != nil {
+					return err
+				}
+				propMetricRelabelConfigsPresented = true
+			default:
+				return ErrorInvalidJSONExcessElement("statshouse.promTarget", key)
+			}
+			in.WantComma()
+		}
+		in.Delim('}')
+		if !in.Ok() {
+			return in.Error()
+		}
+	}
+	if !propFieldsMaskPresented {
+		item.FieldsMask = 0
+	}
+	if !propJobNamePresented {
+		item.JobName = item.JobName[:0]
+	}
+	if !propUrlPresented {
+		item.Url = item.Url[:0]
+	}
+	if !propLabelsPresented {
+		item.Labels = item.Labels[:0]
+	}
+	if !propScrapeIntervalPresented {
+		item.ScrapeInterval = 0
+	}
+	if !propScrapeTimeoutPresented {
+		item.ScrapeTimeout = 0
+	}
+	if !propBodySizeLimitPresented {
+		item.BodySizeLimit = 0
+	}
+	if !propLabelLimitPresented {
+		item.LabelLimit = 0
+	}
+	if !propLabelNameLengthLimitPresented {
+		item.LabelNameLengthLimit = 0
+	}
+	if !propLabelValueLengthLimitPresented {
+		item.LabelValueLengthLimit = 0
+	}
+	if !propHttpClientConfigPresented {
+		item.HttpClientConfig = item.HttpClientConfig[:0]
+	}
+	if !propMetricRelabelConfigsPresented {
+		item.MetricRelabelConfigs = item.MetricRelabelConfigs[:0]
+	}
+	if trueTypeHonorTimestampsPresented {
+		if trueTypeHonorTimestampsValue {
 			item.FieldsMask |= 1 << 0
-		} else {
-			item.FieldsMask &^= 1 << 0
 		}
 	}
-	if _jHonorLabels != nil {
-		_bit := false
-		if err := JsonReadBool(_jHonorLabels, &_bit); err != nil {
-			return err
-		}
-		if _bit {
+	if trueTypeHonorLabelsPresented {
+		if trueTypeHonorLabelsValue {
 			item.FieldsMask |= 1 << 1
-		} else {
-			item.FieldsMask &^= 1 << 1
 		}
 	}
-	if err := VectorDictionaryFieldString0BytesReadJSON(_jLabels, &item.Labels); err != nil {
-		return err
+	// tries to set bit to zero if it is 1
+	if trueTypeHonorTimestampsPresented && !trueTypeHonorTimestampsValue && (item.FieldsMask&(1<<0) != 0) {
+		return ErrorInvalidJSON("statshouse.promTarget", "fieldmask bit fields_mask.0 is indefinite because of the contradictions in values")
+	}
+	// tries to set bit to zero if it is 1
+	if trueTypeHonorLabelsPresented && !trueTypeHonorLabelsValue && (item.FieldsMask&(1<<1) != 0) {
+		return ErrorInvalidJSON("statshouse.promTarget", "fieldmask bit fields_mask.0 is indefinite because of the contradictions in values")
 	}
 	return nil
 }
 
-func (item *StatshousePromTargetBytes) WriteJSON(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(false, w)
+// This method is general version of WriteJSON, use it instead!
+func (item *StatshousePromTargetBytes) WriteJSONGeneral(w []byte, nat_fields_mask_arg uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask_arg), nil
 }
-func (item *StatshousePromTargetBytes) WriteJSONOpt(short bool, w []byte) (_ []byte, err error) {
+
+func (item *StatshousePromTargetBytes) WriteJSON(w []byte, nat_fields_mask_arg uint32) []byte {
+	return item.WriteJSONOpt(true, false, w, nat_fields_mask_arg)
+}
+func (item *StatshousePromTargetBytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask_arg uint32) []byte {
 	w = append(w, '{')
-	if item.FieldsMask != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"fields_mask":`...)
-		w = basictl.JSONWriteUint32(w, item.FieldsMask)
+	backupIndexFieldsMask := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"fields_mask":`...)
+	w = basictl.JSONWriteUint32(w, item.FieldsMask)
+	if (item.FieldsMask != 0) == false {
+		w = w[:backupIndexFieldsMask]
 	}
-	if len(item.JobName) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"job_name":`...)
-		w = basictl.JSONWriteStringBytes(w, item.JobName)
+	backupIndexJobName := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"job_name":`...)
+	w = basictl.JSONWriteStringBytes(w, item.JobName)
+	if (len(item.JobName) != 0) == false {
+		w = w[:backupIndexJobName]
 	}
-	if len(item.Url) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"url":`...)
-		w = basictl.JSONWriteStringBytes(w, item.Url)
+	backupIndexUrl := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"url":`...)
+	w = basictl.JSONWriteStringBytes(w, item.Url)
+	if (len(item.Url) != 0) == false {
+		w = w[:backupIndexUrl]
 	}
-	if len(item.Labels) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"labels":`...)
-		if w, err = VectorDictionaryFieldString0BytesWriteJSONOpt(short, w, item.Labels); err != nil {
-			return w, err
-		}
+	backupIndexLabels := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"labels":`...)
+	w = BuiltinVectorDictionaryFieldStringBytesWriteJSONOpt(newTypeNames, short, w, item.Labels)
+	if (len(item.Labels) != 0) == false {
+		w = w[:backupIndexLabels]
 	}
-	if item.ScrapeInterval != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"scrape_interval":`...)
-		w = basictl.JSONWriteInt64(w, item.ScrapeInterval)
+	backupIndexScrapeInterval := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"scrape_interval":`...)
+	w = basictl.JSONWriteInt64(w, item.ScrapeInterval)
+	if (item.ScrapeInterval != 0) == false {
+		w = w[:backupIndexScrapeInterval]
 	}
 	if item.FieldsMask&(1<<0) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -581,176 +1031,52 @@ func (item *StatshousePromTargetBytes) WriteJSONOpt(short bool, w []byte) (_ []b
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"honor_labels":true`...)
 	}
-	if item.ScrapeTimeout != 0 {
+	backupIndexScrapeTimeout := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"scrape_timeout":`...)
+	w = basictl.JSONWriteInt64(w, item.ScrapeTimeout)
+	if (item.ScrapeTimeout != 0) == false {
+		w = w[:backupIndexScrapeTimeout]
+	}
+	backupIndexBodySizeLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"body_size_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.BodySizeLimit)
+	if (item.BodySizeLimit != 0) == false {
+		w = w[:backupIndexBodySizeLimit]
+	}
+	backupIndexLabelLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"label_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.LabelLimit)
+	if (item.LabelLimit != 0) == false {
+		w = w[:backupIndexLabelLimit]
+	}
+	backupIndexLabelNameLengthLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"label_name_length_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.LabelNameLengthLimit)
+	if (item.LabelNameLengthLimit != 0) == false {
+		w = w[:backupIndexLabelNameLengthLimit]
+	}
+	backupIndexLabelValueLengthLimit := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"label_value_length_limit":`...)
+	w = basictl.JSONWriteInt64(w, item.LabelValueLengthLimit)
+	if (item.LabelValueLengthLimit != 0) == false {
+		w = w[:backupIndexLabelValueLengthLimit]
+	}
+	backupIndexHttpClientConfig := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"http_client_config":`...)
+	w = basictl.JSONWriteStringBytes(w, item.HttpClientConfig)
+	if (len(item.HttpClientConfig) != 0) == false {
+		w = w[:backupIndexHttpClientConfig]
+	}
+	if nat_fields_mask_arg&(1<<1) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"scrape_timeout":`...)
-		w = basictl.JSONWriteInt64(w, item.ScrapeTimeout)
+		w = append(w, `"metric_relabel_configs":`...)
+		w = basictl.JSONWriteStringBytes(w, item.MetricRelabelConfigs)
 	}
-	if item.BodySizeLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"body_size_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.BodySizeLimit)
-	}
-	if item.LabelLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"label_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.LabelLimit)
-	}
-	if item.LabelNameLengthLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"label_name_length_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.LabelNameLengthLimit)
-	}
-	if item.LabelValueLengthLimit != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"label_value_length_limit":`...)
-		w = basictl.JSONWriteInt64(w, item.LabelValueLengthLimit)
-	}
-	if len(item.HttpClientConfig) != 0 {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = append(w, `"http_client_config":`...)
-		w = basictl.JSONWriteStringBytes(w, item.HttpClientConfig)
-	}
-	return append(w, '}'), nil
-}
-
-func (item *StatshousePromTargetBytes) MarshalJSON() ([]byte, error) {
-	return item.WriteJSON(nil)
-}
-
-func (item *StatshousePromTargetBytes) UnmarshalJSON(b []byte) error {
-	j, err := JsonBytesToInterface(b)
-	if err != nil {
-		return ErrorInvalidJSON("statshouse.promTarget", err.Error())
-	}
-	if err = item.readJSON(j); err != nil {
-		return ErrorInvalidJSON("statshouse.promTarget", err.Error())
-	}
-	return nil
-}
-
-func VectorStatshousePromTarget0Read(w []byte, vec *[]StatshousePromTarget) (_ []byte, err error) {
-	var l uint32
-	if w, err = basictl.NatRead(w, &l); err != nil {
-		return w, err
-	}
-	if err = basictl.CheckLengthSanity(w, l, 4); err != nil {
-		return w, err
-	}
-	if uint32(cap(*vec)) < l {
-		*vec = make([]StatshousePromTarget, l)
-	} else {
-		*vec = (*vec)[:l]
-	}
-	for i := range *vec {
-		if w, err = (*vec)[i].Read(w); err != nil {
-			return w, err
-		}
-	}
-	return w, nil
-}
-
-func VectorStatshousePromTarget0Write(w []byte, vec []StatshousePromTarget) (_ []byte, err error) {
-	w = basictl.NatWrite(w, uint32(len(vec)))
-	for _, elem := range vec {
-		if w, err = elem.Write(w); err != nil {
-			return w, err
-		}
-	}
-	return w, nil
-}
-
-func VectorStatshousePromTarget0ReadJSON(j interface{}, vec *[]StatshousePromTarget) error {
-	l, _arr, err := JsonReadArray("[]StatshousePromTarget", j)
-	if err != nil {
-		return err
-	}
-	if cap(*vec) < l {
-		*vec = make([]StatshousePromTarget, l)
-	} else {
-		*vec = (*vec)[:l]
-	}
-	for i := range *vec {
-		if err := StatshousePromTarget__ReadJSON(&(*vec)[i], _arr[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func VectorStatshousePromTarget0WriteJSON(w []byte, vec []StatshousePromTarget) (_ []byte, err error) {
-	return VectorStatshousePromTarget0WriteJSONOpt(false, w, vec)
-}
-func VectorStatshousePromTarget0WriteJSONOpt(short bool, w []byte, vec []StatshousePromTarget) (_ []byte, err error) {
-	w = append(w, '[')
-	for _, elem := range vec {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		if w, err = elem.WriteJSONOpt(short, w); err != nil {
-			return w, err
-		}
-	}
-	return append(w, ']'), nil
-}
-
-func VectorStatshousePromTarget0BytesRead(w []byte, vec *[]StatshousePromTargetBytes) (_ []byte, err error) {
-	var l uint32
-	if w, err = basictl.NatRead(w, &l); err != nil {
-		return w, err
-	}
-	if err = basictl.CheckLengthSanity(w, l, 4); err != nil {
-		return w, err
-	}
-	if uint32(cap(*vec)) < l {
-		*vec = make([]StatshousePromTargetBytes, l)
-	} else {
-		*vec = (*vec)[:l]
-	}
-	for i := range *vec {
-		if w, err = (*vec)[i].Read(w); err != nil {
-			return w, err
-		}
-	}
-	return w, nil
-}
-
-func VectorStatshousePromTarget0BytesWrite(w []byte, vec []StatshousePromTargetBytes) (_ []byte, err error) {
-	w = basictl.NatWrite(w, uint32(len(vec)))
-	for _, elem := range vec {
-		if w, err = elem.Write(w); err != nil {
-			return w, err
-		}
-	}
-	return w, nil
-}
-
-func VectorStatshousePromTarget0BytesReadJSON(j interface{}, vec *[]StatshousePromTargetBytes) error {
-	l, _arr, err := JsonReadArray("[]StatshousePromTargetBytes", j)
-	if err != nil {
-		return err
-	}
-	if cap(*vec) < l {
-		*vec = make([]StatshousePromTargetBytes, l)
-	} else {
-		*vec = (*vec)[:l]
-	}
-	for i := range *vec {
-		if err := StatshousePromTargetBytes__ReadJSON(&(*vec)[i], _arr[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func VectorStatshousePromTarget0BytesWriteJSON(w []byte, vec []StatshousePromTargetBytes) (_ []byte, err error) {
-	return VectorStatshousePromTarget0BytesWriteJSONOpt(false, w, vec)
-}
-func VectorStatshousePromTarget0BytesWriteJSONOpt(short bool, w []byte, vec []StatshousePromTargetBytes) (_ []byte, err error) {
-	w = append(w, '[')
-	for _, elem := range vec {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		if w, err = elem.WriteJSONOpt(short, w); err != nil {
-			return w, err
-		}
-	}
-	return append(w, ']'), nil
+	return append(w, '}')
 }

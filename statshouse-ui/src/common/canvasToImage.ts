@@ -24,7 +24,7 @@ export async function toBlob(canvas: HTMLCanvasElement | OffscreenCanvas): Promi
   });
 }
 export function createCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas {
-  if (typeof window.OffscreenCanvas === 'function') {
+  if (typeof window.OffscreenCanvas === 'function' && width > 0 && height > 0) {
     return new window.OffscreenCanvas(width, height);
   }
   const ext = document.createElement('canvas');
@@ -45,7 +45,7 @@ export async function canvasToImageData(
   const ext_width = result_width ?? width;
   const ext_height = result_height ?? (result_width ? Math.round((result_width / width) * height) : height);
   const ext = createCanvas(ext_width, ext_height);
-  const ctx = ext.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+  const ctx = ext.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
   if (ctx) {
     ctx.drawImage(canvas, x, y, width, height, 0, 0, ext_width, ext_height);
   }
@@ -73,7 +73,7 @@ export async function setBackgroundColor(
   const ext_width = result_width ?? width;
   const ext_height = result_height ?? (result_width ? Math.round((result_width / width) * height) : height);
   const ext = createCanvas(ext_width, ext_height);
-  const ctx = ext.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+  const ctx = ext.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
   if (ctx) {
     ctx.globalAlpha = 1;
     ctx.fillStyle = color;

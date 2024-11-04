@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -79,7 +79,7 @@ func testRPCGraceful(t *rapid.T) {
 			if debugPrint {
 				fmt.Printf("%v serve of %p\n", time.Now(), s)
 			}
-			if err := s.Serve(ln2); err != nil && err != ErrServerClosed {
+			if err := s.Serve(ln2); err != nil {
 				t.Fatal(err)
 			}
 			if debugPrint {

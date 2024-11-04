@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,13 +13,15 @@ import (
 
 type ClientOptions struct {
 	Logf                LoggerFunc // defaults to log.Printf; set to NoopLogf to disable all logging
-	Hooks               func() ClientHookState
+	Hooks               func() ClientHooks
 	TrustedSubnetGroups [][]*net.IPNet
 	ForceEncryption     bool
 	CryptoKey           string
 	ConnReadBufSize     int
 	ConnWriteBufSize    int
-	PongTimeout         time.Duration
+	PacketTimeout       time.Duration
+	ProtocolVersion     uint32        // if >0, will send modified nonce packet. Server must be upgraded to at least ignore higher bits of nonce.Schema
+	DefaultTimeout      time.Duration // has no effect if <= 0
 
 	trustedSubnetGroupsParseErrors []error
 }
@@ -32,7 +34,7 @@ func ClientWithLogf(f LoggerFunc) ClientOptionsFunc {
 	}
 }
 
-func ClientWithHooks(hooks func() ClientHookState) ClientOptionsFunc {
+func ClientWithHooks(hooks func() ClientHooks) ClientOptionsFunc {
 	return func(o *ClientOptions) {
 		o.Hooks = hooks
 	}
@@ -62,6 +64,8 @@ func ClientWithConnReadBufSize(size int) ClientOptionsFunc {
 	return func(o *ClientOptions) {
 		if size > 0 {
 			o.ConnReadBufSize = size
+		} else {
+			o.ConnReadBufSize = DefaultClientConnReadBufSize
 		}
 	}
 }
@@ -70,14 +74,33 @@ func ClientWithConnWriteBufSize(size int) ClientOptionsFunc {
 	return func(o *ClientOptions) {
 		if size > 0 {
 			o.ConnWriteBufSize = size
+		} else {
+			o.ConnWriteBufSize = DefaultClientConnWriteBufSize
 		}
 	}
 }
 
-func ClientWithPongTimeout(timeout time.Duration) ClientOptionsFunc {
+// Changing this setting is not recommended and only added for use in testing environments.
+// timeout <= 0 means no timeout. This can lead to connections stuck forever.
+// timeout on the order of ping latency will lead to random disconnects and even inability to communicate at all.
+func ClientWithPacketTimeout(timeout time.Duration) ClientOptionsFunc {
 	return func(o *ClientOptions) {
-		if timeout > 0 {
-			o.PongTimeout = timeout
-		}
+		o.PacketTimeout = timeout
 	}
 }
+
+func ClientWithProtocolVersion(protocolVersion uint32) ClientOptionsFunc {
+	return func(o *ClientOptions) {
+		o.ProtocolVersion = protocolVersion
+	}
+}
+
+// Default timeout for requests with no timeout in context
+// Not recommended, as affects all requests even those which need infinite timeout (some long polls)
+// If this timeout set, and you need request with an infinite timeout, use Extra.SetTimeoutMs(0)
+// Commented out for now to prevent abuse.
+// func ClientWithRequestTimeout(timeout time.Duration) ClientOptionsFunc {
+//	return func(opts *ClientOptions) {
+//		opts.DefaultTimeout = timeout
+//	}
+// }

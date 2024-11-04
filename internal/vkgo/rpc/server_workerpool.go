@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,17 +13,22 @@ import (
 
 const workerGCDuration = time.Second * 60
 
-type worker struct {
-	s      *Server
-	ch     chan *HandlerContext
-	gcTime time.Time
+type workerWork struct {
+	sc   *serverConn
+	hctx *HandlerContext
 }
 
-func (w *worker) run(wg *WaitGroup) {
+type worker struct {
+	workerPool *workerPool
+	ch         chan workerWork
+	gcTime     time.Time
+}
+
+func (w *worker) run(wg *sync.WaitGroup) {
 	defer wg.Done()
-	for hctx := range w.ch {
-		w.s.handle(hctx)
-		w.s.workerPool.Put(w)
+	for work := range w.ch {
+		work.sc.handle(work.hctx)
+		w.workerPool.Put(w)
 	}
 }
 
@@ -65,13 +70,13 @@ func (t *workerPool) Close() {
 	t.cond.Broadcast()
 }
 
-func (t *workerPool) Created() int {
+func (t *workerPool) Created() (current int, total int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.created
+	return t.created, t.create
 }
 
-func (t *workerPool) Get(wg *WaitGroup) (*worker, bool) {
+func (t *workerPool) Get(wg *sync.WaitGroup) (*worker, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

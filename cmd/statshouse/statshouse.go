@@ -20,33 +20,32 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/stats"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
-
 	"github.com/vkcom/statshouse/internal/agent"
 	"github.com/vkcom/statshouse/internal/aggregator"
+	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/vkcom/statshouse/internal/env"
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/mapping"
 	"github.com/vkcom/statshouse/internal/metajournal"
 	"github.com/vkcom/statshouse/internal/pcache"
 	"github.com/vkcom/statshouse/internal/receiver"
-	"github.com/vkcom/statshouse/internal/receiver/prometheus"
+	"github.com/vkcom/statshouse/internal/stats"
+	"github.com/vkcom/statshouse/internal/util"
+	"github.com/vkcom/statshouse/internal/vkgo/build"
 	"github.com/vkcom/statshouse/internal/vkgo/platform"
+	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
 )
 
 var (
 	logOk  *log.Logger
 	logErr *log.Logger
 	logFd  *os.File
-
-	sigLogRotate = syscall.SIGUSR1
 )
 
 func reopenLog() {
@@ -61,7 +60,10 @@ func reopenLog() {
 	logErr.SetOutput(logFd)
 }
 
+var globalStartTime = time.Now() // good enough for us
+
 func main() {
+	// data_model.PrintLinearMaxHostProbabilities()
 	os.Exit(runMain())
 }
 
@@ -151,11 +153,15 @@ func runMain() int {
 			build.FlagParseShowVersionHelp()
 		case "ingress_proxy", "-ingress_proxy", "--ingress_proxy":
 			argvAddCommonFlags()
+			argvAddAgentFlags(false)
 			argvAddIngressProxyFlags()
 			argv.configAgent = agent.DefaultConfig()
 			build.FlagParseShowVersionHelp()
 		case "tag_mapping", "-tag_mapping", "--tag_mapping":
 			mainTagMapping()
+			return 0
+		case "publish_tag_drafts", "-publish_tag_drafts", "--publish_tag_drafts":
+			mainPublishTagDrafts()
 			return 0
 		default:
 			_, _ = fmt.Fprintf(os.Stderr, "Unknown verb %q:\n", verb)
@@ -201,11 +207,12 @@ func runMain() int {
 			logErr.Printf("failed to open disk cache: %v", err)
 			return 1
 		}
-		defer func() {
-			if err := dc.Close(); err != nil {
-				logErr.Printf("failed to close disk cache: %v", err)
-			}
-		}()
+		// we do not want to delay shutdown for saving cache
+		// defer func() {
+		//	if err := dc.Close(); err != nil {
+		//		logErr.Printf("failed to close disk cache: %v", err)
+		//	}
+		// }()
 	}
 
 	argv.configAgent.AggregatorAddresses = strings.Split(argv.aggAddr, ",")
@@ -241,6 +248,7 @@ func runMain() int {
 }
 
 func mainAgent(aesPwd string, dc *pcache.DiskCache) int {
+	startDiscCacheTime := time.Now() // we only have disk cache before. Be carefull when redesigning
 	argv.configAgent.Cluster = argv.cluster
 	if err := argv.configAgent.ValidateConfigSource(); err != nil {
 		logErr.Printf("%s", err)
@@ -258,29 +266,41 @@ func mainAgent(aesPwd string, dc *pcache.DiskCache) int {
 		runtime.GOMAXPROCS(argv.maxCores)
 	}
 
+	runPprof()
+
 	var (
 		receiversUDP  []*receiver.UDP
 		metricStorage = metajournal.MakeMetricsStorage(argv.configAgent.Cluster, dc, nil)
 	)
-	sh2, err := agent.MakeAgent("tcp4",
+	envLoader, _ := env.ListenEnvFile(argv.envFilePath)
+
+	sh2, err := agent.MakeAgent("tcp",
 		argv.cacheDir,
 		aesPwd,
 		argv.configAgent,
 		argv.customHostName,
 		format.TagValueIDComponentAgent,
 		metricStorage,
+		dc,
 		log.Printf,
-		func(a *agent.Agent, t time.Time) {
+		func(a *agent.Agent, unixNow uint32) {
 			k := data_model.Key{
-				Timestamp: uint32(t.Unix()),
+				Timestamp: unixNow,
 				Metric:    format.BuiltinMetricIDAgentUDPReceiveBufferSize,
 			}
 			for _, r := range receiversUDP {
 				v := float64(r.ReceiveBufferSize())
-				a.AddValueCounter(k, v, 1, nil)
+				a.AddValueCounter(k, v, 1, format.BuiltinMetricMetaAgentUDPReceiveBufferSize)
+			}
+			if dc != nil {
+				s, err := dc.DiskSizeBytes()
+				if err == nil {
+					a.AddValueCounter(data_model.Key{Timestamp: unixNow, Metric: format.BuiltinMetricIDAgentDiskCacheSize, Tags: [16]int32{0, 0, 0}}, float64(s), 1, format.BuiltinMetricMetaAgentDiskCacheSize)
+				}
 			}
 		},
-		nil)
+		nil,
+		envLoader)
 	if err != nil {
 		logErr.Printf("error creating Agent instance: %v", err)
 		return 1
@@ -297,16 +317,48 @@ func mainAgent(aesPwd string, dc *pcache.DiskCache) int {
 		logErr.Printf("--log-level should be either 'trace', 'info' or empty (which is synonym for 'info')")
 		return 1
 	}
-	for i := 0; i < argv.coresUDP; i++ {
-		u, err := receiver.ListenUDP(argv.listenAddr, argv.bufferSizeUDP, argv.coresUDP > 1, sh2, logPackets)
+	var mirrorUdpConn net.Conn
+	if argv.mirrorUdpAddr != "" {
+		logOk.Printf("mirror UDP addr %q", argv.mirrorUdpAddr)
+		var err error
+		mirrorUdpConn, err = net.Dial("udp", argv.mirrorUdpAddr)
 		if err != nil {
-			logErr.Printf("ListenUDP: %v", err)
-			return 1
+			logErr.Printf("failed to connect to mirror UDP addr %q: %v", argv.mirrorUdpAddr, err)
+			// not fatal, we can continue without mirror
+		} else {
+			defer func() { _ = mirrorUdpConn.Close() }()
 		}
-		defer func() { _ = u.Close() }()
-		receiversUDP = append(receiversUDP, u)
 	}
-	logOk.Printf("Listen UDP addr %q by %d cores", argv.listenAddr, argv.coresUDP)
+	listenUDP := func(network string, addr string) error {
+		if argv.coresUDP == 0 || addr == "" {
+			return nil
+		}
+		u, err := receiver.ListenUDP(network, addr, argv.bufferSizeUDP, false, sh2, mirrorUdpConn, logPackets)
+		if err != nil {
+			logErr.Printf("listen %q failed: %v", network, err)
+			return err
+		}
+		receiversUDP = append(receiversUDP, u)
+		for i := 1; i < argv.coresUDP; i++ {
+			dup, err := u.Duplicate()
+			if err != nil {
+				logErr.Printf("duplicate listen socket failed: %v", err)
+				return err
+			}
+			receiversUDP = append(receiversUDP, dup)
+		}
+		logOk.Printf("listen %q addr %q by %d cores", network, addr, argv.coresUDP)
+		return nil
+	}
+	if err := listenUDP("udp4", argv.listenAddr); err != nil {
+		return 1
+	}
+	if err := listenUDP("udp6", argv.listenAddrIPv6); err != nil {
+		return 1
+	}
+	if err := listenUDP("unixgram", argv.listenAddrUnix); err != nil {
+		return 1
+	}
 	sh2.Run(0, 0, 0)
 	metricStorage.Journal().Start(sh2, nil, sh2.LoadMetaMetricJournal)
 
@@ -324,9 +376,27 @@ func mainAgent(aesPwd string, dc *pcache.DiskCache) int {
 		argv.configAgent.Cluster,
 		logPackets,
 	)
-	tagsCacheSize := w.mapper.TagValueDiskCacheSize()
-	if tagsCacheSize != 0 {
-		logOk.Printf("Tag Value cache size %d", tagsCacheSize)
+	//code to populate cache for test below
+	//for i := 0; i != 10000000; i++ {
+	//	v := "hren_test_" + strconv.Itoa(i)
+	//	if err := dc.Set(ns, v, []byte(v), slowNow, time.Hour); err != nil {
+	//		log.Fatalf("hren")
+	//	}
+	//}
+	//dc.Close()
+	//code to test that cache cleanup does not affect normal cache look ups
+	//go func() {
+	//	ns := data_model.TagValueDiskNamespace + "default"
+	//	for {
+	//		time.Sleep(time.Second)
+	//		slowNow := time.Now()
+	//		_, _, _, err, _ := dc.Get(ns, "hren")
+	//		log.Printf("Get() took %v error %v", time.Since(slowNow), err)
+	//	}
+	//}()
+	tagsCacheEmpty := w.mapper.TagValueDiskCacheEmpty()
+	if !tagsCacheEmpty {
+		logOk.Printf("Tag Value cache not empty")
 	} else {
 		logOk.Printf("Tag Value cache empty, loading boostrap...")
 		mappings, ttl, err := sh2.GetTagMappingBootstrap(context.Background())
@@ -343,73 +413,81 @@ func mainAgent(aesPwd string, dc *pcache.DiskCache) int {
 		}
 	}
 
-	for _, u := range receiversUDP {
-		go func(u *receiver.UDP) {
+	receiversWG := sync.WaitGroup{}
+	for i, u := range receiversUDP {
+		receiversWG.Add(1)
+		go func(u *receiver.UDP, num int) {
 			err := u.Serve(w)
 			if err != nil {
 				logErr.Fatalf("Serve: %v", err)
 			}
-		}(u)
+			log.Printf("UDP listener %d finished", num)
+			receiversWG.Done()
+		}(u, i)
+	}
+	// UDP receivers are receiving data, so we consider agent started (not losing UDP packets already)
+	shutdownInfoReport(sh2, format.TagValueIDComponentAgent, argv.cacheDir, startDiscCacheTime)
+
+	// Open TCP ports
+	listeners := make([]net.Listener, 0, 2)
+	listeners = append(listeners, listen("tcp4", argv.listenAddr))
+	if argv.listenAddrIPv6 != "" {
+		listeners = append(listeners, listen("tcp6", argv.listenAddrIPv6))
 	}
 
-	runPromScraperAsync(!argv.promRemoteMod, w, sh2)
-	if argv.configAgent.RemoteWriteEnabled {
-		closer := prometheus.ServeRemoteWrite(argv.configAgent, w)
-		defer closer()
-	}
+	// Run pprof server
+	hijackTCP := rpc.NewHijackListener(listeners[0].Addr())
+	hijackHTTP := rpc.NewHijackListener(listeners[0].Addr())
+	defer func() { _ = hijackTCP.Close() }()
+	defer func() { _ = hijackHTTP.Close() }()
 
+	receiverTCP := receiver.NewTCPReceiver(sh2, logPackets)
+	go func() {
+		if err := receiverTCP.Serve(w, hijackTCP); err != nil {
+			logErr.Printf("error serving TCP: %v", err)
+		}
+	}()
+
+	receiverHTTP := receiver.NewHTTPReceiver(sh2, logPackets)
+	go func() {
+		if err := receiverHTTP.Serve(w, hijackHTTP); err != nil {
+			logErr.Printf("error serving HTTP: %v", err)
+		}
+	}()
+
+	// Run RPC server
 	receiverRPC := receiver.MakeRPCReceiver(sh2, w)
 	handlerRPC := &tlstatshouse.Handler{
 		RawAddMetricsBatch: receiverRPC.RawAddMetricsBatch,
 	}
-
-	var hijackListener *rpc.HijackListener
-	srv := rpc.NewServer(
-		rpc.ServerWithSocketHijackHandler(func(conn *rpc.HijackConnection) {
-			hijackListener.AddConnection(conn)
-		}),
+	metrics := util.NewRPCServerMetrics("statshouse_agent")
+	options := []rpc.ServerOptionsFunc{
 		rpc.ServerWithLogf(logErr.Printf),
 		rpc.ServerWithVersion(build.Info()),
 		rpc.ServerWithCryptoKeys([]string{aesPwd}),
 		rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
 		rpc.ServerWithHandler(handlerRPC.Handle),
-		rpc.ServerWithStatsHandler(statsHandler{receiversUDP: receiversUDP, receiverRPC: receiverRPC, sh2: sh2, metricsStorage: metricStorage}.handleStats))
-	defer func() { _ = srv.Close() }()
-	rpcLn, err := net.Listen("tcp4", argv.listenAddr)
-	if err != nil {
-		logErr.Fatalf("RPC listen failed: %v", err)
+		rpc.ServerWithStatsHandler(statsHandler{receiversUDP: receiversUDP, receiverRPC: receiverRPC, sh2: sh2, metricsStorage: metricStorage}.handleStats),
+		metrics.ServerWithMetrics,
 	}
-
-	hijackListener = rpc.NewHijackListener(rpcLn.Addr())
-	defer func() { _ = hijackListener.Close() }()
-
-	go func() {
-		err := srv.Serve(rpcLn)
-		if err != nil && err != rpc.ErrServerClosed {
-			logErr.Fatalf("RPC server failed: %v", err)
+	options = append(options, rpc.ServerWithSocketHijackHandler(func(conn *rpc.HijackConnection) {
+		if strings.HasPrefix(string(conn.Magic), receiver.TCPPrefix) {
+			conn.Magic = conn.Magic[len(receiver.TCPPrefix):]
+			hijackTCP.AddConnection(conn)
+			return
 		}
-	}()
-	if argv.pprofHTTP {
-		go func() { // serve pprof on RPC port
-			m := http.NewServeMux()
-			m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				remoteAddr, err := net.ResolveTCPAddr("tcp", r.RemoteAddr)
-				if err == nil && remoteAddr.IP.IsLoopback() {
-					http.DefaultServeMux.ServeHTTP(w, r)
-				} else {
-					w.WriteHeader(http.StatusUnauthorized)
-				}
-			})
-			logOk.Printf("Start listening pprof HTTP %q", argv.listenAddr)
-			s := http.Server{Handler: m}
-			_ = s.Serve(hijackListener)
-		}()
-	} else {
-		_ = hijackListener.Close() // will close all incoming connections
+		hijackHTTP.AddConnection(conn)
+	}))
+	srv := rpc.NewServer(options...)
+	defer metrics.Run(srv)()
+	for _, ln := range listeners {
+		go serveRPC(ln, srv)
 	}
 
+	// Run scrape
+	receiver.RunScrape(sh2, w)
 	if !argv.hardwareMetricScrapeDisable {
-		m, err := stats.NewCollectorManager(stats.CollectorManagerOptions{ScrapeInterval: argv.hardwareMetricScrapeInterval, HostName: argv.customHostName}, w, logErr)
+		m, err := stats.NewCollectorManager(stats.CollectorManagerOptions{ScrapeInterval: argv.hardwareMetricScrapeInterval, HostName: argv.customHostName}, w, envLoader, logErr)
 		if err != nil {
 			logErr.Println("failed to init hardware collector", err.Error())
 		} else {
@@ -423,28 +501,57 @@ func mainAgent(aesPwd string, dc *pcache.DiskCache) int {
 		}
 	}
 	chSignal := make(chan os.Signal, 1)
-	signal.Notify(chSignal, syscall.SIGINT, sigLogRotate)
+	signal.Notify(chSignal, syscall.SIGINT, syscall.SIGUSR1)
 
 loop:
 	for {
 		sig := <-chSignal
 		switch sig {
 		case syscall.SIGINT:
-			logOk.Printf("Shutting down...")
-			w.wait()
 			break loop
-
-		case sigLogRotate:
+		case syscall.SIGUSR1:
 			logOk.Printf("Logrotate")
 			reopenLog()
 		}
 	}
+	shutdownInfo := tlstatshouse.ShutdownInfo{}
+	now := time.Now()
+	shutdownInfo.StartShutdownTime = now.UnixNano()
 
+	logOk.Printf("Shutting down...")
+	logOk.Printf("1. Disabling sending new data to aggregators...")
+	sh2.DisableNewSends()
+	logOk.Printf("2. Waiting recent senders to finish sending data...")
+	sh2.WaitRecentSenders(time.Second * data_model.InsertDelay)
+	shutdownInfo.StopRecentSenders = shutdownInfoDuration(&now).Nanoseconds()
+	logOk.Printf("3. Closing UDP/unixdgram/RPC server and flusher...")
+	for _, u := range receiversUDP {
+		_ = u.Close()
+	}
+	sh2.ShutdownFlusher()
+	srv.Shutdown()
+	receiversWG.Wait()
+	shutdownInfo.StopReceivers = shutdownInfoDuration(&now).Nanoseconds()
+	logOk.Printf("4. All UDP readers finished...")
+	/// TODO - we receive almost no metrics via RPC, we do not want risk waiting here for the long time
+	/// _ = srv.Close()
+	/// logOk.Printf("5. RPC server stopped...")
+	sh2.WaitFlusher()
+	shutdownInfo.StopFlusher = shutdownInfoDuration(&now).Nanoseconds()
+	logOk.Printf("6. Flusher stopped, flushing remainig data to preprocessors...")
+	nonEmpty := sh2.FlushAllData()
+	shutdownInfo.StopFlushing = shutdownInfoDuration(&now).Nanoseconds()
+	logOk.Printf("7. Waiting preprocessor to save %d buckets of historic data...", nonEmpty)
+	sh2.WaitPreprocessor()
+	shutdownInfo.StopPreprocessor = shutdownInfoDuration(&now).Nanoseconds()
+	shutdownInfo.FinishShutdownTime = now.UnixNano()
+	shutdownInfoSave(argv.cacheDir, shutdownInfo)
 	logOk.Printf("Bye")
 	return 0
 }
 
 func mainAggregator(aesPwd string, dc *pcache.DiskCache) int {
+	startDiscCacheTime := time.Now() // we only have disk cache before. Be carefull when redesigning
 	if err := aggregator.ValidateConfigAggregator(argv.configAggregator); err != nil {
 		logErr.Printf("%s", err)
 		return 1
@@ -456,60 +563,138 @@ func mainAggregator(aesPwd string, dc *pcache.DiskCache) int {
 		logErr.Printf("--agg-addr to listen must be specified")
 		return 1
 	}
-	if err := aggregator.RunAggregator(dc, argv.cacheDir, argv.aggAddr, aesPwd, argv.configAggregator, argv.customHostName, argv.logLevel == "trace"); err != nil {
+	agg, err := aggregator.MakeAggregator(dc, argv.cacheDir, argv.aggAddr, aesPwd, argv.configAggregator, argv.customHostName, argv.logLevel == "trace")
+	if err != nil {
 		logErr.Printf("%v", err)
 		return 1
 	}
+	shutdownInfoReport(agg.Agent(), format.TagValueIDComponentAggregator, argv.cacheDir, startDiscCacheTime)
+
+	chSignal := make(chan os.Signal, 1)
+	signal.Notify(chSignal, syscall.SIGINT, syscall.SIGUSR1)
+
+loop:
+	for {
+		sig := <-chSignal
+		switch sig {
+		case syscall.SIGINT:
+			break loop
+		case syscall.SIGUSR1:
+			logOk.Printf("Aggregators do not support log rotation") // admin might expect rotation, tell them.
+		}
+	}
+	shutdownInfo := tlstatshouse.ShutdownInfo{}
+	now := time.Now()
+	shutdownInfo.StartShutdownTime = now.UnixNano()
+
+	logOk.Printf("Shutting down...")
+	logOk.Printf("1. Disabling inserting new data to clickhouses...")
+	agg.DisableNewInsert()
+	logOk.Printf("2. Waiting all inserts to finish...")
+	agg.WaitInsertsFinish(data_model.ClickHouseTimeoutShutdown)
+	shutdownInfo.StopInserters = shutdownInfoDuration(&now).Nanoseconds()
+	// Now when inserts are finished and responses are in send queues of RPC connections,
+	// we can initiate shutdown by sending LetsFIN packets and waiting to actual FINs.
+	logOk.Printf("3. Starting gracefull RPC shutdown...")
+	agg.ShutdownRPCServer()
+	logOk.Printf("4. Waiting RPC clients to receive responses and disconnect...")
+	agg.WaitRPCServer(10 * time.Second)
+	shutdownInfo.StopRPCServer = shutdownInfoDuration(&now).Nanoseconds()
+	shutdownInfo.FinishShutdownTime = now.UnixNano()
+	shutdownInfoSave(argv.cacheDir, shutdownInfo)
+	logOk.Printf("Bye")
 	return 0
 }
 
-func mainIngressProxy(aesPwd string) int {
+func mainIngressProxy(aesPwd string) {
+	// Ensure proxy configuration is valid
+	config := argv.configIngress
+	config.Network = "tcp"
+	config.Cluster = argv.cluster
+	config.ExternalAddresses = strings.Split(argv.ingressExtAddr, ",")
+	config.ExternalAddressesIPv6 = strings.Split(argv.ingressExtAddrIPv6, ",")
+
+	// Ensure agent configuration is valid
 	if err := argv.configAgent.ValidateConfigSource(); err != nil {
-		logErr.Printf("%s", err)
-		return 1
+		logErr.Fatalf("%v", err)
 	}
+
+	runPprof()
+
+	// Run agent (we use agent instance for ingress proxy built-in metrics)
 	argv.configAgent.Cluster = argv.cluster
-	argv.configIngress.Cluster = argv.cluster
-
-	argv.configIngress.ExternalAddresses = strings.Split(argv.ingressExtAddr, ",")
-	if len(argv.configIngress.ExternalAddresses) != 3 {
-		logErr.Printf("-ingress-external-addr must contain comma-separated list of 3 external ingress proxy addresses")
-		return 1
-	}
-	argv.configIngress.Network = "tcp4"
-
-	// We use agent instance for ingress proxy built-in metrics
-	sh2, err := agent.MakeAgent("tcp4", argv.cacheDir, aesPwd, argv.configAgent, argv.customHostName,
-		format.TagValueIDComponentIngressProxy, nil, log.Printf, nil, nil)
+	sh2, err := agent.MakeAgent("tcp", argv.cacheDir, aesPwd, argv.configAgent, argv.customHostName,
+		format.TagValueIDComponentIngressProxy, nil, nil, log.Printf, nil, nil, nil)
 	if err != nil {
-		logErr.Printf("error creating Agent instance: %v", err)
-		return 1
+		logErr.Fatalf("error creating Agent instance: %v", err)
 	}
 	sh2.Run(0, 0, 0)
-	if err := aggregator.RunIngressProxy(sh2, aesPwd, argv.configIngress); err != nil {
-		logErr.Printf("%v", err)
-		return 1
+	if argv.ingressVersion == "2" {
+		ctx, cancel := context.WithCancel(context.Background())
+		exit := make(chan error, 1)
+		go func() {
+			exit <- aggregator.RunIngressProxy2(ctx, sh2, config, aesPwd)
+		}()
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, syscall.SIGINT)
+		select {
+		case <-sigint:
+			cancel()
+			select {
+			case <-exit:
+			case <-time.After(5 * time.Second):
+			}
+			logOk.Println("Buy")
+		case err := <-exit:
+			logErr.Println(err)
+			cancel()
+		}
+		return
 	}
-	return 0
+
+	// Ensure proxy configuration is valid
+	if len(config.ExternalAddresses) != 3 {
+		logErr.Fatalf("--ingress-external-addr must contain exactly 3 comma-separated addresses of ingress proxies, contains '%q'", strings.Join(config.ExternalAddresses, ","))
+	}
+	if len(config.IngressKeys) == 0 {
+		logErr.Fatalf("ingress proxy must have non-empty list of ingress crypto keys")
+	}
+
+	// Run ingress proxy
+	ln, err := rpc.Listen(config.Network, config.ListenAddr, false)
+	if err != nil {
+		logErr.Fatalf("Failed to listen on %s %s: %v", config.Network, config.ListenAddr, err)
+	}
+	err = aggregator.RunIngressProxy(ln, sh2, aesPwd, config)
+	if err != nil {
+		logErr.Fatalf("error running ingress proxy: %v", err)
+	}
 }
 
-func runPromScraperAsync(localMode bool, handler receiver.Handler, sh *agent.Agent) prometheus.Syncer {
-	syncer := prometheus.NewSyncer(logOk, logErr, sh.LoadPromTargets)
-	var s *prometheus.Scraper
-	if localMode {
-		s = prometheus.NewScraper(prometheus.NewLocalMetricPusher(handler), syncer, logOk, logErr)
-	} else {
-		logErr.Printf("can't run prom scraper in remote mode")
-		return nil
+func listen(network, address string) net.Listener {
+	ln, err := net.Listen(network, address)
+	if err != nil {
+		logErr.Fatalf("Failed to listen on %s %s: %v", network, address, err)
 	}
-	go func() {
-		defer func() {
-			err := recover()
-			if err != nil {
-				logErr.Printf("panic in prometheus scraper: %v", err)
+	return ln
+}
+
+func serveRPC(ln net.Listener, server *rpc.Server) {
+	err := server.Serve(ln)
+	if err != nil {
+		logErr.Fatalf("RPC server failed to serve on %s: %v", ln.Addr(), err)
+	}
+}
+
+func runPprof() {
+	if argv.pprofHTTP {
+		logErr.Printf("warning: --pprof-http option deprecated due to security reasons. Please use explicit --pprof=127.0.0.1:11123 option")
+	}
+	if argv.pprofListenAddr != "" {
+		go func() {
+			if err := http.ListenAndServe(argv.pprofListenAddr, nil); err != nil {
+				logErr.Printf("failed to listen pprof on %q: %v", argv.pprofListenAddr, err)
 			}
 		}()
-		s.Run()
-	}()
-	return syncer
+	}
 }

@@ -15,7 +15,7 @@ type MemStats struct {
 	writer MetricWriter
 }
 
-const mem = format.BuiltinMetricNameMemUsage
+const memStat = format.BuiltinMetricNameMemUsage
 
 func (c *MemStats) Skip() bool {
 	return false
@@ -47,22 +47,30 @@ func (c *MemStats) WriteMetrics(nowUnix int64) error {
 		return fmt.Errorf("failed to get meminfo: %w", err)
 	}
 
+	if stat.SReclaimable != nil && stat.SUnreclaim != nil {
+		c.writer.WriteSystemMetricValue(nowUnix, format.BuiltinMetricNameMemSLAB, float64(*stat.SReclaimable*mult), format.RawIDTagReclaimable)
+		c.writer.WriteSystemMetricValue(nowUnix, format.BuiltinMetricNameMemSLAB, float64(*stat.SUnreclaim*mult), format.RawIDTagUnreclaimable)
+	}
+	if stat.Writeback != nil && stat.Dirty != nil {
+		c.writer.WriteSystemMetricValue(nowUnix, format.BuiltinMetricNameWriteback, float64(*stat.Writeback*mult), format.RawIDTagWriteback)
+		c.writer.WriteSystemMetricValue(nowUnix, format.BuiltinMetricNameWriteback, float64(*stat.Dirty*mult), format.RawIDTagDirty)
+	}
+
+	if stat.MemFree != nil && *stat.MemFree > memFreeUpperLimit {
+		c.writer.WriteSystemMetricValue(nowUnix, memStat, float64(0), format.RawIDTagBadData)
+		return nil
+	}
 	if stat.MemFree != nil {
-		c.writer.WriteSystemMetricValue(nowUnix, mem, float64(*stat.MemFree*mult), format.RawIDTagFree)
+		c.writer.WriteSystemMetricValue(nowUnix, memStat, float64(*stat.MemFree*mult), format.RawIDTagFree)
 	}
 	if stat.Buffers != nil {
-		c.writer.WriteSystemMetricValue(nowUnix, mem, float64(*stat.Buffers*mult), format.RawIDTagBuffers)
+		c.writer.WriteSystemMetricValue(nowUnix, memStat, float64(*stat.Buffers*mult), format.RawIDTagBuffers)
 	}
 	if stat.MemTotal != nil && stat.Buffers != nil && stat.Cached != nil && stat.SReclaimable != nil && stat.Shmem != nil && stat.MemFree != nil {
 		cached := *stat.Cached + *stat.SReclaimable - *stat.Shmem
 		used := *stat.MemTotal - *stat.MemFree - *stat.Buffers - cached
-		c.writer.WriteSystemMetricValue(nowUnix, mem, float64(used*mult), format.RawIDTagUsed)
-		c.writer.WriteSystemMetricValue(nowUnix, mem, float64(cached*mult), format.RawIDTagCached)
-	}
-
-	if stat.Writeback != nil && stat.Dirty != nil {
-		c.writer.WriteSystemMetricValue(nowUnix, format.BuiltinMetricNameWriteback, float64(*stat.Writeback*mult), format.RawIDTagWriteback)
-		c.writer.WriteSystemMetricValue(nowUnix, format.BuiltinMetricNameWriteback, float64(*stat.Dirty*mult), format.RawIDTagDirty)
+		c.writer.WriteSystemMetricValue(nowUnix, memStat, float64(used*mult), format.RawIDTagUsed)
+		c.writer.WriteSystemMetricValue(nowUnix, memStat, float64(cached*mult), format.RawIDTagCached)
 	}
 
 	return nil

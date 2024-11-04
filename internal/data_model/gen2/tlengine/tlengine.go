@@ -9,6 +9,7 @@ package tlengine
 
 import (
 	"context"
+	"time"
 
 	"github.com/vkcom/statshouse/internal/data_model/gen2/internal"
 	"github.com/vkcom/statshouse/internal/vkgo/basictl"
@@ -16,90 +17,97 @@ import (
 )
 
 type (
-	AlreadyInMasterMode                = internal.EngineAlreadyInMasterMode
-	AlreadyInReplicaMode               = internal.EngineAlreadyInReplicaMode
-	AsyncSleep                         = internal.EngineAsyncSleep
-	BinlogPrefix                       = internal.EngineBinlogPrefix
-	Count                              = internal.EngineCount
-	DumpForceQueries                   = internal.EngineDumpForceQueries
-	DumpLastQueries                    = internal.EngineDumpLastQueries
-	DumpNextQueries                    = internal.EngineDumpNextQueries
-	EnableMetafilesAnalyzer            = internal.EngineEnableMetafilesAnalyzer
-	FailedToSwitchMode                 = internal.EngineFailedToSwitchMode
-	FilteredStat                       = internal.EngineFilteredStat
-	GetBinlogPrefixes                  = internal.EngineGetBinlogPrefixes
-	GetExpectedMetafilesStats          = internal.EngineGetExpectedMetafilesStats
-	GetReadWriteMode                   = internal.EngineGetReadWriteMode
-	GetReindexStatus                   = internal.EngineGetReindexStatus
-	HttpQuery                          = internal.EngineHttpQuery
-	HttpQueryResponse                  = internal.EngineHttpQueryResponse
-	InvokeHttpQuery                    = internal.EngineInvokeHttpQuery
-	IsProduction                       = internal.EngineIsProduction
-	MetafilesOneMemoryStat             = internal.EngineMetafilesOneMemoryStat
-	MetafilesStat                      = internal.EngineMetafilesStat
-	Nop                                = internal.EngineNop
-	Pid                                = internal.EnginePid
-	PushStat                           = internal.EnginePushStat
-	QueryResult                        = internal.EngineQueryResult
-	QueryResultAio                     = internal.EngineQueryResultAio
-	QueryResultError                   = internal.EngineQueryResultError
-	QueryResultUnion                   = internal.EngineQueryResultUnion
-	ReadNop                            = internal.EngineReadNop
-	ReadWriteMode                      = internal.EngineReadWriteMode
-	RecordNextQueries                  = internal.EngineRecordNextQueries
-	RegisterDynamicLib                 = internal.EngineRegisterDynamicLib
-	ReindexStatusDone                  = internal.EngineReindexStatusDone
-	ReindexStatusDoneOld               = internal.EngineReindexStatusDoneOld
-	ReindexStatusFailed                = internal.EngineReindexStatusFailed
-	ReindexStatusNever                 = internal.EngineReindexStatusNever
-	ReindexStatusRunning               = internal.EngineReindexStatusRunning
-	ReindexStatusRunningOld            = internal.EngineReindexStatusRunningOld
-	ReindexStatusSignaled              = internal.EngineReindexStatusSignaled
-	ReindexStatusUnion                 = internal.EngineReindexStatusUnion
-	ReloadDynamicLib                   = internal.EngineReloadDynamicLib
-	ReloadDynamicLibOptions            = internal.EngineReloadDynamicLibOptions
-	ReplaceConfigServer                = internal.EngineReplaceConfigServer
-	SendSignal                         = internal.EngineSendSignal
-	SetFsyncInterval                   = internal.EngineSetFsyncInterval
-	SetMetafileMemory                  = internal.EngineSetMetafileMemory
-	SetNoPersistentConfigArray         = internal.EngineSetNoPersistentConfigArray
-	SetNoPersistentConfigValue         = internal.EngineSetNoPersistentConfigValue
-	SetPersistentConfigArray           = internal.EngineSetPersistentConfigArray
-	SetPersistentConfigValue           = internal.EngineSetPersistentConfigValue
-	SetVerbosity                       = internal.EngineSetVerbosity
-	SetVerbosityType                   = internal.EngineSetVerbosityType
-	Sleep                              = internal.EngineSleep
-	Stat                               = internal.EngineStat
-	SwitchMasterReplicaModeResultUnion = internal.EngineSwitchMasterReplicaModeResultUnion
-	SwitchToMasterMode                 = internal.EngineSwitchToMasterMode
-	SwitchToMasterModeForcefully       = internal.EngineSwitchToMasterModeForcefully
-	SwitchToReplicaMode                = internal.EngineSwitchToReplicaMode
-	SwitchedToMasterMode               = internal.EngineSwitchedToMasterMode
-	SwitchedToMasterModeForcefully     = internal.EngineSwitchedToMasterModeForcefully
-	SwitchedToReplicaMode              = internal.EngineSwitchedToReplicaMode
-	UnregisterDynamicLib               = internal.EngineUnregisterDynamicLib
-	Version                            = internal.EngineVersion
-	WriteNop                           = internal.EngineWriteNop
+	AlreadyInMasterMode            = internal.EngineAlreadyInMasterMode
+	AlreadyInReplicaMode           = internal.EngineAlreadyInReplicaMode
+	AsyncSleep                     = internal.EngineAsyncSleep
+	BinlogPrefix                   = internal.EngineBinlogPrefix
+	Count                          = internal.EngineCount
+	DumpForceQueries               = internal.EngineDumpForceQueries
+	DumpLastQueries                = internal.EngineDumpLastQueries
+	DumpNextQueries                = internal.EngineDumpNextQueries
+	EnableMetafilesAnalyzer        = internal.EngineEnableMetafilesAnalyzer
+	FailedToSwitchMode             = internal.EngineFailedToSwitchMode
+	FilteredStat                   = internal.EngineFilteredStat
+	GetBinlogPrefixes              = internal.EngineGetBinlogPrefixes
+	GetExpectedMetafilesStats      = internal.EngineGetExpectedMetafilesStats
+	GetReadWriteMode               = internal.EngineGetReadWriteMode
+	GetReindexStatus               = internal.EngineGetReindexStatus
+	HttpQuery                      = internal.EngineHttpQuery
+	HttpQueryResponse              = internal.EngineHttpQueryResponse
+	InvokeHttpQuery                = internal.EngineInvokeHttpQuery
+	IsProduction                   = internal.EngineIsProduction
+	MetafilesOneMemoryStat         = internal.EngineMetafilesOneMemoryStat
+	MetafilesStat                  = internal.EngineMetafilesStat
+	Nop                            = internal.EngineNop
+	Pid                            = internal.EnginePid
+	PushStat                       = internal.EnginePushStat
+	QueryResult                    = internal.EngineQueryResult
+	QueryResult0                   = internal.EngineQueryResult0
+	QueryResultAio                 = internal.EngineQueryResultAio
+	QueryResultError               = internal.EngineQueryResultError
+	ReadNop                        = internal.EngineReadNop
+	ReadWriteMode                  = internal.EngineReadWriteMode
+	RecordNextQueries              = internal.EngineRecordNextQueries
+	RegisterDynamicLib             = internal.EngineRegisterDynamicLib
+	ReindexStatus                  = internal.EngineReindexStatus
+	ReindexStatusDone              = internal.EngineReindexStatusDone
+	ReindexStatusDoneOld           = internal.EngineReindexStatusDoneOld
+	ReindexStatusFailed            = internal.EngineReindexStatusFailed
+	ReindexStatusNever             = internal.EngineReindexStatusNever
+	ReindexStatusRunning           = internal.EngineReindexStatusRunning
+	ReindexStatusRunningOld        = internal.EngineReindexStatusRunningOld
+	ReindexStatusSignaled          = internal.EngineReindexStatusSignaled
+	ReloadDynamicLib               = internal.EngineReloadDynamicLib
+	ReloadDynamicLibOptions        = internal.EngineReloadDynamicLibOptions
+	ReplaceConfigServer            = internal.EngineReplaceConfigServer
+	SendSignal                     = internal.EngineSendSignal
+	SetFsyncInterval               = internal.EngineSetFsyncInterval
+	SetMetafileMemory              = internal.EngineSetMetafileMemory
+	SetNoPersistentConfigArray     = internal.EngineSetNoPersistentConfigArray
+	SetNoPersistentConfigValue     = internal.EngineSetNoPersistentConfigValue
+	SetPersistentConfigArray       = internal.EngineSetPersistentConfigArray
+	SetPersistentConfigValue       = internal.EngineSetPersistentConfigValue
+	SetVerbosity                   = internal.EngineSetVerbosity
+	SetVerbosityType               = internal.EngineSetVerbosityType
+	Sleep                          = internal.EngineSleep
+	Stat                           = internal.EngineStat
+	SwitchMasterReplicaModeResult  = internal.EngineSwitchMasterReplicaModeResult
+	SwitchToMasterMode             = internal.EngineSwitchToMasterMode
+	SwitchToMasterModeForcefully   = internal.EngineSwitchToMasterModeForcefully
+	SwitchToReplicaMode            = internal.EngineSwitchToReplicaMode
+	SwitchedToMasterMode           = internal.EngineSwitchedToMasterMode
+	SwitchedToMasterModeForcefully = internal.EngineSwitchedToMasterModeForcefully
+	SwitchedToReplicaMode          = internal.EngineSwitchedToReplicaMode
+	UnregisterDynamicLib           = internal.EngineUnregisterDynamicLib
+	Version                        = internal.EngineVersion
+	WriteNop                       = internal.EngineWriteNop
 )
 
 type Client struct {
 	Client  *rpc.Client
 	Network string // should be either "tcp4" or "unix"
 	Address string
-	ActorID uint64 // should be non-zero when using rpc-proxy
+	ActorID int64         // should be >0 for routing via rpc-proxy
+	Timeout time.Duration // set to extra.CustomTimeoutMs, if not already set
 }
 
 func (c *Client) AsyncSleep(ctx context.Context, args AsyncSleep, extra *rpc.InvokeReqExtra, ret *bool) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.asyncSleep"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.asyncSleep", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.asyncSleep", c.Network, c.ActorID, c.Address, err)
@@ -115,14 +123,20 @@ func (c *Client) AsyncSleep(ctx context.Context, args AsyncSleep, extra *rpc.Inv
 func (c *Client) Count(ctx context.Context, args Count, extra *rpc.InvokeReqExtra, ret *internal.BoolStat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.count"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.count", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.count", c.Network, c.ActorID, c.Address, err)
@@ -138,14 +152,20 @@ func (c *Client) Count(ctx context.Context, args Count, extra *rpc.InvokeReqExtr
 func (c *Client) DumpForceQueries(ctx context.Context, args DumpForceQueries, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.dumpForceQueries"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.dumpForceQueries", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.dumpForceQueries", c.Network, c.ActorID, c.Address, err)
@@ -161,14 +181,20 @@ func (c *Client) DumpForceQueries(ctx context.Context, args DumpForceQueries, ex
 func (c *Client) DumpLastQueries(ctx context.Context, args DumpLastQueries, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.dumpLastQueries"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.dumpLastQueries", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.dumpLastQueries", c.Network, c.ActorID, c.Address, err)
@@ -184,14 +210,20 @@ func (c *Client) DumpLastQueries(ctx context.Context, args DumpLastQueries, extr
 func (c *Client) DumpNextQueries(ctx context.Context, args DumpNextQueries, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.dumpNextQueries"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.dumpNextQueries", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.dumpNextQueries", c.Network, c.ActorID, c.Address, err)
@@ -207,14 +239,20 @@ func (c *Client) DumpNextQueries(ctx context.Context, args DumpNextQueries, extr
 func (c *Client) EnableMetafilesAnalyzer(ctx context.Context, args EnableMetafilesAnalyzer, extra *rpc.InvokeReqExtra, ret *bool) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.enableMetafilesAnalyzer"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.enableMetafilesAnalyzer", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.enableMetafilesAnalyzer", c.Network, c.ActorID, c.Address, err)
@@ -230,14 +268,20 @@ func (c *Client) EnableMetafilesAnalyzer(ctx context.Context, args EnableMetafil
 func (c *Client) FilteredStat(ctx context.Context, args FilteredStat, extra *rpc.InvokeReqExtra, ret *internal.Stat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.filteredStat"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.filteredStat", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.filteredStat", c.Network, c.ActorID, c.Address, err)
@@ -253,14 +297,20 @@ func (c *Client) FilteredStat(ctx context.Context, args FilteredStat, extra *rpc
 func (c *Client) GetBinlogPrefixes(ctx context.Context, args GetBinlogPrefixes, extra *rpc.InvokeReqExtra, ret *[]internal.EngineBinlogPrefix) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.getBinlogPrefixes"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.getBinlogPrefixes", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.getBinlogPrefixes", c.Network, c.ActorID, c.Address, err)
@@ -276,14 +326,20 @@ func (c *Client) GetBinlogPrefixes(ctx context.Context, args GetBinlogPrefixes, 
 func (c *Client) GetExpectedMetafilesStats(ctx context.Context, args GetExpectedMetafilesStats, extra *rpc.InvokeReqExtra, ret *map[string]internal.EngineMetafilesStat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.getExpectedMetafilesStats"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.getExpectedMetafilesStats", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.getExpectedMetafilesStats", c.Network, c.ActorID, c.Address, err)
@@ -299,14 +355,20 @@ func (c *Client) GetExpectedMetafilesStats(ctx context.Context, args GetExpected
 func (c *Client) GetReadWriteMode(ctx context.Context, args GetReadWriteMode, extra *rpc.InvokeReqExtra, ret *ReadWriteMode) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.getReadWriteMode"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.getReadWriteMode", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.getReadWriteMode", c.Network, c.ActorID, c.Address, err)
@@ -319,17 +381,23 @@ func (c *Client) GetReadWriteMode(ctx context.Context, args GetReadWriteMode, ex
 	return nil
 }
 
-func (c *Client) GetReindexStatus(ctx context.Context, args GetReindexStatus, extra *rpc.InvokeReqExtra, ret *ReindexStatusUnion) (err error) {
+func (c *Client) GetReindexStatus(ctx context.Context, args GetReindexStatus, extra *rpc.InvokeReqExtra, ret *ReindexStatus) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.getReindexStatus"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.getReindexStatus", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.getReindexStatus", c.Network, c.ActorID, c.Address, err)
@@ -345,14 +413,20 @@ func (c *Client) GetReindexStatus(ctx context.Context, args GetReindexStatus, ex
 func (c *Client) InvokeHttpQuery(ctx context.Context, args InvokeHttpQuery, extra *rpc.InvokeReqExtra, ret *HttpQueryResponse) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.invokeHttpQuery"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.invokeHttpQuery", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.invokeHttpQuery", c.Network, c.ActorID, c.Address, err)
@@ -368,14 +442,20 @@ func (c *Client) InvokeHttpQuery(ctx context.Context, args InvokeHttpQuery, extr
 func (c *Client) IsProduction(ctx context.Context, args IsProduction, extra *rpc.InvokeReqExtra, ret *bool) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.isProduction"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.isProduction", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.isProduction", c.Network, c.ActorID, c.Address, err)
@@ -391,14 +471,20 @@ func (c *Client) IsProduction(ctx context.Context, args IsProduction, extra *rpc
 func (c *Client) Nop(ctx context.Context, args Nop, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.nop"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.nop", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.nop", c.Network, c.ActorID, c.Address, err)
@@ -414,14 +500,20 @@ func (c *Client) Nop(ctx context.Context, args Nop, extra *rpc.InvokeReqExtra, r
 func (c *Client) Pid(ctx context.Context, args Pid, extra *rpc.InvokeReqExtra, ret *internal.NetPid) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.pid"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.pid", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.pid", c.Network, c.ActorID, c.Address, err)
@@ -437,14 +529,20 @@ func (c *Client) Pid(ctx context.Context, args Pid, extra *rpc.InvokeReqExtra, r
 func (c *Client) PushStat(ctx context.Context, args PushStat, extra *rpc.InvokeReqExtra, ret *bool) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.pushStat"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.pushStat", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.pushStat", c.Network, c.ActorID, c.Address, err)
@@ -460,14 +558,21 @@ func (c *Client) PushStat(ctx context.Context, args PushStat, extra *rpc.InvokeR
 func (c *Client) ReadNop(ctx context.Context, args ReadNop, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.ReadOnly = true
+	req.FunctionName = "engine.readNop"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.readNop", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.readNop", c.Network, c.ActorID, c.Address, err)
@@ -483,14 +588,20 @@ func (c *Client) ReadNop(ctx context.Context, args ReadNop, extra *rpc.InvokeReq
 func (c *Client) RecordNextQueries(ctx context.Context, args RecordNextQueries, extra *rpc.InvokeReqExtra, ret *bool) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.recordNextQueries"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.recordNextQueries", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.recordNextQueries", c.Network, c.ActorID, c.Address, err)
@@ -506,14 +617,20 @@ func (c *Client) RecordNextQueries(ctx context.Context, args RecordNextQueries, 
 func (c *Client) RegisterDynamicLib(ctx context.Context, args RegisterDynamicLib, extra *rpc.InvokeReqExtra, ret *internal.BoolStat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.registerDynamicLib"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.registerDynamicLib", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.registerDynamicLib", c.Network, c.ActorID, c.Address, err)
@@ -529,14 +646,20 @@ func (c *Client) RegisterDynamicLib(ctx context.Context, args RegisterDynamicLib
 func (c *Client) ReloadDynamicLib(ctx context.Context, args ReloadDynamicLib, extra *rpc.InvokeReqExtra, ret *internal.BoolStat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.reloadDynamicLib"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.reloadDynamicLib", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.reloadDynamicLib", c.Network, c.ActorID, c.Address, err)
@@ -552,14 +675,20 @@ func (c *Client) ReloadDynamicLib(ctx context.Context, args ReloadDynamicLib, ex
 func (c *Client) ReplaceConfigServer(ctx context.Context, args ReplaceConfigServer, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.replaceConfigServer"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.replaceConfigServer", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.replaceConfigServer", c.Network, c.ActorID, c.Address, err)
@@ -575,14 +704,20 @@ func (c *Client) ReplaceConfigServer(ctx context.Context, args ReplaceConfigServ
 func (c *Client) SendSignal(ctx context.Context, args SendSignal, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.sendSignal"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.sendSignal", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.sendSignal", c.Network, c.ActorID, c.Address, err)
@@ -598,14 +733,20 @@ func (c *Client) SendSignal(ctx context.Context, args SendSignal, extra *rpc.Inv
 func (c *Client) SetFsyncInterval(ctx context.Context, args SetFsyncInterval, extra *rpc.InvokeReqExtra, ret *internal.BoolStat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.setFsyncInterval"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setFsyncInterval", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setFsyncInterval", c.Network, c.ActorID, c.Address, err)
@@ -621,14 +762,21 @@ func (c *Client) SetFsyncInterval(ctx context.Context, args SetFsyncInterval, ex
 func (c *Client) SetMetafileMemory(ctx context.Context, args SetMetafileMemory, extra *rpc.InvokeReqExtra, ret *internal.BoolStat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.ReadOnly = true
+	req.FunctionName = "engine.setMetafileMemory"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setMetafileMemory", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setMetafileMemory", c.Network, c.ActorID, c.Address, err)
@@ -644,14 +792,20 @@ func (c *Client) SetMetafileMemory(ctx context.Context, args SetMetafileMemory, 
 func (c *Client) SetNoPersistentConfigArray(ctx context.Context, args SetNoPersistentConfigArray, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.setNoPersistentConfigArray"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setNoPersistentConfigArray", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setNoPersistentConfigArray", c.Network, c.ActorID, c.Address, err)
@@ -667,14 +821,20 @@ func (c *Client) SetNoPersistentConfigArray(ctx context.Context, args SetNoPersi
 func (c *Client) SetNoPersistentConfigValue(ctx context.Context, args SetNoPersistentConfigValue, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.setNoPersistentConfigValue"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setNoPersistentConfigValue", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setNoPersistentConfigValue", c.Network, c.ActorID, c.Address, err)
@@ -690,14 +850,20 @@ func (c *Client) SetNoPersistentConfigValue(ctx context.Context, args SetNoPersi
 func (c *Client) SetPersistentConfigArray(ctx context.Context, args SetPersistentConfigArray, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.setPersistentConfigArray"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setPersistentConfigArray", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setPersistentConfigArray", c.Network, c.ActorID, c.Address, err)
@@ -713,14 +879,20 @@ func (c *Client) SetPersistentConfigArray(ctx context.Context, args SetPersisten
 func (c *Client) SetPersistentConfigValue(ctx context.Context, args SetPersistentConfigValue, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.setPersistentConfigValue"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setPersistentConfigValue", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setPersistentConfigValue", c.Network, c.ActorID, c.Address, err)
@@ -736,14 +908,20 @@ func (c *Client) SetPersistentConfigValue(ctx context.Context, args SetPersisten
 func (c *Client) SetVerbosity(ctx context.Context, args SetVerbosity, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.setVerbosity"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setVerbosity", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setVerbosity", c.Network, c.ActorID, c.Address, err)
@@ -759,14 +937,20 @@ func (c *Client) SetVerbosity(ctx context.Context, args SetVerbosity, extra *rpc
 func (c *Client) SetVerbosityType(ctx context.Context, args SetVerbosityType, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.setVerbosityType"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.setVerbosityType", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.setVerbosityType", c.Network, c.ActorID, c.Address, err)
@@ -782,14 +966,20 @@ func (c *Client) SetVerbosityType(ctx context.Context, args SetVerbosityType, ex
 func (c *Client) Sleep(ctx context.Context, args Sleep, extra *rpc.InvokeReqExtra, ret *bool) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.sleep"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.sleep", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.sleep", c.Network, c.ActorID, c.Address, err)
@@ -805,14 +995,20 @@ func (c *Client) Sleep(ctx context.Context, args Sleep, extra *rpc.InvokeReqExtr
 func (c *Client) Stat(ctx context.Context, args Stat, extra *rpc.InvokeReqExtra, ret *internal.Stat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.stat"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.stat", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.stat", c.Network, c.ActorID, c.Address, err)
@@ -825,17 +1021,23 @@ func (c *Client) Stat(ctx context.Context, args Stat, extra *rpc.InvokeReqExtra,
 	return nil
 }
 
-func (c *Client) SwitchToMasterMode(ctx context.Context, args SwitchToMasterMode, extra *rpc.InvokeReqExtra, ret *SwitchMasterReplicaModeResultUnion) (err error) {
+func (c *Client) SwitchToMasterMode(ctx context.Context, args SwitchToMasterMode, extra *rpc.InvokeReqExtra, ret *SwitchMasterReplicaModeResult) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.switchToMasterMode"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.switchToMasterMode", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.switchToMasterMode", c.Network, c.ActorID, c.Address, err)
@@ -848,17 +1050,23 @@ func (c *Client) SwitchToMasterMode(ctx context.Context, args SwitchToMasterMode
 	return nil
 }
 
-func (c *Client) SwitchToMasterModeForcefully(ctx context.Context, args SwitchToMasterModeForcefully, extra *rpc.InvokeReqExtra, ret *SwitchMasterReplicaModeResultUnion) (err error) {
+func (c *Client) SwitchToMasterModeForcefully(ctx context.Context, args SwitchToMasterModeForcefully, extra *rpc.InvokeReqExtra, ret *SwitchMasterReplicaModeResult) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.switchToMasterModeForcefully"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.switchToMasterModeForcefully", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.switchToMasterModeForcefully", c.Network, c.ActorID, c.Address, err)
@@ -871,17 +1079,23 @@ func (c *Client) SwitchToMasterModeForcefully(ctx context.Context, args SwitchTo
 	return nil
 }
 
-func (c *Client) SwitchToReplicaMode(ctx context.Context, args SwitchToReplicaMode, extra *rpc.InvokeReqExtra, ret *SwitchMasterReplicaModeResultUnion) (err error) {
+func (c *Client) SwitchToReplicaMode(ctx context.Context, args SwitchToReplicaMode, extra *rpc.InvokeReqExtra, ret *SwitchMasterReplicaModeResult) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.switchToReplicaMode"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.switchToReplicaMode", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.switchToReplicaMode", c.Network, c.ActorID, c.Address, err)
@@ -897,14 +1111,20 @@ func (c *Client) SwitchToReplicaMode(ctx context.Context, args SwitchToReplicaMo
 func (c *Client) UnregisterDynamicLib(ctx context.Context, args UnregisterDynamicLib, extra *rpc.InvokeReqExtra, ret *internal.BoolStat) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.unregisterDynamicLib"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.unregisterDynamicLib", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.unregisterDynamicLib", c.Network, c.ActorID, c.Address, err)
@@ -920,14 +1140,20 @@ func (c *Client) UnregisterDynamicLib(ctx context.Context, args UnregisterDynami
 func (c *Client) Version(ctx context.Context, args Version, extra *rpc.InvokeReqExtra, ret *string) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.version"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.version", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.version", c.Network, c.ActorID, c.Address, err)
@@ -943,14 +1169,20 @@ func (c *Client) Version(ctx context.Context, args Version, extra *rpc.InvokeReq
 func (c *Client) WriteNop(ctx context.Context, args WriteNop, extra *rpc.InvokeReqExtra, ret *internal.True) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
+	req.FunctionName = "engine.writeNop"
 	if extra != nil {
-		req.Extra = *extra
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
 	}
-	req.Body, err = args.WriteBoxed(req.Body)
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
 	if err != nil {
 		return internal.ErrorClientWrite("engine.writeNop", err)
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
 	defer c.Client.PutResponse(resp)
 	if err != nil {
 		return internal.ErrorClientDo("engine.writeNop", c.Network, c.ActorID, c.Address, err)
@@ -974,7 +1206,7 @@ type Handler struct {
 	GetBinlogPrefixes            func(ctx context.Context, args GetBinlogPrefixes) ([]internal.EngineBinlogPrefix, error)                   // engine.getBinlogPrefixes
 	GetExpectedMetafilesStats    func(ctx context.Context, args GetExpectedMetafilesStats) (map[string]internal.EngineMetafilesStat, error) // engine.getExpectedMetafilesStats
 	GetReadWriteMode             func(ctx context.Context, args GetReadWriteMode) (ReadWriteMode, error)                                    // engine.getReadWriteMode
-	GetReindexStatus             func(ctx context.Context, args GetReindexStatus) (ReindexStatusUnion, error)                               // engine.getReindexStatus
+	GetReindexStatus             func(ctx context.Context, args GetReindexStatus) (ReindexStatus, error)                                    // engine.getReindexStatus
 	InvokeHttpQuery              func(ctx context.Context, args InvokeHttpQuery) (HttpQueryResponse, error)                                 // engine.invokeHttpQuery
 	IsProduction                 func(ctx context.Context, args IsProduction) (bool, error)                                                 // engine.isProduction
 	Nop                          func(ctx context.Context, args Nop) (internal.True, error)                                                 // engine.nop
@@ -996,9 +1228,9 @@ type Handler struct {
 	SetVerbosityType             func(ctx context.Context, args SetVerbosityType) (internal.True, error)                                    // engine.setVerbosityType
 	Sleep                        func(ctx context.Context, args Sleep) (bool, error)                                                        // engine.sleep
 	Stat                         func(ctx context.Context, args Stat) (internal.Stat, error)                                                // engine.stat
-	SwitchToMasterMode           func(ctx context.Context, args SwitchToMasterMode) (SwitchMasterReplicaModeResultUnion, error)             // engine.switchToMasterMode
-	SwitchToMasterModeForcefully func(ctx context.Context, args SwitchToMasterModeForcefully) (SwitchMasterReplicaModeResultUnion, error)   // engine.switchToMasterModeForcefully
-	SwitchToReplicaMode          func(ctx context.Context, args SwitchToReplicaMode) (SwitchMasterReplicaModeResultUnion, error)            // engine.switchToReplicaMode
+	SwitchToMasterMode           func(ctx context.Context, args SwitchToMasterMode) (SwitchMasterReplicaModeResult, error)                  // engine.switchToMasterMode
+	SwitchToMasterModeForcefully func(ctx context.Context, args SwitchToMasterModeForcefully) (SwitchMasterReplicaModeResult, error)        // engine.switchToMasterModeForcefully
+	SwitchToReplicaMode          func(ctx context.Context, args SwitchToReplicaMode) (SwitchMasterReplicaModeResult, error)                 // engine.switchToReplicaMode
 	UnregisterDynamicLib         func(ctx context.Context, args UnregisterDynamicLib) (internal.BoolStat, error)                            // engine.unregisterDynamicLib
 	Version                      func(ctx context.Context, args Version) (string, error)                                                    // engine.version
 	WriteNop                     func(ctx context.Context, args WriteNop) (internal.True, error)                                            // engine.writeNop
@@ -1047,6 +1279,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 	tag, r, _ := basictl.NatReadTag(hctx.Request) // keep hctx.Request intact for handler chaining
 	switch tag {
 	case 0x60e50d3d: // engine.asyncSleep
+		hctx.RequestFunctionName = "engine.asyncSleep"
 		if h.RawAsyncSleep != nil {
 			hctx.Request = r
 			err = h.RawAsyncSleep(ctx, hctx)
@@ -1077,6 +1310,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x19d0f020: // engine.count
+		hctx.RequestFunctionName = "engine.count"
 		if h.RawCount != nil {
 			hctx.Request = r
 			err = h.RawCount(ctx, hctx)
@@ -1107,6 +1341,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xf1f90880: // engine.dumpForceQueries
+		hctx.RequestFunctionName = "engine.dumpForceQueries"
 		if h.RawDumpForceQueries != nil {
 			hctx.Request = r
 			err = h.RawDumpForceQueries(ctx, hctx)
@@ -1137,6 +1372,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xc060a29f: // engine.dumpLastQueries
+		hctx.RequestFunctionName = "engine.dumpLastQueries"
 		if h.RawDumpLastQueries != nil {
 			hctx.Request = r
 			err = h.RawDumpLastQueries(ctx, hctx)
@@ -1167,6 +1403,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xe65872ad: // engine.dumpNextQueries
+		hctx.RequestFunctionName = "engine.dumpNextQueries"
 		if h.RawDumpNextQueries != nil {
 			hctx.Request = r
 			err = h.RawDumpNextQueries(ctx, hctx)
@@ -1197,6 +1434,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x88836cdc: // engine.enableMetafilesAnalyzer
+		hctx.RequestFunctionName = "engine.enableMetafilesAnalyzer"
 		if h.RawEnableMetafilesAnalyzer != nil {
 			hctx.Request = r
 			err = h.RawEnableMetafilesAnalyzer(ctx, hctx)
@@ -1227,6 +1465,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x594870d6: // engine.filteredStat
+		hctx.RequestFunctionName = "engine.filteredStat"
 		if h.RawFilteredStat != nil {
 			hctx.Request = r
 			err = h.RawFilteredStat(ctx, hctx)
@@ -1257,6 +1496,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xef14db93: // engine.getBinlogPrefixes
+		hctx.RequestFunctionName = "engine.getBinlogPrefixes"
 		if h.RawGetBinlogPrefixes != nil {
 			hctx.Request = r
 			err = h.RawGetBinlogPrefixes(ctx, hctx)
@@ -1287,6 +1527,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x0342f391: // engine.getExpectedMetafilesStats
+		hctx.RequestFunctionName = "engine.getExpectedMetafilesStats"
 		if h.RawGetExpectedMetafilesStats != nil {
 			hctx.Request = r
 			err = h.RawGetExpectedMetafilesStats(ctx, hctx)
@@ -1317,6 +1558,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x61b3f593: // engine.getReadWriteMode
+		hctx.RequestFunctionName = "engine.getReadWriteMode"
 		if h.RawGetReadWriteMode != nil {
 			hctx.Request = r
 			err = h.RawGetReadWriteMode(ctx, hctx)
@@ -1347,6 +1589,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xf492042e: // engine.getReindexStatus
+		hctx.RequestFunctionName = "engine.getReindexStatus"
 		if h.RawGetReindexStatus != nil {
 			hctx.Request = r
 			err = h.RawGetReindexStatus(ctx, hctx)
@@ -1377,6 +1620,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xf4c73c0b: // engine.invokeHttpQuery
+		hctx.RequestFunctionName = "engine.invokeHttpQuery"
 		if h.RawInvokeHttpQuery != nil {
 			hctx.Request = r
 			err = h.RawInvokeHttpQuery(ctx, hctx)
@@ -1407,6 +1651,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xccdea0ac: // engine.isProduction
+		hctx.RequestFunctionName = "engine.isProduction"
 		if h.RawIsProduction != nil {
 			hctx.Request = r
 			err = h.RawIsProduction(ctx, hctx)
@@ -1437,6 +1682,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x166bb7c6: // engine.nop
+		hctx.RequestFunctionName = "engine.nop"
 		if h.RawNop != nil {
 			hctx.Request = r
 			err = h.RawNop(ctx, hctx)
@@ -1467,6 +1713,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x559d6e36: // engine.pid
+		hctx.RequestFunctionName = "engine.pid"
 		if h.RawPid != nil {
 			hctx.Request = r
 			err = h.RawPid(ctx, hctx)
@@ -1497,6 +1744,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xf4b19fa2: // engine.pushStat
+		hctx.RequestFunctionName = "engine.pushStat"
 		if h.RawPushStat != nil {
 			hctx.Request = r
 			err = h.RawPushStat(ctx, hctx)
@@ -1527,6 +1775,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x9d2b841f: // engine.readNop
+		hctx.RequestFunctionName = "engine.readNop"
 		if h.RawReadNop != nil {
 			hctx.Request = r
 			err = h.RawReadNop(ctx, hctx)
@@ -1557,6 +1806,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x0001e9d6: // engine.recordNextQueries
+		hctx.RequestFunctionName = "engine.recordNextQueries"
 		if h.RawRecordNextQueries != nil {
 			hctx.Request = r
 			err = h.RawRecordNextQueries(ctx, hctx)
@@ -1587,6 +1837,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x2f86f276: // engine.registerDynamicLib
+		hctx.RequestFunctionName = "engine.registerDynamicLib"
 		if h.RawRegisterDynamicLib != nil {
 			hctx.Request = r
 			err = h.RawRegisterDynamicLib(ctx, hctx)
@@ -1617,6 +1868,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x602d62c1: // engine.reloadDynamicLib
+		hctx.RequestFunctionName = "engine.reloadDynamicLib"
 		if h.RawReloadDynamicLib != nil {
 			hctx.Request = r
 			err = h.RawReloadDynamicLib(ctx, hctx)
@@ -1647,6 +1899,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x5fcd8e77: // engine.replaceConfigServer
+		hctx.RequestFunctionName = "engine.replaceConfigServer"
 		if h.RawReplaceConfigServer != nil {
 			hctx.Request = r
 			err = h.RawReplaceConfigServer(ctx, hctx)
@@ -1677,6 +1930,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x1a7708a3: // engine.sendSignal
+		hctx.RequestFunctionName = "engine.sendSignal"
 		if h.RawSendSignal != nil {
 			hctx.Request = r
 			err = h.RawSendSignal(ctx, hctx)
@@ -1707,6 +1961,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x665d2ab7: // engine.setFsyncInterval
+		hctx.RequestFunctionName = "engine.setFsyncInterval"
 		if h.RawSetFsyncInterval != nil {
 			hctx.Request = r
 			err = h.RawSetFsyncInterval(ctx, hctx)
@@ -1737,6 +1992,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x7bdcf404: // engine.setMetafileMemory
+		hctx.RequestFunctionName = "engine.setMetafileMemory"
 		if h.RawSetMetafileMemory != nil {
 			hctx.Request = r
 			err = h.RawSetMetafileMemory(ctx, hctx)
@@ -1767,6 +2023,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x5806a520: // engine.setNoPersistentConfigArray
+		hctx.RequestFunctionName = "engine.setNoPersistentConfigArray"
 		if h.RawSetNoPersistentConfigArray != nil {
 			hctx.Request = r
 			err = h.RawSetNoPersistentConfigArray(ctx, hctx)
@@ -1797,6 +2054,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x92aaa5b9: // engine.setNoPersistentConfigValue
+		hctx.RequestFunctionName = "engine.setNoPersistentConfigValue"
 		if h.RawSetNoPersistentConfigValue != nil {
 			hctx.Request = r
 			err = h.RawSetNoPersistentConfigValue(ctx, hctx)
@@ -1827,6 +2085,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xfc99af0b: // engine.setPersistentConfigArray
+		hctx.RequestFunctionName = "engine.setPersistentConfigArray"
 		if h.RawSetPersistentConfigArray != nil {
 			hctx.Request = r
 			err = h.RawSetPersistentConfigArray(ctx, hctx)
@@ -1857,6 +2116,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x4cc8953f: // engine.setPersistentConfigValue
+		hctx.RequestFunctionName = "engine.setPersistentConfigValue"
 		if h.RawSetPersistentConfigValue != nil {
 			hctx.Request = r
 			err = h.RawSetPersistentConfigValue(ctx, hctx)
@@ -1887,6 +2147,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x9d980926: // engine.setVerbosity
+		hctx.RequestFunctionName = "engine.setVerbosity"
 		if h.RawSetVerbosity != nil {
 			hctx.Request = r
 			err = h.RawSetVerbosity(ctx, hctx)
@@ -1917,6 +2178,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x5388c0ae: // engine.setVerbosityType
+		hctx.RequestFunctionName = "engine.setVerbosityType"
 		if h.RawSetVerbosityType != nil {
 			hctx.Request = r
 			err = h.RawSetVerbosityType(ctx, hctx)
@@ -1947,6 +2209,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x3d3bcd48: // engine.sleep
+		hctx.RequestFunctionName = "engine.sleep"
 		if h.RawSleep != nil {
 			hctx.Request = r
 			err = h.RawSleep(ctx, hctx)
@@ -1977,6 +2240,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0xefb3c36b: // engine.stat
+		hctx.RequestFunctionName = "engine.stat"
 		if h.RawStat != nil {
 			hctx.Request = r
 			err = h.RawStat(ctx, hctx)
@@ -2007,6 +2271,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x8cdcb5f9: // engine.switchToMasterMode
+		hctx.RequestFunctionName = "engine.switchToMasterMode"
 		if h.RawSwitchToMasterMode != nil {
 			hctx.Request = r
 			err = h.RawSwitchToMasterMode(ctx, hctx)
@@ -2037,6 +2302,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x1973fa8f: // engine.switchToMasterModeForcefully
+		hctx.RequestFunctionName = "engine.switchToMasterModeForcefully"
 		if h.RawSwitchToMasterModeForcefully != nil {
 			hctx.Request = r
 			err = h.RawSwitchToMasterModeForcefully(ctx, hctx)
@@ -2067,6 +2333,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x23c3a87e: // engine.switchToReplicaMode
+		hctx.RequestFunctionName = "engine.switchToReplicaMode"
 		if h.RawSwitchToReplicaMode != nil {
 			hctx.Request = r
 			err = h.RawSwitchToReplicaMode(ctx, hctx)
@@ -2097,6 +2364,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x84d5fcb9: // engine.unregisterDynamicLib
+		hctx.RequestFunctionName = "engine.unregisterDynamicLib"
 		if h.RawUnregisterDynamicLib != nil {
 			hctx.Request = r
 			err = h.RawUnregisterDynamicLib(ctx, hctx)
@@ -2127,6 +2395,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x1a2e06fa: // engine.version
+		hctx.RequestFunctionName = "engine.version"
 		if h.RawVersion != nil {
 			hctx.Request = r
 			err = h.RawVersion(ctx, hctx)
@@ -2157,6 +2426,7 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			return nil
 		}
 	case 0x58160af4: // engine.writeNop
+		hctx.RequestFunctionName = "engine.writeNop"
 		if h.RawWriteNop != nil {
 			hctx.Request = r
 			err = h.RawWriteNop(ctx, hctx)

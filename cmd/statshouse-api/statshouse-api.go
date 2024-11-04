@@ -8,12 +8,12 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math"
-	"net"
 	"net/http"
-	_ "net/http/pprof" // pprof HTTP handlers
 	"os"
 	"os/signal"
 	"strings"
@@ -26,16 +26,15 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/vkcom/statshouse-go"
-
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-
 	"github.com/vkcom/statshouse/internal/api"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouseApi"
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/pcache"
 	"github.com/vkcom/statshouse/internal/util"
+	"github.com/vkcom/statshouse/internal/vkgo/build"
+	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
 	"github.com/vkcom/statshouse/internal/vkgo/vkuth"
 )
 
@@ -54,9 +53,9 @@ const (
 )
 
 type args struct {
+	api.HandlerOptions
 	accessLog                bool
 	rpcCryptoKeyPath         string
-	approxCacheMaxSize       int
 	brsMaxChunksCount        int
 	chV1Addrs                []string
 	chV1Debug                bool
@@ -69,6 +68,9 @@ type args struct {
 	chV2MaxHeavyFastConns    int
 	chV2MaxHeavySlowConns    int
 	chV2MaxLightSlowConns    int
+	chV2MaxHardwareFastConns int
+	chV2MaxHardwareSlowConns int
+
 	chV2Password             string
 	chV2User                 string
 	defaultMetric            string
@@ -76,35 +78,29 @@ type args struct {
 	defaultMetricFilterNotIn []string
 	defaultMetricWhat        []string
 	defaultMetricGroupBy     []string
+	adminDash                int
 	eventPreset              []string
 	defaultNumSeries         int
 	diskCache                string
 	help                     bool
 	listenHTTPAddr           string
 	listenRPCAddr            string
-	localMode                bool
 	pidFile                  string
 	pprofAddr                string
 	pprofHTTP                bool
-	protectedMetricPrefixes  []string
 	showInvisible            bool
 	slow                     time.Duration
 	staticDir                string
+	statsHouseNetwork        string
 	statsHouseAddr           string
 	statsHouseEnv            string
-	timezone                 string
 	utcOffsetHours           int // we can't support offsets not divisible by hour because we aggregate the data by hour
-	verbose                  bool
 	version                  bool
 	vkuthAppName             string
 	vkuthPublicKeys          []string
-	weekStartAt              int
-	metadataActorID          uint64
+	metadataActorID          int64
 	metadataAddr             string
 	metadataNet              string
-	readOnly                 bool
-	insecureMode             bool
-	querySelectTimeout       time.Duration
 }
 
 func main() {
@@ -114,7 +110,6 @@ func main() {
 	var argv args
 	pflag.BoolVar(&argv.accessLog, "access-log", false, "write HTTP access log to stdout")
 	pflag.StringVar(&argv.rpcCryptoKeyPath, "rpc-crypto-path", "", "path to RPC crypto key")
-	pflag.IntVar(&argv.approxCacheMaxSize, "approx-cache-max-size", 1_000_000, "approximate max amount of rows to cache for each table+resolution")
 	pflag.IntVar(&argv.brsMaxChunksCount, "max-chunks-count", 1000, "in memory data chunks count limit for RPC server")
 	var chMaxQueries int // not used any more, TODO - remove?
 	pflag.IntVar(&chMaxQueries, "clickhouse-max-queries", 32, "maximum number of concurrent ClickHouse queries")
@@ -125,10 +120,12 @@ func main() {
 	pflag.StringVar(&argv.chV1User, "clickhouse-v1-user", "", "ClickHouse-v1 user")
 	pflag.StringSliceVar(&argv.chV2Addrs, "clickhouse-v2-addrs", nil, "comma-separated list of ClickHouse-v2 addresses")
 	pflag.BoolVar(&argv.chV2Debug, "clickhouse-v2-debug", false, "ClickHouse-v2 debug mode")
-	pflag.IntVar(&argv.chV2MaxLightFastConns, "clickhouse-v2-max-conns", 16, "maximum number of ClickHouse-v2 connections (light fast)")
-	pflag.IntVar(&argv.chV2MaxLightSlowConns, "clickhouse-v2-max-light-slow-conns", 8, "maximum number of ClickHouse-v2 connections (light slow)")
+	pflag.IntVar(&argv.chV2MaxLightFastConns, "clickhouse-v2-max-conns", 40, "maximum number of ClickHouse-v2 connections (light fast)")
+	pflag.IntVar(&argv.chV2MaxLightSlowConns, "clickhouse-v2-max-light-slow-conns", 12, "maximum number of ClickHouse-v2 connections (light slow)")
 	pflag.IntVar(&argv.chV2MaxHeavyFastConns, "clickhouse-v2-max-heavy-conns", 5, "maximum number of ClickHouse-v2 connections (heavy fast)")
-	pflag.IntVar(&argv.chV2MaxHeavySlowConns, "clickhouse-v2-max-heavy-slow-conns", 2, "maximum number of ClickHouse-v2 connections (heavy slow)")
+	pflag.IntVar(&argv.chV2MaxHeavySlowConns, "clickhouse-v2-max-heavy-slow-conns", 1, "maximum number of ClickHouse-v2 connections (heavy slow)")
+	pflag.IntVar(&argv.chV2MaxHardwareFastConns, "clickhouse-v2-max-hardware-fast-conns", 8, "maximum number of ClickHouse-v2 connections (hardware fast)")
+	pflag.IntVar(&argv.chV2MaxHardwareSlowConns, "clickhouse-v2-max-hardware-slow-conns", 4, "maximum number of ClickHouse-v2 connections (hardware slow)")
 
 	pflag.StringVar(&argv.chV2Password, "clickhouse-v2-password", "", "ClickHouse-v2 password")
 	pflag.StringVar(&argv.chV2User, "clickhouse-v2-user", "", "ClickHouse-v2 user")
@@ -137,37 +134,34 @@ func main() {
 	pflag.StringSliceVar(&argv.defaultMetricFilterNotIn, "default-metric-filter-not-in", []string{}, "default metric filter not in <key0>:value")
 	pflag.StringSliceVar(&argv.defaultMetricWhat, "default-metric-filter-what", []string{}, "default metric function")
 	pflag.StringSliceVar(&argv.defaultMetricGroupBy, "default-metric-group-by", []string{"1"}, "default metric group by tags")
+	pflag.IntVar(&argv.adminDash, "admin-dash-id", 0, "hardware metric dashboard")
 	pflag.StringSliceVar(&argv.eventPreset, "event-preset", []string{}, "event preset")
 	pflag.IntVar(&argv.defaultNumSeries, "default-num-series", 5, "default series number to request")
 	pflag.StringVar(&argv.diskCache, "disk-cache", "statshouse_api_cache.db", "disk cache filename")
 	pflag.BoolVarP(&argv.help, "help", "h", false, "print usage instructions and exit")
 	pflag.StringVar(&argv.listenHTTPAddr, "listen-addr", "localhost:8080", "web server listen address")
 	pflag.StringVar(&argv.listenRPCAddr, "listen-rpc-addr", "localhost:13347", "RPC server listen address")
-	pflag.BoolVar(&argv.localMode, "local-mode", false, "set local-mode if you need to have default access without access token")
-	pflag.BoolVar(&argv.insecureMode, "insecure-mode", false, "set insecure-mode if you don't need any access verification")
 	pflag.StringVar(&argv.pidFile, "pid-file", "statshouse_api.pid", "path to PID file") // fpr table flip
 
 	pflag.StringVar(&argv.pprofAddr, "pprof-addr", "", "Go pprof HTTP listen address (deprecated)")
 	pflag.BoolVar(&argv.pprofHTTP, "pprof-http", true, "Serve Go pprof HTTP on RPC port")
-	pflag.StringSliceVar(&argv.protectedMetricPrefixes, "protected-metric-prefixes", nil, "comma-separated list of metric prefixes that require access bits set")
 	pflag.BoolVar(&argv.showInvisible, "show-invisible", false, "show invisible metrics as well")
 	pflag.DurationVar(&argv.slow, "slow", 0, "slow down all HTTP requests by this much")
 	pflag.StringVar(&argv.staticDir, "static-dir", "", "directory with static assets")
-	pflag.StringVar(&argv.statsHouseAddr, "statshouse-addr", statshouse.DefaultStatsHouseAddr, "address of StatsHouse UDP socket")
+	pflag.StringVar(&argv.statsHouseNetwork, "statshouse-network", statshouse.DefaultNetwork, "udp or unixgram")
+	pflag.StringVar(&argv.statsHouseAddr, "statshouse-addr", statshouse.DefaultAddr, "address of udp socket or path to unix socket")
 	pflag.StringVar(&argv.statsHouseEnv, "statshouse-env", "dev", "fill key0/environment with this value in StatHouse statistics")
-	pflag.StringVar(&argv.timezone, "timezone", "Europe/Moscow", "location of the desired timezone")
 	pflag.IntVar(&argv.utcOffsetHours, "utc-offset", 0, "UTC offset for aggregation, in hours")
-	pflag.BoolVar(&argv.verbose, "verbose", false, "verbose logging")
 	pflag.BoolVar(&argv.version, "version", false, "show version information and exit")
 	pflag.StringVar(&argv.vkuthAppName, "vkuth-app-name", "statshouse-api", "vkuth application name (access bits namespace)")
 	pflag.StringSliceVar(&argv.vkuthPublicKeys, "vkuth-public-keys", nil, "comma-separated list of trusted vkuth public keys; empty list disables token-based access control")
-	pflag.IntVar(&argv.weekStartAt, "week-start", int(time.Monday), "week day of beginning of the week (from sunday=0 to saturday=6)")
-	pflag.BoolVar(&argv.readOnly, "readonly", false, "read only mode")
 
-	pflag.Uint64Var(&argv.metadataActorID, "metadata-actor-id", 0, "metadata engine actor id")
+	pflag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "metadata engine actor id")
 	pflag.StringVar(&argv.metadataAddr, "metadata-addr", "127.0.0.1:2442", "metadata engine address")
 	pflag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "metadata engine network")
-	pflag.DurationVar(&argv.querySelectTimeout, "query-select-timeout", api.QuerySelectTimeoutDefault, "query select timeout")
+	argv.HandlerOptions.Bind(pflag.CommandLine)
+	cfg := &api.Config{}
+	cfg.Bind(pflag.CommandLine, api.DefaultConfig())
 	pflag.Parse()
 
 	if argv.help {
@@ -198,24 +192,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if argv.weekStartAt < int(time.Sunday) || argv.weekStartAt > int(time.Saturday) {
-		log.Fatalf("invalid --week-start value, only 0-6 allowed %q given", argv.weekStartAt)
-	}
-
-	err = run(argv, keys)
+	err = run(argv, cfg, keys)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(argv args, vkuthPublicKeys map[string][]byte) error {
-	location, err := time.LoadLocation(argv.timezone)
-	if err != nil {
-		return fmt.Errorf("failed to load timezone %q: %w", argv.timezone, err)
+func run(argv args, cfg *api.Config, vkuthPublicKeys map[string][]byte) error {
+	if err := argv.HandlerOptions.LoadLocation(); err != nil {
+		return err
 	}
-
-	utcOffset := api.CalcUTCOffset(location, time.Weekday(argv.weekStartAt)) // demands restart after summer/winter time switching
-
 	tf, err := tableflip.New(tableflip.Options{
 		PIDFile:        argv.pidFile,
 		UpgradeTimeout: upgradeTimeout,
@@ -268,14 +254,16 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 	}
 	// argv.chV2MaxLightFastConns, argv.chV2MaxHeavyConns, , , argv.chV2Password, argv.chV2Debug, chDialTimeout
 	chV2, err := util.OpenClickHouse(util.ChConnOptions{
-		Addrs:             argv.chV2Addrs,
-		User:              argv.chV2User,
-		Password:          argv.chV2Password,
-		DialTimeout:       chDialTimeout,
-		FastLightMaxConns: argv.chV2MaxLightFastConns,
-		FastHeavyMaxConns: argv.chV2MaxHeavyFastConns,
-		SlowLightMaxConns: argv.chV2MaxLightSlowConns,
-		SlowHeavyMaxConns: argv.chV2MaxHeavySlowConns,
+		Addrs:                argv.chV2Addrs,
+		User:                 argv.chV2User,
+		Password:             argv.chV2Password,
+		DialTimeout:          chDialTimeout,
+		FastLightMaxConns:    argv.chV2MaxLightFastConns,
+		FastHeavyMaxConns:    argv.chV2MaxHeavyFastConns,
+		SlowLightMaxConns:    argv.chV2MaxLightSlowConns,
+		SlowHeavyMaxConns:    argv.chV2MaxHeavySlowConns,
+		FastHardwareMaxConns: argv.chV2MaxHardwareFastConns,
+		SlowHardwareMaxConns: argv.chV2MaxHardwareSlowConns,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to open ClickHouse-v2: %w", err)
@@ -295,7 +283,7 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 		}
 	}()
 
-	statshouse.Configure(log.Printf, argv.statsHouseAddr, argv.statsHouseEnv)
+	statshouse.ConfigureNetwork(log.Printf, argv.statsHouseNetwork, argv.statsHouseAddr, argv.statsHouseEnv)
 	defer func() { _ = statshouse.Close() }()
 	var rpcCryptoKeys []string
 	if argv.rpcCryptoKeyPath != "" {
@@ -343,18 +331,15 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 		EventPreset:              argv.eventPreset,
 		DefaultNumSeries:         argv.defaultNumSeries,
 		DisableV1:                len(argv.chV1Addrs) == 0,
+		AdminDash:                argv.adminDash,
 	}
-	if argv.localMode {
+	if argv.LocalMode {
 		jsSettings.VkuthAppName = ""
 	}
 	f, err := api.NewHandler(
-		argv.verbose,
 		staticFS,
 		jsSettings,
-		argv.protectedMetricPrefixes,
 		argv.showInvisible,
-		utcOffset,
-		argv.approxCacheMaxSize,
 		chV1,
 		chV2,
 		&tlmetadata.Client{
@@ -365,46 +350,64 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 		},
 		dc,
 		jwtHelper,
-		location,
-		argv.localMode,
-		argv.readOnly,
-		argv.insecureMode,
-		argv.querySelectTimeout,
+		argv.HandlerOptions,
+		cfg,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create handler: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	m := mux.NewRouter()
+	m := api.Router{Handler: f, Router: mux.NewRouter()}
 	a := m.PathPrefix(api.RoutePrefix).Subrouter()
-	a.Path("/"+api.EndpointLegacyRedirect).Methods("GET", "HEAD", "POST").HandlerFunc(f.HandleLegacyRedirect)
-	a.Path("/" + api.EndpointMetricList).Methods("GET").HandlerFunc(f.HandleGetMetricsList)
-	a.Path("/" + api.EndpointMetricTagValues).Methods("GET").HandlerFunc(f.HandleGetMetricTagValues)
-	a.Path("/" + api.EndpointMetric).Methods("GET").HandlerFunc(f.HandleGetMetric)
-	a.Path("/" + api.EndpointMetric).Methods("POST").HandlerFunc(f.HandlePostMetric)
-	a.Path("/" + api.EndpointResetFlood).Methods("POST").HandlerFunc(f.HandlePostResetFlood)
-	a.Path("/" + api.EndpointQuery).Methods("GET").HandlerFunc(f.HandleSeriesQuery)
-	a.Path("/" + api.EndpointPoint).Methods("GET").HandlerFunc(f.HandleGetPoint)
-	a.Path("/" + api.EndpointTable).Methods("GET").HandlerFunc(f.HandleGetTable)
-	a.Path("/" + api.EndpointQuery).Methods("POST").HandlerFunc(f.HandleSeriesQuery)
-	a.Path("/" + api.EndpointRender).Methods("GET").HandlerFunc(f.HandleGetRender)
-	a.Path("/" + api.EndpointDashboard).Methods("GET").HandlerFunc(f.HandleGetDashboard)
-	a.Path("/" + api.EndpointDashboardList).Methods("GET").HandlerFunc(f.HandleGetDashboardList)
-	a.Path("/"+api.EndpointDashboard).Methods("POST", "PUT").HandlerFunc(f.HandlePutPostDashboard)
-	a.Path("/" + api.EndpointGroup).Methods("GET").HandlerFunc(f.HandleGetGroup)
-	a.Path("/" + api.EndpointGroupList).Methods("GET").HandlerFunc(f.HandleGetGroupsList)
-	a.Path("/"+api.EndpointGroup).Methods("POST", "PUT").HandlerFunc(f.HandlePutPostGroup)
-	a.Path("/"+api.EndpointNamespace).Methods("POST", "PUT").HandlerFunc(f.HandlePostNamespace)
-	a.Path("/" + api.EndpointNamespace).Methods("GET").HandlerFunc(f.HandleGetNamespace)
-	a.Path("/" + api.EndpointNamespaceList).Methods("GET").HandlerFunc(f.HandleGetNamespaceList)
-	a.Path("/" + api.EndpointPrometheus).Methods("GET").HandlerFunc(f.HandleGetPromConfig)
-	a.Path("/" + api.EndpointPrometheus).Methods("POST").HandlerFunc(f.HandlePostPromConfig)
-	a.Path("/" + api.EndpointStatistics).Methods("POST").HandlerFunc(f.HandleFrontendStat)
-	m.Path("/prom/api/v1/query").Methods("POST").HandlerFunc(f.HandlePromInstantQuery)
-	m.Path("/prom/api/v1/query_range").Methods("POST").HandlerFunc(f.HandlePromRangeQuery)
-	m.Path("/prom/api/v1/label/{name}/values").Methods("GET").HandlerFunc(f.HandlePromLabelValuesQuery)
-	m.PathPrefix("/").Methods("GET", "HEAD").HandlerFunc(f.HandleStatic)
+	a.Path("/"+api.EndpointLegacyRedirect).Methods("GET", "HEAD", "POST").HandlerFunc(api.HandleLegacyRedirect)
+	a.Path("/" + api.EndpointMetricList).Methods("GET").HandlerFunc(api.HandleGetMetricsList)
+	a.Path("/" + api.EndpointMetricTagValues).Methods("GET").HandlerFunc(api.HandleGetMetricTagValues)
+	a.Path("/" + api.EndpointMetric).Methods("GET").HandlerFunc(api.HandleGetMetric)
+	a.Path("/" + api.EndpointMetric).Methods("POST").HandlerFunc(api.HandlePostMetric)
+	a.Path("/" + api.EndpointResetFlood).Methods("POST").HandlerFunc(api.HandlePostResetFlood)
+	a.Path("/" + api.EndpointQuery).Methods("GET").HandlerFunc(api.HandleSeriesQuery)
+	a.Path("/" + api.EndpointPoint).Methods("GET").HandlerFunc(api.HandlePointQuery)
+	a.Path("/" + api.EndpointPoint).Methods("POST").HandlerFunc(api.HandlePointQuery)
+	a.Path("/" + api.EndpointTable).Methods("GET").HandlerFunc(api.HandleGetTable)
+	a.Path("/" + api.EndpointQuery).Methods("POST").HandlerFunc(api.HandleSeriesQuery)
+	a.Path("/" + api.EndpointRender).Methods("GET").HandlerFunc(api.HandleGetRender)
+	a.Path("/" + api.EndpointDashboard).Methods("GET").HandlerFunc(api.HandleGetDashboard)
+	a.Path("/" + api.EndpointDashboardList).Methods("GET").HandlerFunc(api.HandleGetDashboardList)
+	a.Path("/"+api.EndpointDashboard).Methods("POST", "PUT").HandlerFunc(api.HandlePutPostDashboard)
+	a.Path("/" + api.EndpointGroup).Methods("GET").HandlerFunc(api.HandleGetGroup)
+	a.Path("/" + api.EndpointGroupList).Methods("GET").HandlerFunc(api.HandleGetGroupsList)
+	a.Path("/"+api.EndpointGroup).Methods("POST", "PUT").HandlerFunc(api.HandlePutPostGroup)
+	a.Path("/"+api.EndpointNamespace).Methods("POST", "PUT").HandlerFunc(api.HandlePostNamespace)
+	a.Path("/" + api.EndpointNamespace).Methods("GET").HandlerFunc(api.HandleGetNamespace)
+	a.Path("/" + api.EndpointNamespaceList).Methods("GET").HandlerFunc(api.HandleGetNamespaceList)
+	a.Path("/" + api.EndpointPrometheus).Methods("GET").HandlerFunc(api.HandleGetPromConfig)
+	a.Path("/" + api.EndpointPrometheus).Methods("POST").HandlerFunc(api.HandlePostPromConfig)
+	a.Path("/" + api.EndpointPrometheusGenerated).Methods("GET").HandlerFunc(api.HandleGetPromConfigGenerated)
+	a.Path("/" + api.EndpointKnownTags).Methods("POST").HandlerFunc(api.HandlePostKnownTags)
+	a.Path("/" + api.EndpointKnownTags).Methods("GET").HandlerFunc(api.HandleGetKnownTags)
+	a.Path("/" + api.EndpointStatistics).Methods("POST").HandlerFunc(api.HandleFrontendStat)
+	a.Path("/" + api.EndpointHistory).Methods("GET").HandlerFunc(api.HandleGetHistory)
+	m.Path("/prom/api/v1/query").Methods("GET").HandlerFunc(api.HandleInstantQuery)
+	m.Path("/prom/api/v1/query").Methods("POST").HandlerFunc(api.HandleInstantQuery)
+	m.Path("/prom/api/v1/query_range").Methods("GET").HandlerFunc(api.HandleRangeQuery)
+	m.Path("/prom/api/v1/query_range").Methods("POST").HandlerFunc(api.HandleRangeQuery)
+	m.Path("/prom/api/v1/label/{name}/values").Methods("GET").HandlerFunc(api.HandlePromLabelValuesQuery)
+	m.Path("/prom/api/v1/series").Methods("GET").HandlerFunc(api.HandlePromSeriesQuery)
+	m.Path("/prom/api/v1/series").Methods("POST").HandlerFunc(api.HandlePromSeriesQuery)
+	m.Path("/debug/pprof/").Methods("GET").HandlerFunc(api.HandleProf)
+	m.Path("/debug/pprof/allocs").Methods("GET").HandlerFunc(api.HandleProf)
+	m.Path("/debug/pprof/block").Methods("GET").HandlerFunc(api.HandleProf)
+	m.Path("/debug/pprof/cmdline").Methods("GET").HandlerFunc(api.HandleProfCmdline)
+	m.Path("/debug/pprof/goroutine").Methods("GET").HandlerFunc(api.HandleProf)
+	m.Path("/debug/pprof/heap").Methods("GET").HandlerFunc(api.HandleProf)
+	m.Path("/debug/pprof/mutex").Methods("GET").HandlerFunc(api.HandleProf)
+	m.Path("/debug/pprof/profile").Methods("GET").HandlerFunc(api.HandleProfProfile)
+	m.Path("/debug/pprof/threadcreate").Methods("GET").HandlerFunc(api.HandleProf)
+	m.Path("/debug/pprof/trace").Methods("GET").HandlerFunc(api.HandleProfTrace)
+	m.Path("/debug/pprof/symbol").Methods("GET").HandlerFunc(api.HandleProfSymbol)
+	m.Path("/debug/500").Methods("GET").HandlerFunc(api.DumpInternalServerErrors)
+	m.Router.PathPrefix("/").Methods("GET", "HEAD").HandlerFunc(f.HandleStatic)
 
 	h := http.Handler(m)
 	h = handlers.RecoveryHandler(handlers.PrintRecoveryStack(true))(h)
@@ -442,20 +445,36 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 	defer statshouse.StopRegularMeasurement(chunksCountMeasurementID)
 
 	startTimestamp := time.Now().Unix()
-	statshouse.Metric(format.BuiltinMetricNameHeartbeatVersion, statshouse.Tags{1: "4", 2: "1"}).Value(0)
+	heartbeatTags := statshouse.Tags{
+		1: "4",
+		2: fmt.Sprint(format.TagValueIDHeartbeatEventStart),
+		5: fmt.Sprint(format.ISO8601Date2BuildDateKey(time.Unix(int64(build.CommitTimestamp()), 0).Format(time.RFC3339))),
+		6: fmt.Sprint(build.CommitTimestamp()),
+		7: srvfunc.HostnameForStatshouse(),
+	}
+	if build.Commit() != "?" {
+		commitRaw, err := hex.DecodeString(build.Commit())
+		if err == nil && len(commitRaw) >= 4 {
+			heartbeatTags[4] = fmt.Sprint(int32(binary.BigEndian.Uint32(commitRaw)))
+		}
+	}
+	statshouse.Value(format.BuiltinMetricNameHeartbeatVersion, heartbeatTags, 0)
+
+	heartbeatTags[2] = fmt.Sprint(format.TagValueIDHeartbeatEventHeartbeat)
 	defer statshouse.StopRegularMeasurement(statshouse.StartRegularMeasurement(func(c *statshouse.Client) {
 		uptime := float64(time.Now().Unix() - startTimestamp)
-		c.Metric(format.BuiltinMetricNameHeartbeatVersion, statshouse.Tags{1: "4", 2: "2"}).Value(uptime)
+		c.Value(format.BuiltinMetricNameHeartbeatVersion, heartbeatTags, uptime)
 	}))
 
-	hr := api.NewRpcHandler(f, brs, jwtHelper, argv.protectedMetricPrefixes, argv.localMode, argv.insecureMode)
+	hr := api.NewRpcHandler(f, brs, jwtHelper, argv.HandlerOptions)
 	handlerRPC := &tlstatshouseApi.Handler{
-		GetChunk:      hr.GetChunk,
-		RawGetQuery:   hr.RawGetQuery,
-		ReleaseChunks: hr.ReleaseChunks,
-		GetQueryPoint: hr.GetQueryPoint,
+		GetChunk:         hr.GetChunk,
+		RawGetQuery:      hr.RawGetQuery,
+		ReleaseChunks:    hr.ReleaseChunks,
+		RawGetQueryPoint: hr.RawGetQueryPoint,
 	}
 	var hijackListener *rpc.HijackListener
+	metrics := util.NewRPCServerMetrics("statshouse_api")
 	srv := rpc.NewServer(
 		rpc.ServerWithSocketHijackHandler(func(conn *rpc.HijackConnection) {
 			hijackListener.AddConnection(conn)
@@ -463,7 +482,10 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 		rpc.ServerWithLogf(log.Printf),
 		rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
 		rpc.ServerWithHandler(handlerRPC.Handle),
-		rpc.ServerWithCryptoKeys(rpcCryptoKeys))
+		rpc.ServerWithCryptoKeys(rpcCryptoKeys),
+		metrics.ServerWithMetrics,
+	)
+	defer metrics.Run(srv)()
 	defer func() { _ = srv.Close() }()
 
 	rpcLn, err := tf.Listen("tcp4", argv.listenRPCAddr)
@@ -475,7 +497,7 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 	defer func() { _ = hijackListener.Close() }()
 	go func() {
 		err := srv.Serve(rpcLn)
-		if err != nil && err != rpc.ErrServerClosed {
+		if err != nil {
 			log.Fatalln("RPC server failed:", err)
 		}
 	}()
@@ -483,12 +505,7 @@ func run(argv args, vkuthPublicKeys map[string][]byte) error {
 		go func() { // serve pprof on RPC port
 			m := http.NewServeMux()
 			m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				remoteAddr, err := net.ResolveTCPAddr("tcp", r.RemoteAddr)
-				if err == nil && remoteAddr.IP.IsLoopback() {
-					http.DefaultServeMux.ServeHTTP(w, r)
-				} else {
-					w.WriteHeader(http.StatusUnauthorized)
-				}
+				http.DefaultServeMux.ServeHTTP(w, r)
 			})
 			log.Printf("serving Go pprof at %q", argv.listenRPCAddr)
 			s := http.Server{Handler: m}

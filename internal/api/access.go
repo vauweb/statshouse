@@ -7,12 +7,13 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
-	"github.com/vkcom/statshouse/internal/vkgo/vkuth"
-
+	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/format"
+	"github.com/vkcom/statshouse/internal/vkgo/vkuth"
 )
 
 type accessInfo struct {
@@ -38,6 +39,7 @@ func parseAccessToken(jwtHelper *vkuth.JWTHelper,
 	insecureMode bool) (accessInfo, error) {
 	if localMode || insecureMode {
 		ai := accessInfo{
+			user:              "@local_mode",
 			protectedPrefixes: protectedPrefixes,
 			bitViewDefault:    true,
 			bitEditDefault:    true,
@@ -77,17 +79,37 @@ func parseAccessToken(jwtHelper *vkuth.JWTHelper,
 		case b == "edit_default":
 			ai.bitEditDefault = true
 		case strings.HasPrefix(b, "view_prefix."):
-			ai.bitViewPrefix[b[len("view_prefix."):]] = true
+			ai.bitViewPrefix[extractNamespace(b[len("view_prefix."):])] = true
 		case strings.HasPrefix(b, "edit_prefix."):
-			ai.bitEditPrefix[b[len("edit_prefix."):]] = true
+			ai.bitEditPrefix[extractNamespace(b[len("edit_prefix."):])] = true
 		case strings.HasPrefix(b, "view_metric."):
-			ai.bitViewMetric[b[len("view_metric."):]] = true
+			ai.bitViewMetric[extractNamespace(b[len("view_metric."):])] = true
 		case strings.HasPrefix(b, "edit_metric."):
-			ai.bitEditMetric[b[len("edit_metric."):]] = true
+			ai.bitEditMetric[extractNamespace(b[len("edit_metric."):])] = true
+		// use another bit, because vkuth token can't contain ':'
+		case strings.HasPrefix(b, "view_namespace."):
+			ai.bitViewPrefix[b[len("view_namespace."):]+":"] = true
+		case strings.HasPrefix(b, "edit_namespace."):
+			ai.bitEditPrefix[b[len("edit_namespace."):]+":"] = true
 		}
 	}
 
 	return ai, nil
+}
+
+// ':' is reserved by vkuth. We use '@' as namespace separator in bits
+func extractNamespace(bit string) string {
+	return strings.Replace(bit, "@", ":", 1)
+}
+
+func (ai *accessInfo) toMetadata() string {
+	m := metadata{
+		UserEmail: ai.user,
+		UserName:  "",
+		UserRef:   "",
+	}
+	res, _ := json.Marshal(&m)
+	return string(res)
 }
 
 func (ai *accessInfo) protectedMetric(name string) bool {
@@ -106,7 +128,9 @@ func (ai *accessInfo) CanViewMetricName(name string) bool {
 	if ai.insecureMode {
 		return true
 	}
-
+	if data_model.RemoteConfigMetric(name) && !ai.bitAdmin {
+		return false // remote config can only be viewed by administrators
+	}
 	return ai.bitViewMetric[name] ||
 		hasPrefixAccess(ai.bitViewPrefix, name) ||
 		(ai.bitViewDefault && !ai.protectedMetric(name))
@@ -121,21 +145,12 @@ func (ai *accessInfo) canChangeMetricByName(create bool, old format.MetricMetaVa
 		return true
 	}
 
-	if !create {
-		oldGroup := old.Group
-		newGroup := new_.Group
-		if oldGroup != nil && newGroup != nil {
-			if oldGroup.ID != newGroup.ID {
-				return false
-			}
-		} else if oldGroup != newGroup {
-			return false
-		}
-	}
 	oldName := old.Name
 	newName := new_.Name
 
-	// we expect that oldName and newName both are in the same group
+	if data_model.RemoteConfigMetric(oldName) || data_model.RemoteConfigMetric(newName) {
+		return false // remote config can only be set by administrators
+	}
 	return ai.bitEditMetric[oldName] && ai.bitEditMetric[newName] ||
 		(hasPrefixAccess(ai.bitEditPrefix, oldName) && hasPrefixAccess(ai.bitEditPrefix, newName)) ||
 		(ai.bitEditDefault && !ai.protectedMetric(oldName) && !ai.protectedMetric(newName))
@@ -172,20 +187,6 @@ func (ai *accessInfo) isAdmin() bool {
 		return true
 	}
 	return ai.bitAdmin
-}
-
-func (ai *accessInfo) withBadgesRequest() accessInfo {
-	return accessInfo{
-		user:                 ai.user,
-		insecureMode:         ai.insecureMode,
-		protectedPrefixes:    ai.protectedPrefixes,
-		bitAdmin:             ai.bitAdmin,
-		bitViewPrefix:        ai.bitViewPrefix,
-		bitEditPrefix:        ai.bitEditPrefix,
-		bitViewMetric:        ai.bitViewMetric,
-		bitEditMetric:        ai.bitEditMetric,
-		skipBadgesValidation: true,
-	}
 }
 
 func preKey(m format.MetricMetaValue) uint32 {

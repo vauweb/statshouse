@@ -8,6 +8,7 @@ package aggregator
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strconv"
 	"sync"
@@ -57,22 +58,23 @@ func NewTagsMapper(agg *Aggregator, sh2 *agent.Agent, metricStorage *metajournal
 		}
 		keyValue, c, d, err := loader.GetTagMapping(ctx, askedKey, metricName, extra.Create)
 		key := ms.sh2.AggKey(0, format.BuiltinMetricIDAggMappingCreated, [16]int32{extra.ClientEnv, 0, 0, 0, metricID, c, extra.TagIDKey})
+		meta := format.BuiltinMetricMetaAggMappingCreated
 		key = key.WithAgentEnvRouteArch(extra.AgentEnv, extra.Route, extra.BuildArch)
 
 		if err != nil {
 			// TODO - write to actual log from time to time
 			a.appendInternalLog("map_tag", strconv.Itoa(int(extra.AgentEnv)), "error", askedKey, extra.Metric, strconv.Itoa(int(metricID)), strconv.Itoa(int(extra.TagIDKey)), err.Error())
-			ms.sh2.AddValueCounterHost(key, 0, 1, extra.Host)
+			ms.sh2.AddValueCounterHost(key, 0, 1, extra.Host, meta)
 		} else {
 			switch c {
 			case format.TagValueIDAggMappingCreatedStatusFlood:
 				// TODO - more efficient flood processing - do not write to log, etc
 				a.appendInternalLog("map_tag", strconv.Itoa(int(extra.AgentEnv)), "flood", askedKey, extra.Metric, strconv.Itoa(int(metricID)), strconv.Itoa(int(extra.TagIDKey)), extra.HostName)
-				ms.sh2.AddValueCounterHost(key, 0, 1, extra.Host)
+				ms.sh2.AddValueCounterHost(key, 0, 1, extra.Host, meta)
 			case format.TagValueIDAggMappingCreatedStatusCreated:
 				a.appendInternalLog("map_tag", strconv.Itoa(int(extra.AgentEnv)), "created", askedKey, extra.Metric, strconv.Itoa(int(metricID)), strconv.Itoa(int(extra.TagIDKey)), strconv.Itoa(int(keyValue)))
 				// if askedKey is created, it is valid and safe to write
-				ms.sh2.AddValueCounterHostStringBytes(key, float64(keyValue), 1, extra.Host, []byte(askedKey))
+				ms.sh2.AddValueCounterHostStringBytes(key, float64(keyValue), 1, extra.Host, []byte(askedKey), meta)
 			}
 		}
 		return pcache.Int32ToValue(keyValue), d, err
@@ -137,15 +139,14 @@ func (ms *TagsMapper) mapTagAtStartup(tagName []byte, metricName string) int32 {
 	}
 }
 
-func (ms *TagsMapper) mapHost(now time.Time, hostName []byte, metricName string, shouldWait bool) int32 {
-	// All hosts must be valid and non-empty
+func (ms *TagsMapper) mapOrFlood(now time.Time, value []byte, metricName string, shouldWait bool) int32 {
 	// if aggregator fails to map agent host, then sets as a max host for some built-in metric, then
 	// when agent sends to another aggregator, max host will be set to original aggregator host, not to "empty" (unknown).
 	// This is why we set to invalid "Mapping Flood" value. This is not perfect, but better.
-	if !format.ValidStringValue(mem.B(hostName)) {
+	if !format.ValidStringValue(mem.B(value)) {
 		return format.TagValueIDMappingFlood
 	}
-	ret := ms.getTagOr0LoadLater(now, hostName, metricName, shouldWait)
+	ret := ms.getTagOr0LoadLater(now, value, metricName, shouldWait)
 	if ret != 0 {
 		return ret
 	}
@@ -153,22 +154,27 @@ func (ms *TagsMapper) mapHost(now time.Time, hostName []byte, metricName string,
 }
 
 // safe only to access fields mask in args, other fields point to reused memory
-func (ms *TagsMapper) sendCreateTagMappingResult(hctx *rpc.HandlerContext, args tlstatshouse.GetTagMapping2Bytes, r pcache.Result, key data_model.Key) (err error) {
+func (ms *TagsMapper) sendCreateTagMappingResult(hctx *rpc.HandlerContext, args tlstatshouse.GetTagMapping2Bytes, r pcache.Result, key data_model.Key, meta *format.MetricMetaValue) (err error) {
 	if r.Err != nil {
-		key.Keys[5] = format.TagValueIDAggMappingStatusErrUncached
-		ms.sh2.AddCounter(key, 1)
+		key.Tags[5] = format.TagValueIDAggMappingStatusErrUncached
+		ms.sh2.AddCounter(key, 1, meta)
 		return r.Err
 	}
-	ms.sh2.AddCounter(key, 1)
+	ms.sh2.AddCounter(key, 1, meta)
 	result := tlstatshouse.GetTagMappingResult{Value: pcache.ValueToInt32(r.Value), TtlNanosec: int64(r.TTL)}
 	hctx.Response, err = args.WriteResult(hctx.Response, result)
 	return err
 }
 
-func (ms *TagsMapper) handleCreateTagMapping(_ context.Context, hctx *rpc.HandlerContext, args tlstatshouse.GetTagMapping2Bytes) error {
+func (ms *TagsMapper) handleCreateTagMapping(_ context.Context, hctx *rpc.HandlerContext) error {
+	var args tlstatshouse.GetTagMapping2Bytes
+	_, err := args.Read(hctx.Request)
+	if err != nil {
+		return fmt.Errorf("failed to deserialize statshouse.getTagMapping2 request: %w", err)
+	}
 	now := time.Now()
-	host := ms.mapHost(now, args.Header.HostName, format.BuiltinMetricNameBudgetHost, false)
-	agentEnv := ms.agg.getAgentEnv(args.Header.IsSetAgentEnvStaging(args.FieldsMask))
+	host := ms.mapOrFlood(now, args.Header.HostName, format.BuiltinMetricNameBudgetHost, false)
+	agentEnv := ms.agg.getAgentEnv(args.Header.IsSetAgentEnvStaging0(args.FieldsMask), args.Header.IsSetAgentEnvStaging1(args.FieldsMask))
 	buildArch := format.FilterBuildArch(args.Header.BuildArch)
 	route := int32(format.TagValueIDRouteDirect) // all config routes are direct
 	if args.Header.IsSetIngressProxy(args.FieldsMask) {
@@ -176,6 +182,7 @@ func (ms *TagsMapper) handleCreateTagMapping(_ context.Context, hctx *rpc.Handle
 	}
 	key := ms.sh2.AggKey(0, format.BuiltinMetricIDAggMapping, [16]int32{0, 0, 0, 0, format.TagValueIDAggMappingMetaMetrics, format.TagValueIDAggMappingStatusOKCached})
 	key = key.WithAgentEnvRouteArch(agentEnv, route, buildArch)
+	meta := format.BuiltinMetricMetaAggMapping
 
 	r := ms.tagValue.GetCached(now, args.Key)
 	if !r.Found() {
@@ -200,8 +207,8 @@ func (ms *TagsMapper) handleCreateTagMapping(_ context.Context, hctx *rpc.Handle
 			ms.mu.Lock()
 			defer ms.mu.Unlock()
 			if *bb {
-				key.Keys[5] = format.TagValueIDAggMappingStatusOKUncached
-				err := ms.sendCreateTagMappingResult(hctx, args, v, key)
+				key.Tags[5] = format.TagValueIDAggMappingStatusOKUncached
+				err := ms.sendCreateTagMappingResult(hctx, args, v, key, meta)
 				hctx.SendHijackedResponse(err)
 			}
 		})
@@ -212,5 +219,5 @@ func (ms *TagsMapper) handleCreateTagMapping(_ context.Context, hctx *rpc.Handle
 			return hctx.HijackResponse(ms)
 		}
 	}
-	return ms.sendCreateTagMappingResult(hctx, args, r, key)
+	return ms.sendCreateTagMappingResult(hctx, args, r, key, meta)
 }

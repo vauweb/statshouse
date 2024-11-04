@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -16,45 +16,52 @@ func (s *CircularSlice[T]) Len() int {
 	return s.write_pos - s.read_pos
 }
 
+func (s *CircularSlice[T]) Cap() int {
+	return len(s.elements)
+}
+
 // Two parts of circular slice
 func (s *CircularSlice[T]) Slices() ([]T, []T) {
-	size := len(s.elements)
-	if s.write_pos <= size {
+	capacity := len(s.elements)
+	if s.write_pos <= capacity {
 		return s.elements[s.read_pos:s.write_pos], nil
 	}
-	return s.elements[s.read_pos:size], s.elements[0 : s.write_pos-size]
+	return s.elements[s.read_pos:capacity], s.elements[0 : s.write_pos-capacity]
 }
 
-func (s *CircularSlice[T]) Reserve(newSize int) {
-	if newSize < s.Len() {
-		newSize = s.Len()
-	}
-	s.growSlice(newSize)
-}
-
-func (s *CircularSlice[T]) growSlice(newSize int) {
-	size := len(s.elements)
-	if newSize < 4 {
-		newSize = 4
+// Will also reduce capacity
+func (s *CircularSlice[T]) Reserve(newCapacity int) {
+	if newCapacity <= len(s.elements) { // fits perfectly, do nothing
+		return
 	}
 	s1, s2 := s.Slices()
-	s.elements = make([]T, newSize)
-	start := copy(s.elements, s1)
-	copy(s.elements[start:], s2)
+	elements := make([]T, newCapacity) // size will forever be equal to capacity
+	off := copy(elements, s1)
+	off += copy(elements[off:], s2)
+	if off != len(s1)+len(s2) {
+		panic("circular slice invariant violated in Reserve")
+	}
 	s.read_pos = 0
-	s.write_pos = size
+	s.write_pos = off
+	s.elements = elements
 }
 
 func (s *CircularSlice[T]) PushBack(element T) {
-	size := len(s.elements)
-	if s.write_pos-s.read_pos == size {
-		s.growSlice(size * 2)
-		size = len(s.elements)
+	capacity := len(s.elements)
+	if s.write_pos-s.read_pos > capacity { // cheap to test
+		panic("circular slice invariant violated in PushBack")
 	}
-	if s.write_pos < size {
+	if s.write_pos-s.read_pos == capacity {
+		if capacity < 4 {
+			capacity = 4
+		}
+		s.Reserve(capacity * 2)
+		capacity = len(s.elements)
+	}
+	if s.write_pos < capacity {
 		s.elements[s.write_pos] = element
 	} else {
-		s.elements[s.write_pos-size] = element
+		s.elements[s.write_pos-capacity] = element
 	}
 	s.write_pos++
 }
@@ -67,18 +74,22 @@ func (s *CircularSlice[T]) Front() T {
 }
 
 func (s *CircularSlice[T]) Index(pos int) T {
+	return *s.IndexRef(pos)
+}
+
+func (s *CircularSlice[T]) IndexRef(pos int) *T {
 	if pos < 0 {
 		panic("circular slice index < 0")
 	}
-	size := len(s.elements)
+	capacity := len(s.elements)
 	offset := s.read_pos + pos
-	if offset < size {
-		return s.elements[offset]
+	if offset < capacity {
+		return &s.elements[offset]
 	}
 	if offset >= s.write_pos {
 		panic("circular slice index out of range")
 	}
-	return s.elements[offset-size]
+	return &s.elements[offset-capacity]
 }
 
 func (s *CircularSlice[T]) PopFront() T {
@@ -89,10 +100,10 @@ func (s *CircularSlice[T]) PopFront() T {
 	var empty T
 	s.elements[s.read_pos] = empty // do not prevent garbage collection from invisible parts of slice
 	s.read_pos++
-	size := len(s.elements)
-	if s.read_pos >= size {
-		s.read_pos -= size
-		s.write_pos -= size
+	capacity := len(s.elements)
+	if s.read_pos >= capacity {
+		s.read_pos -= capacity
+		s.write_pos -= capacity
 	}
 	if s.read_pos == s.write_pos { // Maximize probability of single continuous slice
 		s.read_pos = 0
@@ -102,6 +113,14 @@ func (s *CircularSlice[T]) PopFront() T {
 }
 
 func (s *CircularSlice[T]) Clear() {
+	var empty T
+	s1, s2 := s.Slices()
+	for i := range s1 {
+		s1[i] = empty
+	}
+	for i := range s2 {
+		s2[i] = empty
+	}
 	s.read_pos = 0
 	s.write_pos = 0
 }
@@ -112,4 +131,10 @@ func (s *CircularSlice[T]) DeepAssign(other CircularSlice[T]) {
 		read_pos:  other.read_pos,
 		write_pos: other.write_pos,
 	}
+}
+
+func (s *CircularSlice[T]) Swap(other *CircularSlice[T]) {
+	s.elements, other.elements = other.elements, s.elements
+	s.write_pos, other.write_pos = other.write_pos, s.write_pos
+	s.read_pos, other.read_pos = other.read_pos, s.read_pos
 }

@@ -8,16 +8,19 @@ package metadata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/vkcom/statshouse/internal/data_model"
 
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
@@ -32,12 +35,14 @@ func initServer(t *testing.T, now func() time.Time) (net.Listener, *rpc.Server, 
 	handler := NewHandler(db, "abc", log.Printf)
 	proxy := ProxyHandler{}
 	h := tlmetadata.Handler{
-		RawGetMapping:       proxy.HandleProxy("", handler.RawGetMappingByValue),
-		RawGetInvertMapping: proxy.HandleProxy("", handler.RawGetMappingByID),
-		RawEditEntitynew:    proxy.HandleProxy("", handler.RawEditEntity),
+		RawGetMapping:          proxy.HandleProxy("", handler.RawGetMappingByValue),
+		RawGetInvertMapping:    proxy.HandleProxy("", handler.RawGetMappingByID),
+		RawEditEntitynew:       proxy.HandleProxy("", handler.RawEditEntity),
+		RawGetEntity:           proxy.HandleProxy("", handler.RawGetEntity),
+		RawGetHistoryShortInfo: proxy.HandleProxy("", handler.RawGetHistory),
 
-		PutTagMappingBootstrap: handler.PutTagMappingBootstrap,
-		GetTagMappingBootstrap: handler.GetTagMappingBootstrap,
+		PutTagMappingBootstrap: HandleProxyGen(&proxy, "", handler.PutTagMappingBootstrap),
+		GetTagMappingBootstrap: HandleProxyGen(&proxy, "", handler.GetTagMappingBootstrap),
 	}
 	sh := tlmetadata.Handler{RawGetJournalnew: proxy.HandleProxy("", handler.RawGetJournal)}
 	server := rpc.NewServer(rpc.ServerWithHandler(h.Handle), rpc.ServerWithSyncHandler(sh.Handle), rpc.ServerWithLogf(log.Printf))
@@ -49,9 +54,7 @@ func initServer(t *testing.T, now func() time.Time) (net.Listener, *rpc.Server, 
 	require.NoError(t, err)
 	go func() {
 		err = server.Serve(ln)
-		if err != rpc.ErrServerClosed {
-			require.NoError(t, err)
-		}
+		require.NoError(t, err)
 	}()
 	rpcClient := rpc.NewClient()
 	cl := &tlmetadata.Client{
@@ -158,8 +161,8 @@ func getJournal(t *testing.T, rpcClient *tlmetadata.Client, from int64) (tlmetad
 	}
 }
 
-func getMapping(rpcClient *tlmetadata.Client, metricName, key string, create bool) (tlmetadata.GetMappingResponseUnion, error) {
-	resp := tlmetadata.GetMappingResponseUnion{}
+func getMapping(rpcClient *tlmetadata.Client, metricName, key string, create bool) (tlmetadata.GetMappingResponse, error) {
+	resp := tlmetadata.GetMappingResponse{}
 	req := tlmetadata.GetMapping{
 		FieldMask: 0,
 		Metric:    metricName,
@@ -172,8 +175,8 @@ func getMapping(rpcClient *tlmetadata.Client, metricName, key string, create boo
 	return resp, err
 }
 
-func getInvertMapping(rpcClient *tlmetadata.Client, id int32) (tlmetadata.GetInvertMappingResponseUnion, error) {
-	resp := tlmetadata.GetInvertMappingResponseUnion{}
+func getInvertMapping(rpcClient *tlmetadata.Client, id int32) (tlmetadata.GetInvertMappingResponse, error) {
+	resp := tlmetadata.GetInvertMappingResponse{}
 	req := tlmetadata.GetInvertMapping{
 		Id: id,
 	}
@@ -229,6 +232,23 @@ func getBootstrap(t *testing.T, rpcClient *tlmetadata.Client) ([]tlstatshouse.Ma
 	err := rpcClient.GetTagMappingBootstrap(context.Background(), tlmetadata.GetTagMappingBootstrap{}, nil, res)
 	require.NoError(t, err)
 	return res.Mappings, nil
+}
+
+func getHistory(t *testing.T, rpcClient *tlmetadata.Client, id int64) (tlmetadata.HistoryShortResponse, error) {
+	res := tlmetadata.HistoryShortResponse{}
+	err := rpcClient.GetHistoryShortInfo(context.Background(), tlmetadata.GetHistoryShortInfo{
+		Id: id,
+	}, nil, &res)
+	return res, err
+}
+
+func getEntity(t *testing.T, rpcClient *tlmetadata.Client, id, version int64) (tlmetadata.Event, error) {
+	res := tlmetadata.Event{}
+	err := rpcClient.GetEntity(context.Background(), tlmetadata.GetEntity{
+		Id:      id,
+		Version: version,
+	}, nil, &res)
+	return res, err
 }
 
 func putJournalEvent(t *testing.T, rpcClient *tlmetadata.Client, name, json string, id, version int64, typ int32, delete bool) (tlmetadata.Event, error) {
@@ -314,6 +334,15 @@ func TestRPCServer(t *testing.T) {
 		resp, _ = putMetricTest(t, rpcClient, "abc3", resp.Id, resp.Version, "")
 		require.NotEqual(t, 0, resp.Version)
 		require.NotEqual(t, version, resp.Version)
+	})
+
+	t.Run("insert metric greater than limit", func(t *testing.T) {
+		jsonStr, _ := statJson("abc2", 1235, strings.Repeat("a", maxReqSize))
+		checkJson(t, jsonStr)
+		_, err := putMetric(t, rpcClient, "abc2", jsonStr, 0, 0)
+		var rpcErr *rpc.Error
+		errors.As(err, &rpcErr)
+		require.Equal(t, data_model.ErrRequestIsTooBig.Code, rpcErr.Code)
 	})
 
 	t.Run("get all metrics", func(t *testing.T) {
@@ -453,6 +482,44 @@ func TestRPCServer(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Error("test timeout")
 		}
+	})
+
+	t.Run("get old version", func(t *testing.T) {
+		jsonStr, m := statJson("abc10", 12345, "a")
+		checkJson(t, jsonStr)
+		resp, err := putJournalEvent(t, rpcClient, "abc10", jsonStr, 0, 0, format.MetricEvent, false)
+		checkJournalResponse(t, resp, m)
+		require.NoError(t, err)
+		e2, err := putJournalEvent(t, rpcClient, "abc100", jsonStr, resp.Id, resp.Version, format.MetricEvent, false)
+		checkJournalResponse(t, e2, m)
+		require.NoError(t, err)
+		e1, err := getEntity(t, rpcClient, resp.Id, resp.Version)
+		require.NoError(t, err)
+		require.Equal(t, resp, e1)
+	})
+
+	t.Run("get history version", func(t *testing.T) {
+		jsonStr, m := statJson("abc12", 12345, "a")
+		checkJson(t, jsonStr)
+		e1, err := putJournalEvent(t, rpcClient, "abc12", jsonStr, 0, 0, format.MetricEvent, false)
+		require.NoError(t, err)
+		checkJournalResponse(t, e1, m)
+		require.NoError(t, err)
+		e2, err := putJournalEvent(t, rpcClient, "abc123", jsonStr, e1.Id, e1.Version, format.MetricEvent, false)
+		require.NoError(t, err)
+		checkJournalResponse(t, e2, m)
+		history, err := getHistory(t, rpcClient, e1.Id)
+		require.NoError(t, err)
+		require.Len(t, history.Events, 2)
+		require.Equal(t, tlmetadata.HistoryShortResponseEvent{
+			Version:  e2.Version,
+			Metadata: e2.Metadata,
+		}, history.Events[0])
+		require.Equal(t, tlmetadata.HistoryShortResponseEvent{
+			Version:  e1.Version,
+			Metadata: e1.Metadata,
+		}, history.Events[1])
+
 	})
 
 	t.Run("create mapping", func(t *testing.T) {

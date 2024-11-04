@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -46,10 +46,10 @@ func (p *packetConnMachine) init(t *rapid.T) {
 	wb2 := rapid.IntRange(0, 4*aes.BlockSize).Draw(t, "wb2")
 
 	p.c1 = &connEx{
-		pc: NewPacketConn(nc1, rb1, wb1, 0),
+		pc: NewPacketConn(nc1, rb1, wb1),
 	}
 	p.c2 = &connEx{
-		pc: NewPacketConn(nc2, rb2, wb2, 0),
+		pc: NewPacketConn(nc2, rb2, wb2),
 	}
 
 	enc := rapid.Bool().Draw(t, "enc")
@@ -109,6 +109,8 @@ func send(t *rapid.T, from *connEx, to *connEx) {
 	}
 	if from.pc.writeSeqNum == startSeqNum {
 		pc.packetType = packetTypeRPCNonce
+	} else if from.pc.writeSeqNum == startSeqNum+1 {
+		pc.packetType = packetTypeRPCHandshake
 	} else {
 		pc.packetType = rapid.Uint32().Draw(t, "type")
 	}

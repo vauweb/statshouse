@@ -48,17 +48,23 @@ var (
 		configAgent                  agent.Config
 		maxCores                     int
 		listenAddr                   string
+		listenAddrIPv6               string
+		listenAddrUnix               string
+		mirrorUdpAddr                string
 		coresUDP                     int
 		bufferSizeUDP                int
 		promRemoteMod                bool
 		hardwareMetricScrapeInterval time.Duration
 		hardwareMetricScrapeDisable  bool
+		envFilePath                  string
 
 		configAggregator aggregator.ConfigAggregator
 
-		configIngress  aggregator.ConfigIngressProxy
-		ingressExtAddr string
-		ingressPwdDir  string
+		configIngress      aggregator.ConfigIngressProxy
+		ingressExtAddr     string
+		ingressExtAddrIPv6 string
+		ingressPwdDir      string
+		ingressVersion     string
 
 		// for old mode
 		historicStorageDir string
@@ -108,8 +114,8 @@ func argvAddCommonFlags() {
 	flag.StringVar(&argv.userLogin, "u", defaultUser, "sets user name to make setuid")
 	flag.StringVar(&argv.userGroup, "g", defaultGroup, "sets user group to make setguid")
 
-	flag.StringVar(&argv.pprofListenAddr, "pprof", "", "HTTP pprof listen address (deprecated)")
-	flag.BoolVar(&argv.pprofHTTP, "pprof-http", true, "Serve Go pprof HTTP on RPC port")
+	flag.StringVar(&argv.pprofListenAddr, "pprof", "", "HTTP pprof listen address")
+	flag.BoolVar(&argv.pprofHTTP, "pprof-http", false, "Serve Go pprof HTTP on RPC port (deprecated due to security reasons)")
 
 	flag.StringVar(&argv.cacheDir, "cache-dir", "", "Data that cannot be immediately sent will be stored here together with metric metadata cache.")
 
@@ -123,8 +129,11 @@ func argvAddCommonFlags() {
 }
 
 func argvAddAgentFlags(legacyVerb bool) {
-	argv.configAgent.Bind(flag.CommandLine, agent.DefaultConfig())
+	argv.configAgent.Bind(flag.CommandLine, agent.DefaultConfig(), legacyVerb)
 	flag.StringVar(&argv.listenAddr, "p", ":13337", "RAW UDP & RPC TCP listen address")
+	flag.StringVar(&argv.listenAddrIPv6, "listen-addr-ipv6", "", "RAW UDP & RPC TCP listen address (IPv6)")
+	flag.StringVar(&argv.listenAddrUnix, "listen-addr-unix", "", "Unix datagram listen address.")
+	flag.StringVar(&argv.mirrorUdpAddr, "mirror-udp", "", "mirrors UDP datagrams to the given address")
 
 	flag.IntVar(&argv.coresUDP, "cores-udp", 1, "CPU cores to use for udp receiving. 0 switches UDP off")
 	flag.IntVar(&argv.bufferSizeUDP, "buffer-size-udp", receiver.DefaultConnBufSize, "UDP receiving buffer size")
@@ -135,6 +144,7 @@ func argvAddAgentFlags(legacyVerb bool) {
 
 	flag.DurationVar(&argv.hardwareMetricScrapeInterval, "hardware-metric-scrape-interval", time.Second, "how often hardware metrics will be scraped")
 	flag.BoolVar(&argv.hardwareMetricScrapeDisable, "hardware-metric-scrape-disable", false, "disable hardware metric scraping")
+	flag.StringVar(&argv.envFilePath, "env-file-path", "/etc/statshouse_env.yml", "statshouse environment file path")
 }
 
 func argvAddAggregatorFlags(legacyVerb bool) {
@@ -143,11 +153,9 @@ func argvAddAggregatorFlags(legacyVerb bool) {
 	flag.IntVar(&argv.configAggregator.HistoricInserters, "historic-inserters", aggregator.DefaultConfigAggregator().HistoricInserters, "How many parallel inserts to make for historic data")
 	flag.IntVar(&argv.configAggregator.InsertHistoricWhen, "insert-historic-when", aggregator.DefaultConfigAggregator().InsertHistoricWhen, "Aggregator will insert historic data when # of ongoing recent data inserts is this number or less")
 
-	flag.IntVar(&argv.configAggregator.InsertBudget, "insert-budget", aggregator.DefaultConfigAggregator().InsertBudget, "Aggregator will sample data before inserting into clickhouse. Bytes per contributor when # >> 100.")
-	flag.IntVar(&argv.configAggregator.InsertBudget100, "insert-budget-100", aggregator.DefaultConfigAggregator().InsertBudget100, "Aggregator will sample data before inserting into clickhouse. Bytes per contributor when # ~ 100.")
 	flag.IntVar(&argv.configAggregator.CardinalityWindow, "cardinality-window", aggregator.DefaultConfigAggregator().CardinalityWindow, "Aggregator will use this window (seconds) to estimate cardinality")
 	flag.IntVar(&argv.configAggregator.MaxCardinality, "max-cardinality", aggregator.DefaultConfigAggregator().MaxCardinality, "Aggregator will sample metrics which cardinality estimates are higher")
-	flag.IntVar(&argv.configAggregator.StringTopCountInsert, "string-top-insert", aggregator.DefaultConfigAggregator().StringTopCountInsert, "How many different strings per key is inserted by aggregator in string tops.")
+	argv.configAggregator.Bind(flag.CommandLine, aggregator.DefaultConfigAggregator().ConfigAggregatorRemote, legacyVerb)
 
 	flag.Float64Var(&argv.configAggregator.SimulateRandomErrors, "simulate-errors-random", aggregator.DefaultConfigAggregator().SimulateRandomErrors, "Probability of errors for recent buckets from 0.0 (no errors) to 1.0 (all errors)")
 
@@ -162,12 +170,15 @@ func argvAddAggregatorFlags(legacyVerb bool) {
 		flag.Uint64Var(&unused1, "pmc-mapping-actor-id", 0, "actor ID of PMC mapping cluster")
 	} else {
 		flag.BoolVar(&argv.configAggregator.AutoCreate, "auto-create", aggregator.DefaultConfigAggregator().AutoCreate, "Enable metric auto-create.")
+		flag.BoolVar(&argv.configAggregator.AutoCreateDefaultNamespace, "auto-create-default-namespace", false, "Auto-create metrics with no namespace specified.")
+		flag.BoolVar(&argv.configAggregator.DisableRemoteConfig, "disable-remote-config", aggregator.DefaultConfigAggregator().DisableRemoteConfig, "disable remote configuration")
 	}
 
 	flag.StringVar(&argv.configAggregator.ExternalPort, "agg-external-port", aggregator.DefaultConfigAggregator().ExternalPort, "external port for aggregator autoconfiguration if different from port set in agg-addr")
 	flag.IntVar(&argv.configAggregator.PreviousNumShards, "previous-shards", aggregator.DefaultConfigAggregator().PreviousNumShards, "Previous number of shard*replicas in cluster. During transition, clients with previous configuration are also allowed to send data.")
+	flag.IntVar(&argv.configAggregator.LocalReplica, "local-replica", aggregator.DefaultConfigAggregator().LocalReplica, "Replica number for local test cluster [1..3]")
 
-	flag.Uint64Var(&argv.configAggregator.MetadataActorID, "metadata-actor-id", aggregator.DefaultConfigAggregator().MetadataActorID, "")
+	flag.Int64Var(&argv.configAggregator.MetadataActorID, "metadata-actor-id", aggregator.DefaultConfigAggregator().MetadataActorID, "")
 	flag.StringVar(&argv.configAggregator.MetadataAddr, "metadata-addr", aggregator.DefaultConfigAggregator().MetadataAddr, "")
 	flag.StringVar(&argv.configAggregator.MetadataNet, "metadata-net", aggregator.DefaultConfigAggregator().MetadataNet, "")
 
@@ -177,7 +188,11 @@ func argvAddAggregatorFlags(legacyVerb bool) {
 func argvAddIngressProxyFlags() {
 	flag.StringVar(&argv.configIngress.ListenAddr, "ingress-addr", "", "Listen address of ingress proxy")
 	flag.StringVar(&argv.ingressExtAddr, "ingress-external-addr", "", "Comma-separate list of 3 external addresses of ingress proxies.")
+	flag.StringVar(&argv.configIngress.ListenAddrIPV6, "ingress-addr-ipv6", "", "IPv6 listen address of ingress proxy")
+	flag.StringVar(&argv.ingressExtAddrIPv6, "ingress-external-addr-ipv6", "", "Comma-separate list of IPv6 external addresses of ingress proxies.")
 	flag.StringVar(&argv.ingressPwdDir, "ingress-pwd-dir", "", "path to AES passwords dir for clients of ingress proxy.")
+	flag.StringVar(&argv.ingressVersion, "ingress-version", "", "")
+	flag.IntVar(&argv.configIngress.ResponseMemoryLimit, "max-response-mem", rpc.DefaultResponseMemoryLimit, "Response memory limit")
 }
 
 func printVerbUsage() {

@@ -35,6 +35,7 @@ export interface IMetric extends IShortMetric {
   readonly kind: IKind;
   readonly withPercentiles: boolean;
   readonly tags: ITagAlias[];
+  readonly tags_draft: ITag[];
   readonly tagsSize: number;
   readonly stringTopName: string;
   readonly stringTopDescription: string;
@@ -50,6 +51,7 @@ export interface IMetric extends IShortMetric {
   readonly metric_type?: string;
   readonly version?: number;
   readonly group_id?: number;
+  readonly fair_key_tag_ids?: string[];
 }
 
 export interface IBackendMetric {
@@ -58,6 +60,7 @@ export interface IBackendMetric {
   readonly description: string;
   readonly kind: IBackendKind;
   readonly tags: readonly ITag[];
+  readonly tags_draft?: Partial<Record<string, ITag>>;
   readonly string_top_name?: string;
   readonly string_top_description?: string;
   readonly weight?: number;
@@ -72,4 +75,5 @@ export interface IBackendMetric {
   readonly metric_type?: string;
   readonly version?: number;
   readonly group_id?: number;
+  readonly fair_key_tag_ids?: string[];
 }

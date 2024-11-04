@@ -8,7 +8,6 @@ package mapping
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"go4.org/mem"
@@ -19,164 +18,14 @@ import (
 	"github.com/vkcom/statshouse/internal/pcache"
 )
 
-type mapRequest struct {
-	metric tlstatshouse.MetricBytes      // in
-	result data_model.MappedMetricHeader // out, contains probable error in IngestionStatus
-	cb     MapCallbackFunc               // will be called only when processing required enqueue
-}
-
-type metricQueue struct {
-	name     string
-	progress func(*mapRequest)      // called with mutex unlocked
-	isDone   func(*mapRequest) bool // called with mutex locked, should be wait-free
-	finish   func(*mapRequest)      // called with mutex unlocked
-
-	// separate progress and done are because progress in one mapping request can make others done
-
-	cond              sync.Cond
-	mu                sync.Mutex
-	queue             map[int32][]*mapRequest // map iteration is the source of quasi-fairness. length of slices is never 0 here
-	size              int
-	maxMetrics        int
-	maxMetricRequests int
-	shouldStop        bool
-	stopped           chan struct{}
-
-	pool []tlstatshouse.MetricBytes // for reuse
-}
-
-func newMetricQueue(
-	name string,
-	progress func(*mapRequest),
-	isDone func(*mapRequest) bool,
-	finish func(*mapRequest),
-	maxMetrics int,
-	maxMetricRequests int,
-) *metricQueue {
-	q := &metricQueue{
-		name:              name,
-		progress:          progress,
-		isDone:            isDone,
-		finish:            finish,
-		queue:             map[int32][]*mapRequest{},
-		maxMetrics:        maxMetrics,
-		maxMetricRequests: maxMetricRequests,
-		stopped:           make(chan struct{}),
-	}
-	q.cond.L = &q.mu
-	go q.run()
-	return q
-}
-
-func (mq *metricQueue) stop() {
-	mq.mu.Lock()
-	mq.shouldStop = true
-	mq.mu.Unlock()
-	mq.cond.Signal()
-	<-mq.stopped
-}
-
-// to avoid allocations in fastpath, returns ingestion statuses only. They are converted to errors before printing, if needed
-// we do not want allocation if queues overloaded
-func (mq *metricQueue) enqueue(metric *tlstatshouse.MetricBytes, result *data_model.MappedMetricHeader, cb MapCallbackFunc) (done bool) {
-	mq.mu.Lock()
-	defer mq.mu.Unlock()
-
-	if mq.shouldStop {
-		return false
-	}
-
-	q, ok := mq.queue[result.Key.Metric]
-	if !ok {
-		if len(mq.queue) >= mq.maxMetrics {
-			result.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMapGlobalQueueOverload
-			return true
-		}
-	}
-	if len(q) >= mq.maxMetricRequests {
-		result.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMapPerMetricQueueOverload
-		return true
-	}
-
-	mq.queue[result.Key.Metric] = append(q, &mapRequest{metric: *metric, result: *result, cb: cb})
-	// We now own all slices inside metric. We replace them from our pool, or set to nil
-	if len(mq.pool) != 0 {
-		*metric = mq.pool[len(mq.pool)-1]
-		mq.pool = mq.pool[:len(mq.pool)-1]
-	} else {
-		*metric = tlstatshouse.MetricBytes{}
-	}
-	mq.size++
-	mq.cond.Signal()
-
-	return false
-}
-
-func (mq *metricQueue) run() {
-	var localPool []tlstatshouse.MetricBytes
-	var newQ []*mapRequest // for reuse
-	var done []*mapRequest // for reuse
-	for {
-		mq.mu.Lock()
-		for !(mq.shouldStop || mq.size > 0) {
-			mq.cond.Wait()
-		}
-		if mq.shouldStop {
-			mq.mu.Unlock()
-			close(mq.stopped)
-			return
-		}
-		mq.pool = append(mq.pool, localPool...) // move from local pool under lock
-		localPool = localPool[:0]
-		var (
-			chosenM int32
-			chosenR *mapRequest
-		)
-		for m, q := range mq.queue {
-			chosenM = m
-			chosenR = q[0]
-			break
-		}
-		mq.mu.Unlock()
-
-		mq.progress(chosenR)
-
-		mq.mu.Lock()
-		curQ := mq.queue[chosenM]
-		// mapping of single key can release many items from the queue
-		for _, r := range curQ {
-			if mq.isDone(r) {
-				done = append(done, r)
-			} else {
-				newQ = append(newQ, r)
-			}
-		}
-		if len(newQ) > 0 {
-			mq.queue[chosenM] = newQ
-			newQ = curQ[:0]
-		} else {
-			delete(mq.queue, chosenM)
-		}
-		mq.size -= len(done)
-		mq.mu.Unlock()
-
-		for _, r := range done {
-			mq.finish(r)
-			r.metric.Reset()                        // strictly not required
-			localPool = append(localPool, r.metric) // We pool fields, not metric itself
-		}
-		done = done[:0]
-	}
-}
-
 type mapPipeline struct {
-	mapCallback   MapCallbackFunc
+	mapCallback   data_model.MapCallbackFunc
 	tagValueQueue *metricQueue
 	tagValue      *pcache.Cache
 	autoCreate    *AutoCreate
 }
 
-func newMapPipeline(mapCallback MapCallbackFunc, tagValue *pcache.Cache, ac *AutoCreate, maxMetrics int, maxMetricRequests int) *mapPipeline {
+func newMapPipeline(mapCallback data_model.MapCallbackFunc, tagValue *pcache.Cache, ac *AutoCreate, maxMetrics int, maxMetricRequests int) *mapPipeline {
 	mp := &mapPipeline{
 		mapCallback: mapCallback,
 		tagValue:    tagValue,
@@ -190,51 +39,22 @@ func (mp *mapPipeline) stop() {
 	mp.tagValueQueue.stop()
 }
 
-func (mp *mapPipeline) Map(metric *tlstatshouse.MetricBytes, metricInfo *format.MetricMetaValue, cb MapCallbackFunc) (h data_model.MappedMetricHeader, done bool) {
-	h.ReceiveTime = time.Now() // mapping time is set once for all functions
-	h.MetricInfo = metricInfo
-	done = mp.doMap(metric, &h, cb)
-	// We map environment in all 3 cases
+func (mp *mapPipeline) Map(args data_model.HandlerArgs, metricInfo *format.MetricMetaValue, h *data_model.MappedMetricHeader) (done bool) {
+	done = mp.doMap(args, h)
+	// We call MapEnvironment in all 3 cases
 	// done and no errors - very fast NOP
 	// done and errors - try to find environment in tags after error tag
 	// not done - when making requests to map, we want to send our environment to server, so it can record it in builtin metric
-	mp.mapEnvironment(&h, metric)
-	if done {
-		return h, done
-	}
-	return h, done
+	mp.MapEnvironment(args.MetricBytes, h)
+	return done
 }
 
-func (mp *mapPipeline) doMap(metric *tlstatshouse.MetricBytes, h *data_model.MappedMetricHeader, cb MapCallbackFunc) (done bool) {
-	if h.MetricInfo == nil {
-		h.MetricInfo = format.BuiltinMetricAllowedToReceive[string(metric.Name)]
-		if h.MetricInfo == nil {
-			if mp.autoCreate != nil && format.ValidMetricName(mem.B(metric.Name)) {
-				// before normalizing metric.Name so we do not fill auto create data structures with invalid metric names
-				_ = mp.autoCreate.autoCreateMetric(metric, h.ReceiveTime)
-			}
-			validName, err := format.AppendValidStringValue(metric.Name[:0], metric.Name)
-			if err != nil {
-				metric.Name = format.AppendHexStringValue(metric.Name[:0], metric.Name)
-				h.InvalidString = metric.Name
-				h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMetricNameEncoding
-				return true
-			}
-			metric.Name = validName
-			h.InvalidString = metric.Name
-			h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMetricNotFound
-			return true
-		}
-	}
-	h.Key.Metric = h.MetricInfo.MetricID
-	if !h.MetricInfo.Visible {
-		h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMetricInvisible
-		return true
-	}
+func (mp *mapPipeline) doMap(args data_model.HandlerArgs, h *data_model.MappedMetricHeader) (done bool) {
+	metric := args.MetricBytes
 	if done = mp.mapTags(h, metric, true); done {
 		return done
 	}
-	if done = mp.tagValueQueue.enqueue(metric, h, cb); done {
+	if done = mp.tagValueQueue.enqueue(metric, h, args.MapCallback); done {
 		return done
 	}
 	return done
@@ -249,12 +69,8 @@ func (mp *mapPipeline) mapTags(h *data_model.MappedMetricHeader, metric *tlstats
 	// We do not validate metric name or tag keys, because they will be searched in finite maps
 	for ; h.CheckedTagIndex < len(metric.Tags); h.CheckedTagIndex++ {
 		v := &metric.Tags[h.CheckedTagIndex]
-		tagInfo, ok, legacyName := h.MetricInfo.APICompatGetTagFromBytes(v.Key)
+		tagMeta, ok, legacyName := h.MetricMeta.APICompatGetTagFromBytes(v.Key)
 		if !ok {
-			if mp.autoCreate != nil && format.ValidMetricName(mem.B(v.Key)) {
-				// before normalizing v.Key, so we do not fill auto create data structures with invalid key names
-				_ = mp.autoCreate.autoCreateTag(metric, v.Key, h.ReceiveTime)
-			}
 			validKey, err := format.AppendValidStringValue(v.Key[:0], v.Key)
 			if err != nil {
 				v.Key = format.AppendHexStringValue(v.Key[:0], v.Key)
@@ -263,10 +79,18 @@ func (mp *mapPipeline) mapTags(h *data_model.MappedMetricHeader, metric *tlstats
 				return true
 			}
 			v.Key = validKey
-			h.NotFoundTagName = v.Key
+			if _, ok := h.MetricMeta.GetTagDraft(v.Key); ok {
+				h.FoundDraftTagName = v.Key
+			} else {
+				h.NotFoundTagName = v.Key
+			}
+			if mp.autoCreate != nil && format.ValidMetricName(mem.B(v.Key)) {
+				// before normalizing v.Key, so we do not fill auto create data structures with invalid key names
+				_ = mp.autoCreate.AutoCreateTag(metric, v.Key, h.ReceiveTime)
+			}
 			continue
 		}
-		tagIDKey := int32(tagInfo.Index + format.TagIDShift)
+		tagIDKey := int32(tagMeta.Index + format.TagIDShift)
 		if legacyName {
 			h.LegacyCanonicalTagKey = tagIDKey
 		}
@@ -279,13 +103,15 @@ func (mp *mapPipeline) mapTags(h *data_model.MappedMetricHeader, metric *tlstats
 		}
 		v.Value = validValue
 		switch {
-		case tagInfo.Index == format.StringTopTagIndex:
+		case tagMeta.SkipMapping:
+			h.SetSTag(tagMeta.Index, string(v.Value), tagIDKey)
+		case tagMeta.Index == format.StringTopTagIndex:
 			h.SValue = v.Value
 			if h.IsSKeySet {
 				h.TagSetTwiceKey = tagIDKey
 			}
 			h.IsSKeySet = true
-		case tagInfo.Raw:
+		case tagMeta.Raw:
 			id, ok := format.ContainsRawTagValue(mem.B(v.Value)) // TODO - remove allocation in case of error
 			if !ok {
 				h.InvalidRawValue = v.Value
@@ -293,15 +119,15 @@ func (mp *mapPipeline) mapTags(h *data_model.MappedMetricHeader, metric *tlstats
 				// We could arguably call h.SetKey, but there is very little difference in semantic to care
 				continue
 			}
-			h.SetKey(tagInfo.Index, id, tagIDKey)
+			h.SetTag(tagMeta.Index, id, tagIDKey)
 		case len(v.Value) == 0: // TODO - move knowledge about "" <-> 0 mapping to more general place
-			h.SetKey(tagInfo.Index, 0, tagIDKey) // we interpret "0" => "vasya", "0" => "" as second one overriding the first, generating a warning
+			h.SetTag(tagMeta.Index, 0, tagIDKey) // we interpret "0" => "vasya", "0" => "" as second one overriding the first, generating a warning
 		default:
 			if !cached { // We need to map single tag and exit. Slow path.
 				extra := format.CreateMappingExtra{ // Host and AgentEnv are added by source when sending
 					Metric:    string(metric.Name),
 					TagIDKey:  tagIDKey,
-					ClientEnv: h.Key.Keys[0], // mapEnvironment sets this, but only if already in cache, which is normally almost always.
+					ClientEnv: h.Key.Tags[0], // mapEnvironment sets this, but only if already in cache, which is normally almost always.
 				}
 				id, err := mp.getTagValueID(h.ReceiveTime, v.Value, extra)
 				if err != nil {
@@ -309,7 +135,7 @@ func (mp *mapPipeline) mapTags(h *data_model.MappedMetricHeader, metric *tlstats
 					h.CheckedTagIndex++
 					return true
 				}
-				h.SetKey(tagInfo.Index, id, tagIDKey)
+				h.SetTag(tagMeta.Index, id, tagIDKey)
 				h.CheckedTagIndex++          // CheckedTagIndex is advanced each time we return, so early or later mapStatusDone is returned
 				h.IngestionTagKey = tagIDKey // so we know which tag causes "uncached" status
 				return false
@@ -323,7 +149,7 @@ func (mp *mapPipeline) mapTags(h *data_model.MappedMetricHeader, metric *tlstats
 			if !found {
 				return false
 			}
-			h.SetKey(tagInfo.Index, id, tagIDKey)
+			h.SetTag(tagMeta.Index, id, tagIDKey)
 		}
 	}
 	// We validate values here, because we want errors to contain metric ID
@@ -331,36 +157,39 @@ func (mp *mapPipeline) mapTags(h *data_model.MappedMetricHeader, metric *tlstats
 		return true
 	}
 	h.ValuesChecked = true
-	if len(metric.Value) != 0 && len(metric.Unique) != 0 {
+	if len(metric.Value)+len(metric.Histogram) != 0 && len(metric.Unique) != 0 {
 		h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrValueUniqueBothSet
 		return true
 	}
-	if metric.Counter < 0 {
-		h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrNegativeCounter
+	var errorTag int32
+	if metric.Counter, errorTag = format.ClampCounter(metric.Counter); errorTag != 0 {
+		h.IngestionStatus = errorTag
 		return true
 	}
-	if !format.ValidFloatValue(metric.Counter) {
-		h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrNanInfCounter
-		return true
-	}
-	metric.Counter = format.ClampFloatValue(metric.Counter)
 	for i, v := range metric.Value {
-		if !format.ValidFloatValue(v) {
-			h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrNanInfValue
+		if metric.Value[i], errorTag = format.ClampValue(v); errorTag != 0 {
+			h.IngestionStatus = errorTag
 			return true
 		}
-		metric.Value[i] = format.ClampFloatValue(v)
+	}
+	for i, v := range metric.Histogram {
+		if metric.Histogram[i][0], errorTag = format.ClampValue(v[0]); errorTag != 0 {
+			h.IngestionStatus = errorTag
+			return true
+		}
+		if metric.Histogram[i][1], errorTag = format.ClampCounter(v[1]); errorTag != 0 {
+			h.IngestionStatus = errorTag
+			return true
+		}
 	}
 	return true
 }
 
-// We wish to know which environment generates 'metric not found' events and other errors
-// Also we need to know which environment generates mapping create events. So we do it before adding to mapping queue
 // If environment is not in cache, we will not detect it, but this should be relatively rare
 // We might wish to load in background, but this must be fair with normal mapping queues, and
 // we do not know metric here. So we decided to only load environments from cache.
 // If called after mapTags consumed env, h.Tags[0] is already set by mapTags, otherwise will set h.Tags[0] here
-func (mp *mapPipeline) mapEnvironment(h *data_model.MappedMetricHeader, metric *tlstatshouse.MetricBytes) {
+func (mp *mapPipeline) MapEnvironment(metric *tlstatshouse.MetricBytes, h *data_model.MappedMetricHeader) {
 	// fast NOP when all tags already mapped
 	// must not change h.CheckedTagIndex or h.IsKeySet because mapTags will be called after this func by mapping queue in slow path
 	for i := h.CheckedTagIndex; i < len(metric.Tags); i++ {
@@ -381,7 +210,7 @@ func (mp *mapPipeline) mapEnvironment(h *data_model.MappedMetricHeader, metric *
 		if err != nil || !found {
 			return // do not bother if the first one set is crappy
 		}
-		h.Key.Keys[0] = id
+		h.Key.Tags[0] = id
 		return // we are ok with the first one
 	}
 }
@@ -420,7 +249,7 @@ func MapErrorFromHeader(m tlstatshouse.MetricBytes, h data_model.MappedMetricHea
 		return nil
 	}
 	ingestionTagName := format.TagIDTagToTagID(h.IngestionTagKey)
-	envTag := h.Key.Keys[0] // TODO - we do not want to remember original string value somewhere yet (to print better errors here)
+	envTag := h.Key.Tags[0] // TODO - we do not want to remember original string value somewhere yet (to print better errors here)
 	switch h.IngestionStatus {
 	case format.TagValueIDSrcIngestionStatusErrMetricNotFound:
 		return fmt.Errorf("metric %q not found (envTag %d)", m.Name, envTag)

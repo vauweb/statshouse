@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -146,7 +146,7 @@ func testShutdownClient(t *rapid.T) {
 		t.Fatal(err)
 	}
 	err = <-serverErrChan
-	if err != ErrServerClosed {
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ts.clients) != 0 {

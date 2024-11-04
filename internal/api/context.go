@@ -10,6 +10,8 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/vkcom/statshouse/internal/util"
 )
@@ -22,15 +24,22 @@ const (
 	endpointStatContextKey
 )
 
+type debugQueries struct {
+	queries *[]string
+	mutex   sync.Mutex
+}
+
 func debugQueriesContext(ctx context.Context, queries *[]string) context.Context {
-	return context.WithValue(ctx, debugQueriesContextKey, queries)
+	return context.WithValue(ctx, debugQueriesContextKey, &debugQueries{queries, sync.Mutex{}})
 }
 
 func saveDebugQuery(ctx context.Context, query string) {
-	p, ok := ctx.Value(debugQueriesContextKey).(*[]string)
+	p, ok := ctx.Value(debugQueriesContextKey).(*debugQueries)
 	if ok {
+		p.mutex.Lock()
+		defer p.mutex.Unlock()
 		query = strings.TrimSpace(strings.ReplaceAll(query, "\n", " "))
-		*p = append(*p, query)
+		*p.queries = append(*p.queries, query)
 	}
 }
 
@@ -45,19 +54,25 @@ func getAccessInfo(ctx context.Context) *accessInfo {
 	return nil
 }
 
-func withHTTPEndpointStat(ctx context.Context, es *endpointStat) context.Context {
+func withEndpointStat(ctx context.Context, es *endpointStat) context.Context {
+	if es == nil {
+		return ctx
+	}
 	return context.WithValue(ctx, endpointStatContextKey, es)
 }
 
-func withRPCEndpointStat(ctx context.Context, ms *rpcMethodStat) context.Context {
-	return context.WithValue(ctx, endpointStatContextKey, ms)
+func reportQueryKind(ctx context.Context, isFast, isLight, isHardware bool) {
+	if s, ok := ctx.Value(endpointStatContextKey).(*endpointStat); ok {
+		s.laneMutex.Lock()
+		defer s.laneMutex.Unlock()
+		if len(s.lane) == 0 {
+			s.lane = strconv.Itoa(util.QueryKind(isFast, isLight, isHardware))
+		}
+	}
 }
 
-func endpointStatSetQueryKind(ctx context.Context, isFast, isLight bool) {
-	switch s := ctx.Value(endpointStatContextKey).(type) {
-	case *endpointStat:
-		s.lane = strconv.Itoa(util.QueryKind(isFast, isLight))
-	case *rpcMethodStat:
-		s.lane = strconv.Itoa(util.QueryKind(isFast, isLight))
+func reportTiming(ctx context.Context, name string, dur time.Duration) {
+	if s, ok := ctx.Value(endpointStatContextKey).(*endpointStat); ok {
+		s.timings.Report(name, dur)
 	}
 }

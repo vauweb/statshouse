@@ -12,7 +12,7 @@ import (
 	"math"
 
 	"github.com/prometheus/prometheus/model/labels"
-
+	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/format"
 )
 
@@ -44,86 +44,41 @@ const (
 	CardinalityRaw = "cardinalityraw"
 	Unique         = "unique"
 	UniqueSec      = "uniquesec"
+	MinHost        = "minhost"
 	MaxHost        = "maxhost"
 
 	NilValueBits = 0x7ff0000000000002
 )
 
-type DigestWhat int
-
-const (
-	DigestAvg DigestWhat = iota + 1
-	DigestCount
-	DigestCountSec
-	DigestCountRaw
-	DigestMax
-	DigestMin
-	DigestSum
-	DigestSumSec
-	DigestSumRaw
-	DigestP0_1
-	DigestP1
-	DigestP5
-	DigestP10
-	DigestP25
-	DigestP50
-	DigestP75
-	DigestP90
-	DigestP95
-	DigestP99
-	DigestP999
-	DigestStdDev
-	DigestStdVar
-	DigestCardinality
-	DigestCardinalitySec
-	DigestCardinalityRaw
-	DigestUnique
-	DigestUniqueSec
-)
-
 var NilValue = math.Float64frombits(NilValueBits)
-
-type Timescale struct {
-	Time   []int64
-	LODs   []LOD
-	Step   int64 // aggregation interval requested (former "desiredStepMul")
-	Offset int64 // the offset for which timescale was generated
-	Start  int64 // query start
-	End    int64 // query end
-}
-
-type LOD struct {
-	// as in lodInfo
-	Start int64
-	End   int64
-	Step  int64
-
-	// plus number of elements LOD occupies in time array
-	Len int
-}
 
 type SeriesQuery struct {
 	// What
-	Metric  *format.MetricMetaValue
-	What    DigestWhat
-	GroupBy []string
-	MaxHost bool
+	Metric     *format.MetricMetaValue
+	Whats      []SelectorWhat
+	GroupBy    []string
+	MinMaxHost [2]bool // "min" at [0], "max" at [1]
 
 	// When
-	Timescale Timescale
+	Timescale data_model.Timescale
 	Offset    int64
 
 	// Filtering
-	FilterIn   [format.MaxTags]map[int32]string // tag index -> tag value ID -> tag value
-	FilterOut  [format.MaxTags]map[int32]string // as above
+	FilterIn   [format.MaxTags]map[string]int32 // tag index -> tag value -> tag value ID
+	FilterOut  [format.MaxTags]map[string]int32 // as above
 	SFilterIn  []string
 	SFilterOut []string
 
 	// Transformations
-	Range      int64
-	Accumulate bool
+	Range     int64
+	prefixSum bool
 
 	Options Options
+}
+
+type SelectorWhat struct {
+	Digest data_model.DigestWhat
+	QueryF string
 }
 
 type TagValueQuery struct {
@@ -144,7 +99,7 @@ type TagValueIDQuery struct {
 type TagValuesQuery struct {
 	Metric    *format.MetricMetaValue
 	TagIndex  int
-	Timescale Timescale
+	Timescale data_model.Timescale
 	Offset    int64
 	Options   Options
 }
@@ -162,8 +117,7 @@ type Handler interface {
 	// # Metric Metadata
 	//
 
-	MatchMetrics(ctx context.Context, matcher *labels.Matcher) ([]*format.MetricMetaValue, []string, error)
-	GetTimescale(qry Query, offsets map[*format.MetricMetaValue]int64) (Timescale, error)
+	MatchMetrics(ctx context.Context, matcher *labels.Matcher, namespace string) ([]*format.MetricMetaValue, error)
 
 	//
 	// # Storage
@@ -191,7 +145,7 @@ type Error struct {
 }
 
 func (e Error) Error() string {
-	return fmt.Sprintf("PromQL: %v", e.what)
+	return fmt.Sprintf("%v", e.what)
 }
 
 func (e Error) Unwrap() error {
@@ -203,4 +157,65 @@ func (e Error) Unwrap() error {
 
 func (e Error) EngineFailure() bool {
 	return e.panic
+}
+
+func DigestWhatString(what data_model.DigestWhat) string {
+	var res string
+	switch what {
+	case data_model.DigestAvg:
+		res = Avg
+	case data_model.DigestCount:
+		res = Count
+	case data_model.DigestCountSec:
+		res = CountSec
+	case data_model.DigestCountRaw:
+		res = CountRaw
+	case data_model.DigestMax:
+		res = Max
+	case data_model.DigestMin:
+		res = Min
+	case data_model.DigestSum:
+		res = Sum
+	case data_model.DigestSumSec:
+		res = SumSec
+	case data_model.DigestSumRaw:
+		res = SumRaw
+	case data_model.DigestStdDev:
+		res = StdDev
+	case data_model.DigestStdVar:
+		res = StdVar
+	case data_model.DigestP0_1:
+		res = P0_1
+	case data_model.DigestP1:
+		res = P1
+	case data_model.DigestP5:
+		res = P5
+	case data_model.DigestP10:
+		res = P10
+	case data_model.DigestP25:
+		res = P25
+	case data_model.DigestP50:
+		res = P50
+	case data_model.DigestP75:
+		res = P75
+	case data_model.DigestP90:
+		res = P90
+	case data_model.DigestP95:
+		res = P95
+	case data_model.DigestP99:
+		res = P99
+	case data_model.DigestP999:
+		res = P999
+	case data_model.DigestCardinality:
+		res = Cardinality
+	case data_model.DigestCardinalitySec:
+		res = CardinalitySec
+	case data_model.DigestCardinalityRaw:
+		res = CardinalityRaw
+	case data_model.DigestUnique:
+		res = Unique
+	case data_model.DigestUniqueSec:
+		res = UniqueSec
+	}
+	return res
 }

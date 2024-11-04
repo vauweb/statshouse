@@ -11,7 +11,7 @@ statshouse.sample_factor metric:int value:float = statshouse.SampleFactor;
 
 statshouse.ingestion_status2 env:int metric:int value:float = statshouse.IngestionStatus2;
 
-statshouse.centroid value:float weight:float = statshouse.Centroid;
+statshouse.centroidFloat#73fd01e0 value:float count:float = statshouse.CentroidFloat;
 
 statshouse.mapping str:string value:int = statshouse.Mapping;
 
@@ -28,7 +28,7 @@ statshouse.multi_value#0c803e06 {fields_mask:#}
 
     uniques: fields_mask.5?string // serialized HLL
 
-    centroids: fields_mask.6?(vector statshouse.centroid)
+    centroids: fields_mask.6?(vector statshouse.centroidFloat)
 
     // we need hosts to pass through agent sending on behalf of aggregator. Or from clients using _h tag
     max_host_tag: fields_mask.7?int
@@ -43,6 +43,7 @@ statshouse.multi_item#0c803e07
     fields_mask: # // contains shard num in top 8 bits
     metric: int
     keys: (vector int)
+    skeys: fields_mask.12?(vector string)
 
     t: fields_mask.10?# // timestamp, should be rare
 
@@ -79,13 +80,16 @@ statshouse.getConfigResult#0c803d07 {fields_mask:#}
     addresses: (vector string)
     max_addresses_count: int // when reducing # of shards, will return full list of addresses, limit by this number. Important for proxy
     previous_addresses: int // currently unused, but can be helpful for proxy in the future
+    ts: fields_mask.0?long // aggregator timestamp, for detecting clock discrepancy
 = statshouse.GetConfigResult fields_mask;
 
 // proxy uses and fills data in this header for all requests
 statshouse.commonProxyHeader#6c803d07 {fields_mask:#}
     // header uses bits backward to reduce conflicts with request fields
     ingress_proxy:fields_mask.31?true     // simply set to 1 by ingress proxy for all passing requests
-    agent_env_staging:fields_mask.30?true // set by test version of agents to help with debug
+    agent_env_staging_0:fields_mask.30?true // set by test version of agents to help with debug
+    agent_env_staging_1:fields_mask.29?true
+
     shard_replica:int // Aggregator will only accept correct shard/replica conbinations
     shard_replica_total:int
     agent_ip:4*[int] // filled by proxy. ipv4 is in ipv6-compatible format, source_ip[3] holds ipv4 address bits.
@@ -94,7 +98,7 @@ statshouse.commonProxyHeader#6c803d07 {fields_mask:#}
     build_arch:int // comparison of x64 and arm64 nodes will be interesting for some time
 = statshouse.CommonProxyHeader fields_mask;
 
-statshouse.promTarget#ac5296df
+statshouse.promTarget#ac5296df {fields_mask_arg:#}
     fields_mask: #
     job_name: string
     url: string
@@ -109,12 +113,29 @@ statshouse.promTarget#ac5296df
     label_value_length_limit: long
     // raw yaml from prom config
     http_client_config: string
-= statshouse.PromTarget;
+    metric_relabel_configs: fields_mask_arg.1?string
+= statshouse.PromTarget fields_mask_arg;
 
 statshouse.getTargetsResult#51ac86df {fields_mask:#}
-    targets: (vector statshouse.promTarget)
+    targets: (vector (statshouse.promTarget fields_mask))
     hash: string
+    gauge_metrics:fields_mask.0?(vector string)
 = statshouse.GetTargetsResult fields_mask;
+
+// saved between agent invocations. All values nanoseconds.
+statshouse.shutdownInfo#4124cf9c
+    startShutdownTime:long
+    finishShutdownTime:long
+    stopRecentSenders:long
+    stopReceivers:long
+    stopFlusher:long
+    stopFlushing:long
+    stopPreprocessor:long
+    stopInserters:long // for aggregator
+    stopRPCServer:long // for aggregator
+    // we might want more timeouts later without changing format, so we reserve some space
+    a:long b:long c:long d:long e:long f:long g:long h:long i:long j:long k:long l:long m:long n:long
+= statshouse.ShutdownInfo;
 
 ---functions---
 
@@ -122,6 +143,7 @@ statshouse.getTargetsResult#51ac86df {fields_mask:#}
     fields_mask:#
     header: (statshouse.commonProxyHeader fields_mask) // the only request not passed through proxy. But we make it with common header anyway.
     cluster:string // prevent wrong configuration
+    ts: fields_mask.0?true
      = statshouse.GetConfigResult fields_mask;
 
 // For ingress proxy, we pass shard_replica/shard_total immediately after fields mask
@@ -133,6 +155,7 @@ statshouse.getTargetsResult#51ac86df {fields_mask:#}
 @readwrite statshouse.sendSourceBucket2#44575940
     fields_mask:#
     header: (statshouse.commonProxyHeader fields_mask)
+    owner:fields_mask.4?string
     time:#
     historic:fields_mask.0?true
     spare:fields_mask.1?true
@@ -145,8 +168,10 @@ statshouse.getTargetsResult#51ac86df {fields_mask:#}
     queue_size_memory_sum:fields_mask.2?int
     queue_size_disk_unsent:fields_mask.3?int
     queue_size_disk_sum_unsent:fields_mask.3?int
-    original_size:int
-    compressed_data:string = String;
+    original_size:#
+    compressed_data:string
+    sharding:fields_mask.5?int // deprecated because sharding is now configured for each metric separately
+    = String;
 
 @readwrite statshouse.sendKeepAlive2#4285ff53
     fields_mask:#
@@ -179,6 +204,8 @@ statshouse.getTargetsResult#51ac86df {fields_mask:#}
     metric:string // metric name
     kind:string   // metric kind
     tags:(vector string) // metric tags
+    resolution:fields_mask.0?int
+    description:fields_mask.1?string
      = True;
 
 // when local cache is empty, statshouse will ask aggregator for common mappings
@@ -192,6 +219,8 @@ statshouse.getTargetsResult#51ac86df {fields_mask:#}
     header: (statshouse.commonProxyHeader fields_mask)
     prom_host_name:string // in contrast to normalized and validated for statshouse key, like in header
     old_hash: string
+    gauge_metrics:fields_mask.0?Bool
+    metric_relabel_configs:fields_mask.1?Bool
      = statshouse.GetTargetsResult fields_mask;
 
 @readwrite statshouse.testConnection2#4285ff58

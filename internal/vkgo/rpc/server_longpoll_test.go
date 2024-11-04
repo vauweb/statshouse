@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -61,7 +61,7 @@ func testLongpollServer(t *rapid.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		if err := s.Serve(ln); err != nil && err != ErrServerClosed {
+		if err := s.Serve(ln); err != nil {
 			t.Fatal(err)
 		}
 		wg.Done()
@@ -80,6 +80,7 @@ func testLongpollServer(t *rapid.T) {
 				go func() {
 					n := rand.New().Int31()
 					req := c.GetRequest()
+					req.FailIfNoConnection = true
 					req.Body = basictl.NatWrite(req.Body, requestType)
 					req.Body = basictl.IntWrite(req.Body, n)
 

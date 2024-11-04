@@ -37,16 +37,18 @@ type connPool struct {
 }
 
 type ClickHouse struct {
-	pools [4]*connPool
+	pools [6]*connPool
 }
 
 type QueryMetaInto struct {
-	IsFast  bool
-	IsLight bool
-	User    string
-	Metric  int32
-	Table   string
-	Kind    string
+	IsFast     bool
+	IsLight    bool
+	IsHardware bool
+
+	User   string
+	Metric int32
+	Table  string
+	Kind   string
 }
 
 type QueryHandleInfo struct {
@@ -55,21 +57,27 @@ type QueryHandleInfo struct {
 }
 
 type ChConnOptions struct {
-	Addrs             []string
-	User              string
-	Password          string
-	DialTimeout       time.Duration
+	Addrs       []string
+	User        string
+	Password    string
+	DialTimeout time.Duration
+
 	FastLightMaxConns int
 	FastHeavyMaxConns int
 	SlowLightMaxConns int
 	SlowHeavyMaxConns int
+
+	SlowHardwareMaxConns int
+	FastHardwareMaxConns int
 }
 
 const (
-	fastLight = 0
-	fastHeavy = 1
-	slowLight = 2
-	slowHeavy = 3 // fix Close after adding new modes
+	fastLight    = 0 // // Must be synced with format.TagValueIDAPILaneFastLightv2
+	fastHeavy    = 1
+	slowLight    = 2
+	slowHeavy    = 3
+	slowHardware = 4
+	fastHardware = 5
 )
 
 func OpenClickHouse(opt ChConnOptions) (*ClickHouse, error) {
@@ -77,11 +85,13 @@ func OpenClickHouse(opt ChConnOptions) (*ClickHouse, error) {
 		return nil, fmt.Errorf("at least one ClickHouse address must be specified")
 	}
 
-	result := &ClickHouse{[4]*connPool{
-		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.FastLightMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}}, // fastLight
-		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.FastHeavyMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}}, // fastHeavy
-		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.SlowLightMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}}, // slowLight
-		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.SlowHeavyMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}}, // slowHeavy
+	result := &ClickHouse{[6]*connPool{
+		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.FastLightMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}},    // fastLight
+		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.FastHeavyMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}},    // fastHeavy
+		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.SlowLightMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}},    // slowLight
+		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.SlowHeavyMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}},    // slowHeavy
+		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.SlowHardwareMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}}, // slowHardware
+		{rand.New(), make([]*chpool.Pool, 0, len(opt.Addrs)), queue.NewQueue(int64(opt.FastHardwareMaxConns)), map[string]int{}, sync.Mutex{}, map[string]int{}, sync.Mutex{}}, // fastHardware
 	}}
 	for _, addr := range opt.Addrs {
 		for _, pool := range result.pools {
@@ -142,7 +152,23 @@ func (ch *ClickHouse) SemaphoreCountFastHeavy() int64 {
 	return cur
 }
 
-func QueryKind(isFast, isLight bool) int {
+func (ch *ClickHouse) SemaphoreCountFastHardware() int64 {
+	cur, _ := ch.pools[fastHardware].sem.Observe()
+	return cur
+}
+
+func (ch *ClickHouse) SemaphoreCountSlowHardware() int64 {
+	cur, _ := ch.pools[slowHardware].sem.Observe()
+	return cur
+}
+
+func QueryKind(isFast, isLight, isHardware bool) int {
+	if isHardware {
+		if isFast {
+			return fastHardware
+		}
+		return slowHardware
+	}
 	if isFast {
 		if isLight {
 			return fastLight
@@ -160,7 +186,7 @@ func (ch *ClickHouse) Select(ctx context.Context, meta QueryMetaInto, query ch.Q
 		info.Profile = p
 		return nil
 	}
-	kind := QueryKind(meta.IsFast, meta.IsLight)
+	kind := QueryKind(meta.IsFast, meta.IsLight, meta.IsHardware)
 	pool := ch.pools[kind]
 	servers := append(make([]*chpool.Pool, 0, len(pool.servers)), pool.servers...)
 	for safetyCounter := 0; safetyCounter < len(pool.servers); safetyCounter++ {
@@ -174,8 +200,8 @@ func (ch *ClickHouse) Select(ctx context.Context, meta QueryMetaInto, query ch.Q
 		pool.userWait[meta.User]++
 		uniqWait := len(pool.userWait)
 		allWait := pool.countOfReqLocked(pool.userWait)
-		statshouse.Metric("statshouse_unique_wait_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "uniq"}).Value(float64(uniqWait))
-		statshouse.Metric("statshouse_unique_wait_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "all"}).Value(float64(allWait))
+		statshouse.Value("statshouse_unique_wait_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "uniq"}, float64(uniqWait))
+		statshouse.Value("statshouse_unique_wait_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "all"}, float64(allWait))
 		pool.waitMx.Unlock()
 		err = pool.sem.Acquire(ctx, meta.User)
 		waitLockDuration := time.Since(startTime)
@@ -185,7 +211,7 @@ func (ch *ClickHouse) Select(ctx context.Context, meta QueryMetaInto, query ch.Q
 			delete(pool.userWait, meta.User)
 		}
 		pool.waitMx.Unlock()
-		statshouse.Metric("statshouse_wait_lock", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10)}).Value(waitLockDuration.Seconds())
+		statshouse.Value("statshouse_wait_lock", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: meta.User}, waitLockDuration.Seconds())
 		if err != nil {
 			return info, err
 		}
@@ -194,8 +220,8 @@ func (ch *ClickHouse) Select(ctx context.Context, meta QueryMetaInto, query ch.Q
 		uniq := len(pool.userActive)
 		all := pool.countOfReqLocked(pool.userActive)
 		pool.mx.Unlock()
-		statshouse.Metric("statshouse_unique_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "uniq"}).Value(float64(uniq))
-		statshouse.Metric("statshouse_unique_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "all"}).Value(float64(all))
+		statshouse.Value("statshouse_unique_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "uniq"}, float64(uniq))
+		statshouse.Value("statshouse_unique_test", statshouse.Tags{1: strconv.FormatInt(int64(kind), 10), 2: "all"}, float64(all))
 
 		start := time.Now()
 		err = servers[i].Do(ctx, query)

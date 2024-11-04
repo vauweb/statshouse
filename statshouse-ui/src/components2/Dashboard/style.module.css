@@ -1,0 +1,113 @@
+/* Copyright 2024 V Kontakte LLC
+ *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  position: relative;
+}
+
+.dashboardGroup {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.dashboardGroupHeader {
+  display: flex;
+  flex-direction: row;
+}
+
+.dashboardGroupList {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.dashboardGroupList_2 .dashboardPlot {
+  width: 50%;
+}
+.dashboardGroupList_3 .dashboardPlot {
+  width: 33.3%;
+}
+.dashboardGroupList_4 .dashboardPlot {
+  width: 25%;
+}
+/* 2 auto */
+.dashboardGroupList_l .dashboardPlot {
+  width: 50%;
+}
+/* 3 auto */
+.dashboardGroupList_m .dashboardPlot {
+  width: 33.3%;
+}
+/* 4 auto */
+.dashboardGroupList_s .dashboardPlot {
+  width: 25%;
+}
+
+.dashboardPlot {
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  flex-grow: 0;
+  width: 0;
+}
+.dashboardPlotHeader {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+}
+
+.dashboardPlotHeaderLink {
+  flex-grow: 1;
+  width: 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  text-decoration: none;
+}
+
+.pointerEventsNone {
+  pointer-events: none;
+}
+.cursorMove {
+  cursor: grab;
+}
+
+.cursorDrag {
+  cursor: grabbing;
+}
+.cursorDefault {
+  cursor: default;
+}
+
+.dashRowSize_2 {
+  width: calc(min(100%, 1320px) / 2);
+}
+.dashRowSize_3 {
+  width: calc(min(100%, 1320px) / 3);
+}
+.dashRowSize_4 {
+  width: calc(min(100%, 1320px) / 4);
+}
+.dashRowSize_l {
+  width: calc(min(100%, 1320px) / 2);
+}
+.dashRowSize_m {
+  width: calc(min(100%, 1320px) / 3);
+}
+.dashRowSize_s {
+  width: calc(min(100%, 1320px) / 4);
+}
+
+.dashRowWidth {
+  --base-cols: 2;
+  --max-cols: 2;
+  --width-col: calc(1320px / var(--base-cols));
+  max-width: calc(var(--width-col) * var(--max-cols));
+}

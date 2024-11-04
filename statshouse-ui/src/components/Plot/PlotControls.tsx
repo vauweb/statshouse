@@ -5,41 +5,16 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import React, { ChangeEvent, memo, useCallback, useEffect, useMemo, useState } from 'react';
-import * as utils from '../../view/utils';
-import {
-  getMetricFullName,
-  getTagDescription,
-  getTimeShifts,
-  isTagEnabled,
-  promQLMetric,
-  timeShiftAbbrevExpand,
-} from '../../view/utils';
-import {
-  Button,
-  PlotControlFrom,
-  PlotControlTimeShifts,
-  PlotControlTo,
-  Select,
-  SelectOptionProps,
-  SwitchBox,
-  Tooltip,
-  VariableControl,
-} from '../index';
+import { getMetricFullName } from '../../view/utils';
+import { PlotControlFrom, PlotControlTimeShifts, PlotControlTo } from '../index';
 import { ReactComponent as SVGFiles } from 'bootstrap-icons/icons/files.svg';
 import { ReactComponent as SVGLightning } from 'bootstrap-icons/icons/lightning.svg';
 import { ReactComponent as SVGPcDisplay } from 'bootstrap-icons/icons/pc-display.svg';
 import { ReactComponent as SVGCode } from 'bootstrap-icons/icons/code.svg';
 import { ReactComponent as SVGFlagFill } from 'bootstrap-icons/icons/flag-fill.svg';
-import {
-  setUpdatedTag,
-  Store,
-  updateMetricsList,
-  useMetricsListStore,
-  useStore,
-  useVariableListStore,
-} from '../../store';
+import { setUpdatedTag, Store, useStore, useVariableListStore } from '../../store';
 import { globalSettings } from '../../common/settings';
-import { filterHasTagID, metricKindToWhat, whatToWhatDesc } from '../../view/api';
+import { filterHasTagID, metricKindToWhat } from '../../view/api';
 import { produce } from 'immer';
 import cn from 'classnames';
 import { ErrorMessages } from '../ErrorMessages';
@@ -50,7 +25,21 @@ import { shallow } from 'zustand/shallow';
 import { decodeParams, PLOT_TYPE, PlotParams, toPlotKey, toTagKey, VariableParams } from '../../url/queryParams';
 import { dequal } from 'dequal/lite';
 import { PlotControlAggregation } from './PlotControlAggregation';
-import { isNotNil, toNumber } from '../../common/helpers';
+import { isNotNil, parseURLSearchParams, toNumber } from '../../common/helpers';
+import { PlotControlView } from './PlotControlView';
+import { promQLMetric } from '../../view/promQLMetric';
+import { whatToWhatDesc } from '../../view/whatToWhatDesc';
+import {
+  getTagDescription,
+  getTimeShifts,
+  isTagEnabled,
+  timeRangeAbbrev,
+  timeShiftAbbrevExpand,
+} from '../../view/utils2';
+import { Select, SelectOptionProps } from '../Select';
+import { SelectMetric } from '../SelectMertic';
+import { Button, SwitchBox, Tooltip } from '../UI';
+import { VariableControl } from '../VariableControl';
 
 const { setParams, setTimeRange, setPlotParams, setPlotParamsTag, setPlotParamsTagGroupBy } = useStore.getState();
 
@@ -64,7 +53,7 @@ const emptyTagsList = {};
 
 const eventPreset: SelectOptionProps[] = globalSettings.event_preset
   .map((url, index) => {
-    const parseParams = decodeParams([...new URLSearchParams(url).entries()]);
+    const parseParams = decodeParams(parseURLSearchParams(url));
     if (parseParams.plots.length) {
       const p = parseParams.plots[0];
       const fullName =
@@ -80,18 +69,13 @@ const eventPreset: SelectOptionProps[] = globalSettings.event_preset
 
 export const PlotControls = memo(function PlotControls_(props: {
   indexPlot: number;
-  setBaseRange: (r: utils.timeRangeAbbrev) => void;
+  setBaseRange: (r: timeRangeAbbrev) => void;
   meta?: MetricMetaValue;
   numQueries: number;
   clonePlot?: () => void;
 }) {
   const { indexPlot, setBaseRange, meta, numQueries, clonePlot } = props;
   const tagsList = useVariableListStore((s) => s.tags[indexPlot] ?? emptyTagsList);
-  const { list: metricsList, loading: loadingMetricsList } = useMetricsListStore();
-  const metricsOptions = useMemo<SelectOptionProps[]>(
-    () => metricsList.map(({ name }) => ({ name, value: name })),
-    [metricsList]
-  );
   const [negativeTags, setNegativeTags] = useState<Partial<Record<TagKey, boolean>>>({});
   const [variableTags, setVariableTags] = useState<Partial<Record<TagKey, VariableParams>>>({});
   const { params, timeRange, plotsData } = useStore(selectorControls, shallow);
@@ -192,12 +176,6 @@ export const PlotControls = memo(function PlotControls_(props: {
     [variableTags, negativeTags, indexPlot]
   );
 
-  const onSearchMetrics = useCallback((values: SelectOptionProps[]) => {
-    if (values.length === 0 && !useMetricsListStore.getState().loading) {
-      updateMetricsList();
-    }
-  }, []);
-
   const onSetGroupBy = useCallback(
     (tagKey: TagKey | undefined, value: boolean) => {
       if (tagKey == null) {
@@ -222,9 +200,9 @@ export const PlotControls = memo(function PlotControls_(props: {
 
   const eventPlotList = useMemo<SelectOptionProps[]>(() => {
     const eventPresetFilter = eventPreset.filter(({ value }) => {
-      const presetPlot = decodeParams([...new URLSearchParams(value).entries()]).plots[0];
+      const presetPlot = { ...decodeParams(parseURLSearchParams(value)).plots[0], id: '0' };
       if (presetPlot) {
-        let index = params.plots.findIndex((plot) => dequal(plot, presetPlot));
+        let index = params.plots.findIndex((plot) => dequal({ ...plot, id: '0' }, presetPlot));
         return index < 0;
       }
       return false;
@@ -328,6 +306,30 @@ export const PlotControls = memo(function PlotControls_(props: {
     [indexPlot, meta?.kind]
   );
 
+  const onTotalLineChange = useCallback(
+    (status: boolean) => {
+      setPlotParams(
+        indexPlot,
+        produce((s) => {
+          s.totalLine = status;
+        })
+      );
+    },
+    [indexPlot]
+  );
+
+  const onFilledGraphChange = useCallback(
+    (status: boolean) => {
+      setPlotParams(
+        indexPlot,
+        produce((s) => {
+          s.filledGraph = status;
+        })
+      );
+    },
+    [indexPlot]
+  );
+
   const onWhatChange = useCallback(
     (value?: string | string[]) => {
       const whatValue = Array.isArray(value) ? value : value ? [value] : [];
@@ -380,7 +382,7 @@ export const PlotControls = memo(function PlotControls_(props: {
         if (iPlot != null) {
           valuesEvent.push(iPlot);
         } else {
-          valuesEventPreset.push(decodeParams([...new URLSearchParams(v).entries()]).plots[0]);
+          valuesEventPreset.push(decodeParams(parseURLSearchParams(v)).plots[0]);
         }
       });
       setParams(
@@ -417,16 +419,7 @@ export const PlotControls = memo(function PlotControls_(props: {
       <form spellCheck="false">
         <div className="d-flex mb-2">
           <div className="col input-group">
-            <Select
-              value={plotParams.metricName}
-              options={metricsOptions}
-              onChange={onMetricChange}
-              valueToInput={true}
-              className="sh-select form-control"
-              classNameList="dropdown-menu"
-              onSearch={onSearchMetrics}
-              loading={loadingMetricsList}
-            />
+            <SelectMetric value={plotParams.metricName} onChange={onMetricChange} />
             {!!clonePlot && (
               <Button
                 type="button"
@@ -466,7 +459,18 @@ export const PlotControls = memo(function PlotControls_(props: {
             </div>
 
             <div className="row mb-2 align-items-baseline">
-              <PlotControlFrom timeRange={timeRange} setTimeRange={setTimeRange} setBaseRange={setBaseRange} />
+              <div className="d-flex align-items-baseline">
+                <PlotControlFrom timeRange={timeRange} setTimeRange={setTimeRange} setBaseRange={setBaseRange} />
+                {plotParams.type === PLOT_TYPE.Metric && (
+                  <PlotControlView
+                    className="ms-1"
+                    totalLine={plotParams.totalLine}
+                    setTotalLine={onTotalLineChange}
+                    filledGraph={plotParams.filledGraph}
+                    setFilledGraph={onFilledGraphChange}
+                  />
+                )}
+              </div>
               <div className="align-items-baseline mt-2">
                 <PlotControlTo timeRange={timeRange} setTimeRange={setTimeRange} />
               </div>
@@ -567,7 +571,7 @@ export const PlotControls = memo(function PlotControls_(props: {
                             as="span"
                             title={`is variable: ${variableTags[tagKey]?.description || variableTags[tagKey]?.name}`}
                             className={cn(
-                              'input-group-text bg-transparent text-nowrap pt-0 pb-0 mt-2 me-2',
+                              'input-group-text bg-transparent text-nowrap pt-0 pb-0 me-2',
                               variableTags[tagKey]?.args.negative ?? negativeTags[tagKey]
                                 ? 'border-danger text-danger'
                                 : 'border-success text-success'

@@ -111,6 +111,7 @@ func (impl *binlogEngineReplicaImpl) apply(payload []byte) (newOffset int64, err
 func (impl *binlogEngineReplicaImpl) Commit(offset int64, snapshotMeta []byte, safeSnapshotOffset int64) (err error) {
 	defer impl.e.opt.StatsOptions.measureActionDurationSince("engine_commit", time.Now())
 	e := impl.e
+	e.commitOffset.Store(offset)
 	old := e.committedInfo.Load()
 	if old != nil {
 		ci := old.(*committedInfo)
@@ -155,8 +156,7 @@ func (impl *binlogEngineReplicaImpl) Revert(toOffset int64) (bool, error) {
 	return false, nil
 }
 
-func (impl *binlogEngineReplicaImpl) StartReindex() error {
-	return nil // TODO - implement
+func (impl *binlogEngineReplicaImpl) StartReindex(operator binlog2.ReindexOperator) {
 }
 
 func (impl *binlogEngineReplicaImpl) ChangeRole(info binlog2.ChangeRoleInfo) error {
@@ -186,4 +186,12 @@ func (impl *binlogEngineReplicaImpl) skip(skipLen int64) (int64, error) {
 	})
 	impl.e.rareLog("[sqlite] skip offset (new offset: %d)", offset)
 	return offset, err
+}
+
+func (impl *binlogEngineReplicaImpl) Shutdown() {
+	// nop
+}
+
+func (impl *binlogEngineReplicaImpl) Split(offset int64, toShardID string) bool {
+	return false
 }

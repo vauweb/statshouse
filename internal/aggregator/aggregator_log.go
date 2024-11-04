@@ -7,6 +7,7 @@
 package aggregator
 
 import (
+	"context"
 	"encoding/binary"
 	"log"
 	"strconv"
@@ -41,8 +42,9 @@ func (a *Aggregator) appendInternalLog(typ string, key0 string, key1 string, key
 	a.appendInternalLogLocked(typ, key0, key1, key2, key3, key4, key5, message)
 }
 
+// We do not want to wait this func to finish, so no attempts to cancel
 func (a *Aggregator) goInternalLog() {
-	httpClient := makeHTTPClient(data_model.ClickHouseTimeout)
+	httpClient := makeHTTPClient()
 	var localLog []byte
 	for {
 		time.Sleep(data_model.InternalLogInsertInterval)
@@ -54,7 +56,9 @@ func (a *Aggregator) goInternalLog() {
 		a.mu.Unlock()
 
 		if len(localLog) != 0 {
-			status, exception, _, err := sendToClickhouse(httpClient, a.config.KHAddr, "statshouse_internal_log_buffer(time,host,type,key0,key1,key2,key3,key4,key5,message)", localLog)
+			ctx, cancel := context.WithTimeout(context.Background(), data_model.ClickHouseTimeoutInsert)
+			status, exception, _, err := sendToClickhouse(ctx, httpClient, a.config.KHAddr, "statshouse_internal_log_buffer(time,host,type,key0,key1,key2,key3,key4,key5,message)", localLog)
+			cancel()
 			if err != nil {
 				a.appendInternalLog("insert_error", "", strconv.Itoa(status), strconv.Itoa(exception), "statshouse_internal_log_buffer", "", "", err.Error()) // Hopefully will insert next time
 				log.Printf("error inserting internal log - %v", err)
@@ -65,13 +69,23 @@ func (a *Aggregator) goInternalLog() {
 }
 
 func (a *Aggregator) reportInsertKeys(bucketTime uint32, metric int32, historic bool, err error, status int, exception int) data_model.Key {
-	key := data_model.AggKey(bucketTime, metric,
-		[16]int32{0, 0, 0, 0, format.TagValueIDConveyorRecent, format.TagValueIDInsertTimeOK, int32(status), int32(exception)}, a.aggregatorHost, a.shardKey, a.replicaKey)
+	key := a.aggKey(bucketTime, metric, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorRecent, format.TagValueIDInsertTimeOK, int32(status), int32(exception)})
 	if err != nil {
-		key.Keys[5] = format.TagValueIDInsertTimeError
+		key.Tags[5] = format.TagValueIDInsertTimeError
 	}
 	if historic {
-		key.Keys[4] = format.TagValueIDConveyorHistoric
+		key.Tags[4] = format.TagValueIDConveyorHistoric
+	}
+	return key
+}
+
+func (a *Aggregator) reportExpInsertKeys(bucketTime uint32, metric int32, historic bool, err error, status int, exception int) data_model.Key {
+	key := a.aggKey(bucketTime, metric, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorRecent, format.TagValueIDInsertTimeOK, int32(status), int32(exception), 1})
+	if err != nil {
+		key.Tags[5] = format.TagValueIDInsertTimeError
+	}
+	if historic {
+		key.Tags[4] = format.TagValueIDConveyorHistoric
 	}
 	return key
 }

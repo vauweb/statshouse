@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,16 +7,14 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import cn from 'classnames';
 import { TagSelect } from '../TagSelect';
-// import { SwitchBox } from '../UI';
 import { formatTagValue } from '../../view/api';
-
-// import { ReactComponent as SVGLayers } from 'bootstrap-icons/icons/layers.svg';
 import { SelectOptionProps } from '../Select';
-import { formatPercent, normalizeTagValues } from '../../view/utils';
+import { normalizeTagValues } from '../../view/utils';
 import { MetricMetaTag } from '../../api/metric';
 import { MetricTagValueInfo } from '../../api/metricTagValues';
 import { escapeHTML } from '../../common/helpers';
 import { Button } from '../UI';
+import { formatPercent } from '../../view/utils2';
 
 const emptyListArray: MetricTagValueInfo[] = [];
 const emptyValues: string[] = [];
@@ -25,13 +23,13 @@ export type VariableControlProps<T> = {
   target?: T;
   placeholder?: string;
   negative?: boolean;
-  setNegative: (name: T | undefined, value: boolean) => void;
+  setNegative?: (name: T | undefined, value: boolean) => void;
   groupBy?: boolean;
-  setGroupBy: (name: T | undefined, value: boolean) => void;
+  setGroupBy?: (name: T | undefined, value: boolean) => void;
   className?: string;
   values?: string[];
   notValues?: string[];
-  onChange: (name: T | undefined, value: string[]) => void;
+  onChange?: (name: T | undefined, value: string[]) => void;
   tagMeta?: MetricMetaTag;
   more?: boolean;
   customValue?: boolean;
@@ -47,7 +45,7 @@ export function VariableControl<T>({
   className,
   negative = false,
   setNegative,
-  groupBy = false,
+  groupBy,
   setGroupBy,
   values = emptyValues,
   notValues = emptyValues,
@@ -83,7 +81,7 @@ export function VariableControl<T>({
           title: title,
         };
       }),
-    [list, sortByName, tagMeta?.raw, tagMeta?.raw_kind, tagMeta?.value_comments]
+    [list, sortByName, tagMeta]
   );
 
   const onSelectFocus = useCallback(() => {
@@ -97,26 +95,26 @@ export function VariableControl<T>({
   const onChangeFilter = useCallback(
     (value?: string | string[] | undefined) => {
       const v = value == null ? [] : Array.isArray(value) ? value : [value];
-      onChange(target, v);
+      onChange?.(target, v);
     },
     [target, onChange]
   );
   const onSetNegative = useCallback(
     (value: boolean) => {
-      setNegative(target, value);
+      setNegative?.(target, value);
     },
     [target, setNegative]
   );
   const onSetGroupBy = useCallback(
     (value: boolean) => {
-      setGroupBy(target, value);
+      setGroupBy?.(target, value);
     },
     [target, setGroupBy]
   );
   const onRemoveFilter = useCallback<React.MouseEventHandler<HTMLButtonElement>>(
     (event) => {
       const value = event.currentTarget.getAttribute('data-value');
-      onChange(
+      onChange?.(
         target,
         allValues.filter((v) => v !== value)
       );
@@ -146,9 +144,9 @@ export function VariableControl<T>({
           />
         </div>
       </div>
-      <div className="d-flex flex-wrap gap-2 my-2">
+      <div className={cn('d-flex flex-wrap gap-2', (!!customBadge || values.length > 0 || notValues.length) && 'mt-2')}>
         {customBadge}
-        {values?.map((v) => (
+        {values.map((v) => (
           <Button
             type="button"
             key={v}
@@ -160,7 +158,7 @@ export function VariableControl<T>({
             {formatTagValue(v, tagMeta?.value_comments?.[v], tagMeta?.raw, tagMeta?.raw_kind)}
           </Button>
         ))}
-        {notValues?.map((v) => (
+        {notValues.map((v) => (
           <Button
             type="button"
             key={v}

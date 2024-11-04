@@ -11,19 +11,24 @@ import { ReactComponent as SVGTrash } from 'bootstrap-icons/icons/trash.svg';
 import { ReactComponent as SVGXSquare } from 'bootstrap-icons/icons/x-square.svg';
 import { ReactComponent as SVGFlagFill } from 'bootstrap-icons/icons/flag-fill.svg';
 
-import { Store, useStore } from '../../store';
+import {
+  setPlotVisibility,
+  setPreviewVisibility,
+  Store,
+  usePlotPreviewStore,
+  usePlotVisibilityStore,
+  useStore,
+} from '../../store';
 import { PlotLink } from '../Plot/PlotLink';
-import { whatToWhatDesc } from '../../view/api';
 
 import cn from 'classnames';
 import css from './style.module.css';
-import { promQLMetric } from '../../view/utils';
 import { shallow } from 'zustand/shallow';
 import { PLOT_TYPE } from '../../url/queryParams';
-import { setPlotVisibility, setPreviewVisibility, usePlotVisibilityStore } from '../../store/plot/plotVisibilityStore';
 import { buildThresholdList, useIntersectionObserver } from '../../hooks';
-import { usePlotPreview } from '../../store/plot/plotPreview';
 import { Popper, Tooltip } from '../UI';
+import { promQLMetric } from '../../view/promQLMetric';
+import { whatToWhatDesc } from '../../view/whatToWhatDesc';
 
 const threshold = buildThresholdList(1);
 
@@ -50,7 +55,7 @@ export const HeaderMenuItemPlot: React.FC<HeaderMenuItemPlotProps> = ({ indexPlo
   const isView = location.pathname === '/view';
   const selectorPlotInfo = useMemo(() => selectorPlotInfoByIndex.bind(undefined, indexPlot), [indexPlot]);
   const { plot, numQueries, plotData, tabNum, plotCount } = useStore(selectorPlotInfo, shallow);
-  const preview = usePlotPreview((s) => s.previewList[indexPlot]);
+  const preview = usePlotPreviewStore((s) => s.previewList[indexPlot]);
   const lastVisiblePlot = useRef(false);
   const onRemovePlot = useCallback(() => {
     removePlot(indexPlot);
@@ -108,7 +113,9 @@ export const HeaderMenuItemPlot: React.FC<HeaderMenuItemPlotProps> = ({ indexPlo
   }, []);
 
   useEffect(() => {
-    setPreviewVisibility(indexPlot, visible > 0);
+    setTimeout(() => {
+      setPreviewVisibility(indexPlot, visible > 0);
+    }, 100);
   }, [indexPlot, tabNum, visible]);
 
   useEffect(() => {
@@ -125,7 +132,7 @@ export const HeaderMenuItemPlot: React.FC<HeaderMenuItemPlotProps> = ({ indexPlo
       className={cn(
         'position-relative',
         css.plotItem,
-        indexPlot === tabNum && isView && [css.activePlotItem, 'plot-active']
+        indexPlot === tabNum && isView && [css.activePlotItem, css.activeItem, 'plot-active']
       )}
       onMouseOver={onOpen}
       onMouseOut={onClose}
@@ -135,7 +142,7 @@ export const HeaderMenuItemPlot: React.FC<HeaderMenuItemPlotProps> = ({ indexPlo
       <PlotLink
         className={cn(
           'nav-link',
-          !plotData.error403 && ['p-0', css.preview],
+          !plotData.error403 ? css.preview : css.preview403,
           plot.type === PLOT_TYPE.Event && css.previewEvent
         )}
         indexPlot={indexPlot}

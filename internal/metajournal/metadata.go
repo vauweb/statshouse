@@ -13,11 +13,8 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"time"
 
-	promlog "github.com/go-kit/log"
-	prom_config "github.com/prometheus/prometheus/config"
 	"go4.org/mem"
 
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
@@ -29,7 +26,6 @@ import (
 const (
 	pmcBigNegativeCacheTTL = 1 * time.Hour
 	DefaultMetaTimeout     = 2 * time.Second
-	prometheusConfigID     = -1 // TODO move to file with predefined entities
 )
 
 var errorInvalidUserRequest = errors.New("")
@@ -50,7 +46,7 @@ func NewMetricMetaLoader(client *tlmetadata.Client, loadTimeout time.Duration) *
 	}
 }
 
-func (l *MetricMetaLoader) SaveDashboard(ctx context.Context, value format.DashboardMeta, create, remove bool) (format.DashboardMeta, error) {
+func (l *MetricMetaLoader) SaveDashboard(ctx context.Context, value format.DashboardMeta, create, remove bool, metadata string) (format.DashboardMeta, error) {
 	if !format.ValidDashboardName(value.Name) {
 		return format.DashboardMeta{}, fmt.Errorf("invalid dashboard name %w: %q", errorInvalidUserRequest, value.Name)
 	}
@@ -69,6 +65,7 @@ func (l *MetricMetaLoader) SaveDashboard(ctx context.Context, value format.Dashb
 	}
 	editMetricReq.SetCreate(create)
 	editMetricReq.SetDelete(remove)
+	editMetricReq.Event.SetMetadata(metadata)
 	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
 	defer cancelFunc()
 	event := tlmetadata.Event{}
@@ -94,12 +91,12 @@ func (l *MetricMetaLoader) SaveDashboard(ctx context.Context, value format.Dashb
 	}, nil
 }
 
-func (l *MetricMetaLoader) SaveMetricsGroup(ctx context.Context, value format.MetricsGroup, create bool) (g format.MetricsGroup, _ error) {
-	if err := value.RestoreCachedInfo(); err != nil {
+func (l *MetricMetaLoader) SaveMetricsGroup(ctx context.Context, value format.MetricsGroup, create bool, metadata string) (g format.MetricsGroup, _ error) {
+	if err := value.RestoreCachedInfo(false); err != nil {
 		return g, err
 	}
 	var err error
-	if !format.ValidMetricName(mem.S(value.Name)) {
+	if !format.ValidGroupName(value.Name) {
 		return g, fmt.Errorf("invalid group name %w: %q", errorInvalidUserRequest, value.Name)
 	}
 
@@ -118,6 +115,7 @@ func (l *MetricMetaLoader) SaveMetricsGroup(ctx context.Context, value format.Me
 	}
 	// todo add namespace after meta release
 	editMetricReq.SetCreate(create)
+	editMetricReq.Event.SetMetadata(metadata)
 	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
 	defer cancelFunc()
 	event := tlmetadata.Event{}
@@ -139,8 +137,8 @@ func (l *MetricMetaLoader) SaveMetricsGroup(ctx context.Context, value format.Me
 	return g, nil
 }
 
-func (l *MetricMetaLoader) SaveNamespace(ctx context.Context, value format.NamespaceMeta, create bool) (g format.NamespaceMeta, _ error) {
-	if err := value.RestoreCachedInfo(); err != nil {
+func (l *MetricMetaLoader) SaveNamespace(ctx context.Context, value format.NamespaceMeta, create bool, metadata string) (g format.NamespaceMeta, _ error) {
+	if err := value.RestoreCachedInfo(false); err != nil {
 		return g, err
 	}
 	var err error
@@ -163,12 +161,13 @@ func (l *MetricMetaLoader) SaveNamespace(ctx context.Context, value format.Names
 	}
 	// todo add namespace after meta release
 	editMetricReq.SetCreate(create)
+	editMetricReq.Event.SetMetadata(metadata)
 	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
 	defer cancelFunc()
 	event := tlmetadata.Event{}
 	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
 	if err != nil {
-		return format.NamespaceMeta{}, fmt.Errorf("failed to edit group: %w", err)
+		return format.NamespaceMeta{}, fmt.Errorf("failed to edit namespace: %w", err)
 	}
 	if event.Id < math.MinInt32 || event.Id > math.MaxInt32 {
 		return g, fmt.Errorf("namespace ID %d assigned by metaengine does not fit into int32 for group %q", event.Id, event.Name)
@@ -184,7 +183,60 @@ func (l *MetricMetaLoader) SaveNamespace(ctx context.Context, value format.Names
 	return g, nil
 }
 
-func (l *MetricMetaLoader) SaveMetric(ctx context.Context, value format.MetricMetaValue) (m format.MetricMetaValue, _ error) {
+func (l *MetricMetaLoader) GetMetric(ctx context.Context, id int64, version int64) (ret format.MetricMetaValue, err error) {
+	entity, err := l.GetEntity(ctx, id, version)
+	if err != nil {
+		return ret, err
+	}
+	m := format.MetricMetaValue{}
+	err = json.Unmarshal([]byte(entity.Data), &m)
+	if err != nil {
+		return ret, err
+	}
+	m.NamespaceID = int32(entity.NamespaceId)
+	m.MetricID = int32(entity.Id)
+	m.Name = entity.Name
+	m.Version = entity.Version
+	m.UpdateTime = entity.UpdateTime
+	_ = m.RestoreCachedInfo()
+	return m, nil
+}
+
+func (l *MetricMetaLoader) GetDashboard(ctx context.Context, id int64, version int64) (ret format.DashboardMeta, err error) {
+	entity, err := l.GetEntity(ctx, id, version)
+	if err != nil {
+		return ret, err
+	}
+	d := format.DashboardMeta{}
+	m := map[string]interface{}{}
+	err = json.Unmarshal([]byte(entity.Data), &m)
+	if err != nil {
+		return ret, err
+	}
+	d.DashboardID = int32(entity.Id)
+	d.Name = entity.Name
+	d.Version = entity.Version
+	d.UpdateTime = entity.UpdateTime
+	d.JSONData = m
+	return d, nil
+}
+
+func (l *MetricMetaLoader) GetEntity(ctx context.Context, id int64, version int64) (ret tlmetadata.Event, err error) {
+	err = l.client.GetEntity(ctx, tlmetadata.GetEntity{
+		Id:      id,
+		Version: version,
+	}, nil, &ret)
+	return ret, err
+}
+
+func (l *MetricMetaLoader) GetShortHistory(ctx context.Context, id int64) (ret tlmetadata.HistoryShortResponse, err error) {
+	err = l.client.GetHistoryShortInfo(ctx, tlmetadata.GetHistoryShortInfo{
+		Id: id,
+	}, nil, &ret)
+	return ret, err
+}
+
+func (l *MetricMetaLoader) SaveMetric(ctx context.Context, value format.MetricMetaValue, metadata string) (m format.MetricMetaValue, _ error) {
 	create := value.MetricID == 0
 
 	metricBytes, err := format.MetricJSON(&value)
@@ -202,6 +254,7 @@ func (l *MetricMetaLoader) SaveMetric(ctx context.Context, value format.MetricMe
 	}
 	// todo add namespace after meta release
 	editMetricReq.SetCreate(create)
+	editMetricReq.Event.SetMetadata(metadata)
 	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
 	defer cancelFunc()
 	event := tlmetadata.Event{}
@@ -269,7 +322,7 @@ func (l *MetricMetaLoader) GetTagMapping(ctx context.Context, tag string, metric
 		Key:    tag,
 	}
 	req.SetCreateIfAbsent(create)
-	resp := tlmetadata.GetMappingResponseUnion{}
+	resp := tlmetadata.GetMappingResponse{}
 	err := l.client.GetMapping(ctx, req, nil, &resp)
 	if err != nil {
 		return 0, format.TagValueIDAggMappingCreatedStatusErrorPMC, 0, err
@@ -301,43 +354,32 @@ func (l *MetricMetaLoader) LoadOrCreateMapping(ctxParent context.Context, key st
 	return pcache.Int32ToValue(v), d, e
 }
 
-func checkPromConfig(cfg *prom_config.Config) error {
-	if len(cfg.RemoteWriteConfigs) > 0 {
-		return fmt.Errorf("statshouse doesn't support v remote write")
-	}
-
-	if len(cfg.AlertingConfig.AlertmanagerConfigs) > 0 || len(cfg.AlertingConfig.AlertRelabelConfigs) > 0 {
-		return fmt.Errorf("statshouse doesn't support prometheus prometheus alerting")
-	}
-
-	if len(cfg.RuleFiles) > 0 {
-		return fmt.Errorf("statshouse doesn't support prometheus rule_files field")
-	}
-
-	if len(cfg.RemoteReadConfigs) > 0 {
-		return fmt.Errorf("statshouse doesn't support prometheus remote read")
-	}
-
-	if cfg.StorageConfig.ExemplarsConfig != nil && cfg.StorageConfig != prom_config.DefaultStorageConfig {
-		return fmt.Errorf("statshouse doesn't support storage section")
-	}
-
-	return nil
-}
-
-func (l *MetricMetaLoader) SavePromConfig(ctx context.Context, version int64, config string) (tlmetadata.Event, error) {
-	cfg, err := prom_config.Load(config, false, promlog.NewLogfmtLogger(os.Stdout))
-	event := tlmetadata.Event{}
-	if err != nil {
-		return event, fmt.Errorf("invalid prometheus config syntax: %w", err)
-	}
-	if err := checkPromConfig(cfg); err != nil {
-		return event, err
-	}
+func (l *MetricMetaLoader) SaveScrapeConfig(ctx context.Context, version int64, config string, metadata string) (tlmetadata.Event, error) {
 	editMetricReq := tlmetadata.EditEntitynew{
 		Event: tlmetadata.Event{
-			Id:        prometheusConfigID,
+			Id:        format.PrometheusConfigID,
 			Name:      "prom-config",
+			EventType: format.PromConfigEvent,
+			Version:   version,
+			Data:      config,
+		},
+	}
+	editMetricReq.Event.SetMetadata(metadata)
+	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
+	defer cancelFunc()
+	var event tlmetadata.Event
+	err := l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
+	if err != nil {
+		return event, fmt.Errorf("failed to change prom config: %w", err)
+	}
+	return event, nil
+}
+
+func (l *MetricMetaLoader) SaveScrapeStaticConfig(ctx context.Context, version int64, config string) (tlmetadata.Event, error) {
+	editMetricReq := tlmetadata.EditEntitynew{
+		Event: tlmetadata.Event{
+			Id:        format.PrometheusGeneratedConfigID,
+			Name:      "prom-static-config",
 			EventType: format.PromConfigEvent,
 			Version:   version,
 			Data:      config,
@@ -345,11 +387,115 @@ func (l *MetricMetaLoader) SavePromConfig(ctx context.Context, version int64, co
 	}
 	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
 	defer cancelFunc()
-	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
+	var event tlmetadata.Event
+	err := l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
 	if err != nil {
-		return event, fmt.Errorf("failed to change prometheus config: %w", err)
+		return event, fmt.Errorf("failed to change prom static config: %w", err)
 	}
 	return event, nil
+}
+
+func (l *MetricMetaLoader) SaveKnownTagsConfig(ctx context.Context, version int64, config string) (tlmetadata.Event, error) {
+	editMetricReq := tlmetadata.EditEntitynew{
+		Event: tlmetadata.Event{
+			Id:        format.KnownTagsConfigID,
+			Name:      "prom-known-tags",
+			EventType: format.PromConfigEvent,
+			Version:   version,
+			Data:      config,
+		},
+	}
+	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
+	defer cancelFunc()
+	var event tlmetadata.Event
+	err := l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
+	if err != nil {
+		return event, fmt.Errorf("failed to change prom known tags config: %w", err)
+	}
+	return event, nil
+}
+
+func (l *MetricMetaLoader) SaveBuiltInGroup(ctx context.Context, value format.MetricsGroup) (g format.MetricsGroup, _ error) {
+	if err := value.RestoreCachedInfo(true); err != nil {
+		return g, err
+	}
+	groupBytes, err := json.Marshal(value)
+	if err != nil {
+		return g, fmt.Errorf("faield to serialize group: %w", err)
+	}
+	builtinGroup, ok := format.BuiltInGroupDefault[value.ID]
+	if !ok {
+		return g, fmt.Errorf("invalid buildin group id: %d", value.ID)
+	}
+	editMetricReq := tlmetadata.EditEntitynew{
+		Event: tlmetadata.Event{
+			Id:        int64(value.ID),
+			Name:      builtinGroup.Name,
+			EventType: format.MetricsGroupEvent,
+			Version:   value.Version,
+			Data:      string(groupBytes),
+		},
+	}
+	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
+	defer cancelFunc()
+	event := tlmetadata.Event{}
+	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
+	if err != nil {
+		return g, fmt.Errorf("failed to edit group: %w", err)
+	}
+	err = json.Unmarshal([]byte(event.Data), &g)
+	if err != nil {
+		return g, fmt.Errorf("failed to deserialize json group: %w", err)
+	}
+	g.Version = event.Version
+	g.Name = event.Name
+	g.UpdateTime = event.UpdateTime
+	g.ID = int32(event.Id)
+	return g, nil
+}
+
+func (l *MetricMetaLoader) SaveBuiltinNamespace(ctx context.Context, value format.NamespaceMeta, create bool) (g format.NamespaceMeta, _ error) {
+	if err := value.RestoreCachedInfo(true); err != nil {
+		return g, err
+	}
+
+	builtinNamespace, ok := format.BuiltInNamespaceDefault[value.ID]
+	if !ok {
+		return g, fmt.Errorf("invalid buildin namespace id: %d", value.ID)
+	}
+	namespaceBytes, err := json.Marshal(value)
+	if err != nil {
+		return format.NamespaceMeta{}, fmt.Errorf("faield to serialize namespace: %w", err)
+	}
+	editMetricReq := tlmetadata.EditEntitynew{
+		Event: tlmetadata.Event{
+			Id:        int64(value.ID),
+			Name:      builtinNamespace.Name,
+			EventType: format.NamespaceEvent,
+			Version:   value.Version,
+			Data:      string(namespaceBytes),
+		},
+	}
+	editMetricReq.SetCreate(create)
+	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
+	defer cancelFunc()
+	event := tlmetadata.Event{}
+	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
+	if err != nil {
+		return format.NamespaceMeta{}, fmt.Errorf("failed to edit namespace: %w", err)
+	}
+	if event.Id < math.MinInt32 || event.Id > math.MaxInt32 {
+		return g, fmt.Errorf("namespace ID %d assigned by metaengine does not fit into int32 for group %q", event.Id, event.Name)
+	}
+	err = json.Unmarshal([]byte(event.Data), &g)
+	if err != nil {
+		return format.NamespaceMeta{}, fmt.Errorf("failed to deserialize json namespace: %w", err)
+	}
+	g.Version = event.Version
+	g.Name = event.Name
+	g.UpdateTime = event.UpdateTime
+	g.ID = int32(event.Id)
+	return g, nil
 }
 
 func (l *MetricMetaLoader) ResetFlood(ctx context.Context, metricName string, value int32) (_ bool, before int32, after int32, _ error) {

@@ -6,12 +6,17 @@
 !/build/*.xml
 !/build/*.sql
 !/build/*.sh
+!/build/statshouse_env.yml
+!/build/debian
 !/cmd
 !/internal
 !/go.mod
 !/go.sum
 !/statshouse-ui
 !/grafana-plugin-ui
+!/localdebug/consul/*.sh
+!/localdebug/consul/*.sql
+!/localdebug/consul/*.xml
 
 # Ignore sub-directories
 /statshouse-ui/build

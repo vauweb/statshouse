@@ -15,8 +15,6 @@ import (
 	"github.com/vkcom/statshouse/internal/pcache"
 )
 
-type MapCallbackFunc func(tlstatshouse.MetricBytes, data_model.MappedMetricHeader)
-
 type Mapper struct {
 	pipeline *mapPipeline
 }
@@ -27,6 +25,7 @@ func NewTagsCache(loader pcache.LoaderFunc, suffix string, dc *pcache.DiskCache)
 		DiskCache:               dc,
 		DiskCacheNamespace:      data_model.TagValueDiskNamespace + suffix,
 		MaxMemCacheSize:         data_model.MappingMaxMemCacheSize,
+		MaxDiskCacheSize:        data_model.MappingMaxDiskCacheSize,
 		SpreadCacheTTL:          true,
 		DefaultCacheTTL:         data_model.MappingCacheTTLMinimum,
 		DefaultNegativeCacheTTL: data_model.MappingNegativeCacheTTL,
@@ -39,7 +38,7 @@ func NewTagsCache(loader pcache.LoaderFunc, suffix string, dc *pcache.DiskCache)
 	return result
 }
 
-func NewMapper(suffix string, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache, ac *AutoCreate, metricMapQueueSize int, mapCallback MapCallbackFunc) *Mapper {
+func NewMapper(suffix string, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache, ac *AutoCreate, metricMapQueueSize int, mapCallback data_model.MapCallbackFunc) *Mapper {
 	tagValue := NewTagsCache(pmcLoader, suffix, dc)
 
 	return &Mapper{
@@ -47,8 +46,8 @@ func NewMapper(suffix string, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache,
 	}
 }
 
-func (m *Mapper) TagValueDiskCacheSize() int {
-	return m.pipeline.tagValue.DiskCacheSize()
+func (m *Mapper) TagValueDiskCacheEmpty() bool {
+	return m.pipeline.tagValue.DiskCacheEmpty()
 }
 
 func (m *Mapper) SetBootstrapValue(now time.Time, key string, v pcache.Value, ttl time.Duration) error {
@@ -60,6 +59,12 @@ func (m *Mapper) Stop() {
 }
 
 // cb.MetricInfo must be set from journal. If nil, will lookup allowed built-in metric, otherwise set ingestion status not found
-func (m *Mapper) Map(metric *tlstatshouse.MetricBytes, metricInfo *format.MetricMetaValue, cb MapCallbackFunc) (data_model.MappedMetricHeader, bool) {
-	return m.pipeline.Map(metric, metricInfo, cb)
+func (m *Mapper) Map(args data_model.HandlerArgs, metricInfo *format.MetricMetaValue, h *data_model.MappedMetricHeader) (done bool) {
+	return m.pipeline.Map(args, metricInfo, h)
+}
+
+// We wish to know which environment generates 'metric not found' events and other errors
+// so we call it even if we had an error
+func (m *Mapper) MapEnvironment(metric *tlstatshouse.MetricBytes, h *data_model.MappedMetricHeader) {
+	m.pipeline.MapEnvironment(metric, h)
 }

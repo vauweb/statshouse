@@ -7,23 +7,23 @@
 package sqlite
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"context"
+	"errors"
+	"strconv"
+
+	"github.com/vkcom/statshouse/internal/sqlite/sqlite0"
+	binlog2 "github.com/vkcom/statshouse/internal/vkgo/binlog"
+	"github.com/vkcom/statshouse/internal/vkgo/binlog/fsbinlog"
 	"go.uber.org/atomic"
 	"go.uber.org/multierr"
 	"pgregory.net/rand"
-
-	"github.com/vkcom/statshouse/internal/sqlite/internal/sqlite0"
-	binlog2 "github.com/vkcom/statshouse/internal/vkgo/binlog"
-	"github.com/vkcom/statshouse/internal/vkgo/binlog/fsbinlog"
 )
 
 // TODO: explicit blocking Engine.Run to run binlog
@@ -72,6 +72,7 @@ const (
 	cacheKB            = 65536                         // 64MB
 	mmapSize           = 8 * 1024 * 1024 * 1024 * 1024 // 8TB
 	commitEveryDefault = 1 * time.Second
+	defaultPageSize    = 4 * 1024 // 4KB
 
 	beginStmt  = "BEGIN IMMEDIATE" // make sure we don't get SQLITE_BUSY in the middle of transaction
 	commitStmt = "COMMIT"
@@ -103,6 +104,7 @@ type (
 
 		binlog         binlog2.Binlog
 		dbOffset       int64
+		commitOffset   atomic.Int64 // debug only
 		lastCommitTime time.Time
 
 		waitQMx       sync.Mutex
@@ -127,17 +129,20 @@ type (
 	}
 
 	Options struct {
-		Path                   string
-		APPID                  int32
-		StatsOptions           StatsOptions
-		Scheme                 string
-		Replica                bool
-		CommitEvery            time.Duration
-		DurabilityMode         DurabilityMode
-		ReadAndExit            bool
-		CommitOnEachWrite      bool // use only to test. If true break binlog + sqlite consistency
+		Path                  string
+		APPID                 uint32
+		StatsOptions          StatsOptions
+		Scheme                string
+		Replica               bool
+		CommitEvery           time.Duration
+		DurabilityMode        DurabilityMode
+		ReadAndExit           bool
+		CommitOnEachWrite     bool // use only to test. If true break binlog + sqlite consistency
+		WaitBinlogCommitDebug bool // ...
+
 		MaxROConn              int
 		CacheMaxSizePerConnect int
+		PageSize               int
 	}
 
 	waitCommitInfo struct {
@@ -176,7 +181,29 @@ const (
 )
 
 func OpenRO(opt Options) (*Engine, error) {
-	ro, err := openROWAL(opt.Path)
+	rawConn, err := sqlite0.Open(opt.Path, sqlite0.OpenReadonly)
+	if err != nil {
+		return nil, err
+	}
+	conn := newSqliteConn(rawConn, 1)
+
+	ctx, stop := context.WithCancel(context.Background())
+	e := &Engine{
+		rw:             nil,
+		ctx:            ctx,
+		stop:           stop,
+		opt:            opt,
+		roFree:         []*sqliteConn{conn},
+		roCount:        1,
+		mode:           replica,
+		readOnlyEngine: true,
+	}
+	e.roCond = sync.NewCond(&e.roMx)
+	return e, nil
+}
+
+func OpenROWal(opt Options) (*Engine, error) {
+	ro, err := openROWAL(opt.Path, opt.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -197,12 +224,48 @@ func OpenRO(opt Options) (*Engine, error) {
 	return e, nil
 }
 
+func checkWals(dbPath string) (wal1NotExists bool, wal2NotExists bool, err error) {
+	wal1Path := dbPath + "-wal"
+	wal2Path := dbPath + "-wal2"
+	_, err = os.Stat(wal1Path)
+	if os.IsNotExist(err) {
+		wal1NotExists = true
+		err = nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	_, err = os.Stat(wal2Path)
+	if os.IsNotExist(err) {
+		wal2NotExists = true
+		err = nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return
+}
+
 func OpenEngine(
 	opt Options,
 	binlog binlog2.Binlog, // binlog - will be closed during Close execution
 	apply ApplyEventFunction,
 	scan ApplyEventFunction, // this helps to work in replica mode with old binlog
 ) (*Engine, error) {
+	wal1NotExists, wal2NotExists, err := checkWals(opt.Path)
+	if err != nil {
+		return nil, fmt.Errorf("faield to check wal existence: %w", err)
+	}
+	if wal1NotExists {
+		log.Println("wal1 is not exist")
+	} else {
+		log.Println("wal1 is exist")
+	}
+	if wal2NotExists {
+		log.Println("wal2 is not exist")
+	} else {
+		log.Println("wal2 is exist")
+	}
 	e, err := openDB(opt, binlog, apply, scan)
 	if err != nil {
 		return nil, err
@@ -228,7 +291,7 @@ func openDB(opt Options,
 	if opt.MaxROConn == 0 {
 		opt.MaxROConn = 100
 	}
-	rw, err := openRW(openWAL, opt.Path, opt.APPID, opt.Scheme, initOffsetTable, snapshotMetaTable)
+	rw, err := openRW(openWAL, opt.Path, opt.APPID, opt.PageSize, opt.Scheme, initOffsetTable, snapshotMetaTable)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open RW connection: %w", err)
 	}
@@ -308,7 +371,7 @@ func (e *Engine) binlogRun() (*binlogEngineReplicaImpl, error) {
 
 				}
 			}()
-			err = e.binlog.Run(offset, meta, impl)
+			err = e.binlog.Run(offset, meta, nil, impl)
 			if err != nil {
 				e.rw.mu.Lock()
 				e.rw.err = err
@@ -342,19 +405,10 @@ func (e *Engine) binlogWaitReady(impl *binlogEngineReplicaImpl) error {
 	return nil
 }
 
-func openWAL(path string, flags int) (*sqlite0.Conn, error) {
+func openWAL(path string, flags int, pageSize int) (*sqlite0.Conn, error) {
 	conn, err := sqlite0.Open(path, flags)
 	if err != nil {
 		return nil, err
-	}
-
-	// todo make checkpoint manually
-	if false {
-		err = conn.SetAutoCheckpoint(0)
-		if err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("failed to disable DB auto-checkpoints: %w", err)
-		}
 	}
 
 	err = conn.SetBusyTimeout(busyTimeout)
@@ -363,17 +417,26 @@ func openWAL(path string, flags int) (*sqlite0.Conn, error) {
 		return nil, fmt.Errorf("failed to set DB busy timeout to %v: %w", busyTimeout, err)
 	}
 
+	if pageSize <= 0 {
+		pageSize = defaultPageSize
+	}
+
+	err = conn.Exec(fmt.Sprintf("PRAGMA page_size=%d", pageSize))
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to set page_size: %w", err)
+	}
+
 	err = conn.Exec("PRAGMA journal_mode=WAL2")
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("failed to enable DB WAL mode: %w", err)
 	}
-
 	return conn, nil
 }
 
-func openRW(open func(path string, flags int) (*sqlite0.Conn, error), path string, appID int32, schemas ...string) (*sqlite0.Conn, error) {
-	conn, err := open(path, sqlite0.OpenReadWrite|sqlite0.OpenCreate)
+func openRW(open func(path string, flags int, pageSize int) (*sqlite0.Conn, error), path string, appID uint32, pageSize int, schemas ...string) (*sqlite0.Conn, error) {
+	conn, err := open(path, sqlite0.OpenReadWrite|sqlite0.OpenCreate, pageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -418,8 +481,8 @@ func openRW(open func(path string, flags int) (*sqlite0.Conn, error), path strin
 //		return conn, nil
 //	}
 
-func openROWAL(path string) (*sqlite0.Conn, error) {
-	return openWAL(path, sqlite0.OpenReadonly)
+func openROWAL(path string, pageSize int) (*sqlite0.Conn, error) {
+	return openWAL(path, sqlite0.OpenReadonly, pageSize)
 }
 
 func (e *Engine) binlogLoadOrCreatePosition() (int64, error) {
@@ -495,9 +558,26 @@ func (e *Engine) Close(ctx context.Context) error {
 func (e *Engine) close(shouldCommit, waitCommitBinlog bool) error {
 	var error error
 	if e.opt.DurabilityMode != NoBinlog && e.binlog != nil {
-		err := e.binlog.Shutdown()
+		e.binlog.RequestShutdown()
+	}
+	for {
+		/*
+			активное ожидаение чтобы не усложнять код либы, требуется для более безопасного переезда на вторую версию
+		*/
+		e.roMx.Lock()
+		if len(e.roFree) != e.roCount {
+			log.Println("[sqlite] don't use RO connections when close engine")
+			e.roMx.Unlock()
+			time.Sleep(time.Millisecond * 10)
+		} else {
+			break
+		}
+	}
+	defer e.roMx.Unlock()
+	for _, conn := range e.roFree {
+		err := conn.Close()
 		if err != nil {
-			multierr.AppendInto(&error, err)
+			multierr.AppendInto(&error, fmt.Errorf("failed to close RO connection: %w", err))
 		}
 	}
 	if !e.readOnlyEngine {
@@ -512,17 +592,7 @@ func (e *Engine) close(shouldCommit, waitCommitBinlog bool) error {
 			multierr.AppendInto(&error, fmt.Errorf("failed to close RW connection: %w", err))
 		}
 	}
-	e.roMx.Lock()
-	defer e.roMx.Unlock()
-	if len(e.roFree) != e.roCount {
-		log.Println("[sqlite] don't use RO connections when close engine")
-	}
-	for _, conn := range e.roFree {
-		err := conn.Close()
-		if err != nil {
-			multierr.AppendInto(&error, fmt.Errorf("failed to close RO connection: %w", err))
-		}
-	}
+
 	// multierr.AppendInto(&err, e.chk.Close())
 	// multierr.AppendInto(&err, e.ro.Close()) // close RO one last to prevent checkpoint-on-close logic in other connections
 	return error
@@ -583,7 +653,7 @@ func (e *Engine) commitRWTXAndStartNewLocked(c Conn, commit, waitBinlogCommit, s
 	if commit {
 		startCommit := time.Now()
 		if !skipUpdateMeta && e.binlog != nil && info != nil && len(info.meta) > 0 {
-			err := e.binlogUpdateMeta(c, info.meta)
+			err = e.binlogUpdateMeta(c, info.meta)
 			if err != nil {
 				e.rw.err = err
 			}
@@ -618,12 +688,12 @@ func backupToTemp(ctx context.Context, conn *sqliteConn, prefix string, stats *S
 	return path, conn.err
 }
 
-func getBackupPath(e *Engine, prefix string) (string, error) {
+func getBackupPath(e *Engine, prefix string) (string, int64, error) {
 	c := e.rw.startNewConn(false, context.Background(), &e.opt.StatsOptions)
 	defer c.close(nil)
 	pos, _, err := binlogLoadPosition(c)
 	if err != nil {
-		return "", err
+		return "", pos, err
 	}
 
 	copyPos := pos
@@ -642,11 +712,11 @@ func getBackupPath(e *Engine, prefix string) (string, error) {
 	for l := 4; l <= len(posStr); l++ {
 		filename := prefix + posStr[:l]
 		if _, err = os.Stat(filename); os.IsNotExist(err) {
-			return filename, nil
+			return filename, pos, nil
 		}
 	}
 
-	return "", fmt.Errorf("can not create backup with pos=%d, probably backup already exist", pos)
+	return "", pos, fmt.Errorf("can not create backup with pos=%d, probably backup already exist", pos)
 }
 
 func (e *Engine) binlogNotifyWaited(committedOffset int64) {
@@ -674,10 +744,10 @@ func (e *Engine) do(fn func(Conn) error) error {
 	return err
 }
 
-func (e *Engine) Backup(ctx context.Context, prefix string) (string, error) {
+func (e *Engine) Backup(ctx context.Context, prefix string) (string, int64, error) {
 	defer e.opt.StatsOptions.measureActionDurationSince("backup", time.Now())
 	var path string
-	err := doSingleROToWALQuery(e.opt.Path, func(conn *sqliteConn) error {
+	err := doSingleROToWALQuery(e.opt.Path, e.opt.PageSize, func(conn *sqliteConn) error {
 		var err error
 		path, err = backupToTemp(ctx, conn, prefix, &e.opt.StatsOptions)
 		return err
@@ -686,17 +756,18 @@ func (e *Engine) Backup(ctx context.Context, prefix string) (string, error) {
 		_ = os.Remove(path)
 	}()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	var backupExpectedPath string
+	var snapshotPos int64
 	err = doSingleROQuery(path, func(e *Engine) error {
-		backupExpectedPath, err = getBackupPath(e, prefix)
+		backupExpectedPath, snapshotPos, err = getBackupPath(e, prefix)
 		return err
 	})
 	if err != nil {
-		return "", err
+		return "", snapshotPos, err
 	}
-	return backupExpectedPath, os.Rename(path, backupExpectedPath)
+	return backupExpectedPath, snapshotPos, os.Rename(path, backupExpectedPath)
 }
 
 func (e *Engine) View(ctx context.Context, queryName string, fn func(Conn) error) (err error) {
@@ -710,7 +781,7 @@ func (e *Engine) View(ctx context.Context, queryName string, fn func(Conn) error
 		e.roCond.Wait()
 	}
 	if len(e.roFree) == 0 {
-		ro, err := openROWAL(e.opt.Path)
+		ro, err := openROWAL(e.opt.Path, e.opt.PageSize)
 		if err != nil {
 			e.roMx.Unlock()
 			return fmt.Errorf("failed to open RO connection: %w", err)
@@ -731,7 +802,7 @@ func (e *Engine) View(ctx context.Context, queryName string, fn func(Conn) error
 	e.opt.StatsOptions.measureWaitDurationSince(waitView, startTimeBeforeLock)
 	c, err := conn.startNewROConn(ctx, &e.opt.StatsOptions)
 	if err != nil {
-		return multierr.Append(ErrEngineBroken, err)
+		return multierr.Append(errEngineBroken, err)
 	}
 	defer func() {
 		err = multierr.Append(err, c.closeRO())
@@ -744,7 +815,7 @@ func (e *Engine) View(ctx context.Context, queryName string, fn func(Conn) error
 
 func (e *Engine) mustCommitNow(waitCommitMode, isReadOp bool) bool {
 	if !e.isTest {
-		return time.Since(e.lastCommitTime) >= e.opt.CommitEvery && !waitCommitMode && !isReadOp
+		return ((e.opt.WaitBinlogCommitDebug && e.opt.CommitOnEachWrite) || (time.Since(e.lastCommitTime) >= e.opt.CommitEvery && !waitCommitMode)) && !isReadOp
 	}
 	return e.mustCommitNowFlag
 }
@@ -756,15 +827,15 @@ func checkQueryName(qn string) error {
 	return nil
 }
 
-func (e *Engine) doWithoutWait(ctx context.Context, queryName string, fn func(Conn, []byte) ([]byte, error)) (_ chan struct{}, err error) {
+func (e *Engine) doWithoutWait(ctx context.Context, queryName string, fn func(Conn, []byte) ([]byte, error)) (_ chan struct{}, dbOffset int64, commitOffset int64, err error) {
 	if err := checkQueryName(queryName); err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 	startTimeBeforeLock := time.Now()
 	var commit func(c Conn) error = nil
 	c, err := e.rw.startNewRWConn(true, ctx, &e.opt.StatsOptions, e)
 	if err != nil {
-		return nil, multierr.Append(ErrEngineBroken, err)
+		return nil, 0, 0, multierr.Append(errEngineBroken, err)
 	}
 	offsetBeforeWrite := e.dbOffset
 	defer func() {
@@ -784,19 +855,19 @@ func (e *Engine) doWithoutWait(ctx context.Context, queryName string, fn func(Co
 	defer e.opt.StatsOptions.measureSqliteTxDurationSince(txDo, queryName, time.Now())
 	buffer, err := fn(c, nil)
 	if err != nil {
-		return nil, err
+		return nil, e.dbOffset, e.commitOffset.Load(), err
 	}
 	if e.opt.DurabilityMode == NoBinlog {
 		e.rw.spOk = err == nil
 		commit = func(c Conn) error {
 			return e.commitRWTXAndStartNewLocked(c, true, false, true)
 		}
-		return nil, err
+		return nil, e.dbOffset, e.commitOffset.Load(), err
 	}
 	shouldWriteBinlog := len(buffer) > 0
 	isReadOp := !shouldWriteBinlog
 	if shouldWriteBinlog && e.mode == replica {
-		return nil, fmt.Errorf("failed to write binlog in replica mode") // TODO replace with GMS error
+		return nil, e.dbOffset, e.commitOffset.Load(), fmt.Errorf("failed to write binlog in replica mode") // TODO replace with GMS error
 	}
 	var ch chan struct{}
 	waitCommitMode := e.opt.DurabilityMode == WaitCommit
@@ -807,7 +878,7 @@ func (e *Engine) doWithoutWait(ctx context.Context, queryName string, fn func(Co
 		err = binlogUpdateOffset(c, offsetAfterWritePredicted)
 		if err != nil {
 			log.Println("[sqlite] failed to update binlog position:", err.Error())
-			return nil, err
+			return nil, e.dbOffset, e.commitOffset.Load(), err
 		}
 
 		var offsetAfterWrite int64
@@ -818,14 +889,14 @@ func (e *Engine) doWithoutWait(ctx context.Context, queryName string, fn func(Co
 		}
 		if err != nil {
 			log.Println("[sqlite] got error from binlog:", err.Error())
-			return nil, err
+			return nil, e.dbOffset, e.commitOffset.Load(), err
 		}
 		// after this line can't rollback tx!!!!!!
 		e.dbOffset = offsetAfterWrite
 	}
 	if e.opt.CommitOnEachWrite {
 		commit = func(c Conn) error {
-			return e.commitRWTXAndStartNewLocked(c, true, false, true)
+			return e.commitRWTXAndStartNewLocked(c, true, e.opt.WaitBinlogCommitDebug, !e.opt.WaitBinlogCommitDebug)
 		}
 		mustCommitNow = false
 	}
@@ -855,22 +926,27 @@ func (e *Engine) doWithoutWait(ctx context.Context, queryName string, fn func(Co
 		}
 	}
 	e.rw.spOk = err == nil
-	return ch, err
+	return ch, e.dbOffset, e.commitOffset.Load(), err
 }
 
-// Do require handle of ErrEngineBroken
-func (e *Engine) Do(ctx context.Context, queryName string, fn func(Conn, []byte) ([]byte, error)) error {
+func (e *Engine) DoWithOffset(ctx context.Context, queryName string, fn func(Conn, []byte) ([]byte, error)) (dbOffset int64, commitOffset int64, err error) {
 	if e.readOnlyEngine {
-		return ErrReadOnly
+		return 0, 0, errReadOnly
 	}
-	ch, err := e.doWithoutWait(ctx, queryName, fn)
+	ch, dbOffset, commitedOffset, err := e.doWithoutWait(ctx, queryName, fn)
 	if err != nil {
-		return err
+		return dbOffset, commitedOffset, err
 	}
 	if ch != nil {
 		<-ch
 	}
-	return nil
+	return dbOffset, commitedOffset, nil
+}
+
+// Do require handle of errEngineBroken
+func (e *Engine) Do(ctx context.Context, queryName string, fn func(Conn, []byte) ([]byte, error)) error {
+	_, _, err := e.DoWithOffset(ctx, queryName, fn)
+	return err
 }
 
 func (e *Engine) rareLog(format string, v ...any) {

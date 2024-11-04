@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,29 +8,30 @@ package rpc
 
 import (
 	"bytes"
+	"log"
 	"net"
+	"strings"
 	"time"
 )
 
-type ServerHookState interface {
-	Reset()
-	BeforeCall(hctx *HandlerContext)
-	AfterCall(hctx *HandlerContext, err error)
-}
-
 type ServerOptions struct {
 	Logf                   LoggerFunc // defaults to log.Printf; set to NoopLogf to disable all logging
-	Hooks                  func() ServerHookState
 	SyncHandler            HandlerFunc
 	Handler                HandlerFunc
 	StatsHandler           StatsHandlerFunc
+	RecoverPanics          bool
 	VerbosityHandler       VerbosityHandlerFunc
 	Version                string
 	TransportHijackHandler func(conn *PacketConn) // Experimental, server handles connection to this function if FlagP2PHijack client flag set
 	SocketHijackHandler    func(conn *HijackConnection)
+	AcceptErrHandler       ErrHandlerFunc
+	ConnErrHandler         ErrHandlerFunc
+	RequestHook            RequestHookFunc
+	ResponseHook           ResponseHookFunc
+	TrustedSubnetGroupsSt  string // for stats
 	TrustedSubnetGroups    [][]*net.IPNet
 	ForceEncryption        bool
-	CryptoKeys             []string
+	cryptoKeys             []string
 	MaxConns               int           // defaults to DefaultMaxConns
 	MaxWorkers             int           // defaults to DefaultMaxWorkers; <= value disables worker pool completely
 	MaxInflightPackets     int           // defaults to DefaultMaxInflightPackets
@@ -45,17 +46,14 @@ type ServerOptions struct {
 	ResponseTimeoutAdjust  time.Duration
 	DisableContextTimeout  bool
 	DisableTCPReuseAddr    bool
+	DebugRPC               bool // prints all incoming and outgoing RPC activity (very slow, only for protocol debug)
+}
 
-	trustedSubnetGroupsParseErrors []error
+func (opts *ServerOptions) AddCryptoKey(key string) {
+	opts.cryptoKeys = append(opts.cryptoKeys, key)
 }
 
 type ServerOptionsFunc func(*ServerOptions)
-
-func ServerWithHooks(hooks func() ServerHookState) ServerOptionsFunc {
-	return func(opts *ServerOptions) {
-		opts.Hooks = hooks
-	}
-}
 
 func ServerWithLogf(logf LoggerFunc) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
@@ -66,6 +64,12 @@ func ServerWithLogf(logf LoggerFunc) ServerOptionsFunc {
 func ServerWithHandler(handler HandlerFunc) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		opts.Handler = handler
+	}
+}
+
+func ServerWithDebugRPC(debugRpc bool) ServerOptionsFunc {
+	return func(opts *ServerOptions) {
+		opts.DebugRPC = debugRpc
 	}
 }
 
@@ -91,6 +95,12 @@ func ServerWithVerbosityHandler(handler VerbosityHandlerFunc) ServerOptionsFunc 
 	}
 }
 
+func ServerWithRecoverPanics(recoverPanics bool) ServerOptionsFunc {
+	return func(opts *ServerOptions) {
+		opts.RecoverPanics = recoverPanics
+	}
+}
+
 func ServerWithVersion(version string) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		opts.Version = version
@@ -103,11 +113,31 @@ func ServerWithTransportHijackHandler(handler func(conn *PacketConn)) ServerOpti
 	}
 }
 
+func TrustedSubnetGroupsString(groups [][]string) string {
+	b := strings.Builder{}
+	for i, g := range groups {
+		if i != 0 {
+			b.WriteString(";")
+		}
+		for j, m := range g {
+			if j != 0 {
+				b.WriteString(",")
+			}
+			b.WriteString(m)
+		}
+	}
+	return b.String()
+}
+
 func ServerWithTrustedSubnetGroups(groups [][]string) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		gs, errs := ParseTrustedSubnets(groups)
+		for _, err := range errs {
+			// we do not return error from this function, and do not want to ignore this error
+			log.Panicf("[rpc] failed to parse server trusted subnet: %v", err)
+		}
 		opts.TrustedSubnetGroups = gs
-		opts.trustedSubnetGroupsParseErrors = errs
+		opts.TrustedSubnetGroupsSt = TrustedSubnetGroupsString(groups)
 	}
 }
 
@@ -119,7 +149,9 @@ func ServerWithForceEncryption(status bool) ServerOptionsFunc {
 
 func ServerWithCryptoKeys(keys []string) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
-		opts.CryptoKeys = keys
+		for _, key := range keys {
+			opts.AddCryptoKey(key)
+		}
 	}
 }
 
@@ -127,6 +159,8 @@ func ServerWithMaxConns(maxConns int) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		if maxConns > 0 {
 			opts.MaxConns = maxConns
+		} else {
+			opts.MaxConns = DefaultMaxConns
 		}
 	}
 }
@@ -141,6 +175,8 @@ func ServerWithMaxInflightPackets(maxInflightPackets int) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		if maxInflightPackets > 0 {
 			opts.MaxInflightPackets = maxInflightPackets
+		} else {
+			opts.MaxInflightPackets = DefaultMaxInflightPackets
 		}
 	}
 }
@@ -149,6 +185,8 @@ func ServerWithRequestMemoryLimit(limit int) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		if limit > maxPacketLen {
 			opts.RequestMemoryLimit = limit
+		} else {
+			opts.RequestMemoryLimit = maxPacketLen
 		}
 	}
 }
@@ -157,6 +195,8 @@ func ServerWithResponseMemoryLimit(limit int) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		if limit > maxPacketLen {
 			opts.ResponseMemoryLimit = limit
+		} else {
+			opts.ResponseMemoryLimit = maxPacketLen
 		}
 	}
 }
@@ -165,6 +205,8 @@ func ServerWithConnReadBufSize(size int) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		if size > 0 {
 			opts.ConnReadBufSize = size
+		} else {
+			opts.ConnReadBufSize = DefaultServerConnReadBufSize
 		}
 	}
 }
@@ -173,6 +215,8 @@ func ServerWithConnWriteBufSize(size int) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		if size > 0 {
 			opts.ConnWriteBufSize = size
+		} else {
+			opts.ConnWriteBufSize = DefaultServerConnWriteBufSize
 		}
 	}
 }
@@ -202,15 +246,17 @@ func ServerWithResponseMemEstimate(size int) ServerOptionsFunc {
 		if size > 0 {
 			opts.ResponseMemEstimate = size
 		} else {
-			opts.ResponseMemEstimate = 0
+			opts.ResponseMemEstimate = DefaultResponseMemEstimate
 		}
 	}
 }
 
 func ServerWithDefaultResponseTimeout(timeout time.Duration) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
-		if timeout > 0 {
+		if timeout >= 0 {
 			opts.DefaultResponseTimeout = timeout
+		} else {
+			opts.DefaultResponseTimeout = 0
 		}
 	}
 }
@@ -218,8 +264,10 @@ func ServerWithDefaultResponseTimeout(timeout time.Duration) ServerOptionsFunc {
 // Reduces client timeout, compensating for network latecny
 func ServerWithResponseTimeoutAdjust(adjust time.Duration) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
-		if adjust > 0 {
+		if adjust >= 0 {
 			opts.ResponseTimeoutAdjust = adjust
+		} else {
+			opts.ResponseTimeoutAdjust = 0
 		}
 	}
 }
@@ -241,6 +289,34 @@ func ServerWithDisableTCPReuseAddr() ServerOptionsFunc {
 func ServerWithSocketHijackHandler(handler func(conn *HijackConnection)) ServerOptionsFunc {
 	return func(opts *ServerOptions) {
 		opts.SocketHijackHandler = handler
+	}
+}
+
+func ServerWithAcceptErrorHandler(fn ErrHandlerFunc) ServerOptionsFunc {
+	return func(opts *ServerOptions) {
+		opts.AcceptErrHandler = fn
+	}
+}
+
+func ServerWithConnErrorHandler(fn ErrHandlerFunc) ServerOptionsFunc {
+	return func(opts *ServerOptions) {
+		opts.ConnErrHandler = fn
+	}
+}
+
+// called after request was received and extra parsed, but before calling SyncHandler
+func ServerWithRequestHook(fn RequestHookFunc) ServerOptionsFunc {
+	return func(opts *ServerOptions) {
+		opts.RequestHook = fn
+	}
+}
+
+// called after response was generated by SyncHandler or Handler but before sending.
+// Also called (with err set to rpc.ErrCancelHijack) when client cancels long poll,
+// to balance # of calls to RequestHookFunc and ResponseHookFunc
+func ServerWithResponseHook(fn ResponseHookFunc) ServerOptionsFunc {
+	return func(opts *ServerOptions) {
+		opts.ResponseHook = fn
 	}
 }
 

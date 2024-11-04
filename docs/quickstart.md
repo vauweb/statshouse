@@ -66,7 +66,7 @@ StatsHouse expects particular tables to exist in ClickHouse. To create them use 
 
 For starters, you can use the docker-compose service in this repo (it already has all necessary tables created):
 ``` shell
-docker compose --profile kh up -d
+docker compose --profile kh --file localrun.yml up -d
 ```
 Verify docker-compose instance by running the following:
 ```shell
@@ -82,12 +82,12 @@ Assuming that ClickHouse is available on localhost (default ports), follow the s
 
 2. Start StatsHouse aggregator:
     ```shell
-    ./target/statshouse aggregator --log-level=trace --agg-addr='localhost:13336' --kh=localhost:8123 --cache-dir=$HOME/statshouse/cache/aggregator --cluster=test_shard_localhost
+    ./target/statshouse aggregator --log-level=trace --agg-addr='localhost:13336' --kh=localhost:8123 --cache-dir=$HOME/statshouse/cache/aggregator --cluster=local_test_cluster
     ```
 
 3. Start StatsHouse agent:
     ```shell
-    ./target/statshouse agent --log-level=trace --agg-addr='localhost:13336,localhost:13336,localhost:13336' --cache-dir=$HOME/statshouse/cache/agent --cluster=test_shard_localhost
+    ./target/statshouse agent --log-level=trace --agg-addr='localhost:13336,localhost:13336,localhost:13336' --cache-dir=$HOME/statshouse/cache/agent --cluster=local_test_cluster
     ```
 
 4. Start StatsHouse API:

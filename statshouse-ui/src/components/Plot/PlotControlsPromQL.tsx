@@ -4,13 +4,23 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { ChangeEvent, memo, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { ChangeEvent, lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { produce } from 'immer';
 import cn from 'classnames';
-import * as utils from '../../view/utils';
-import { getTimeShifts, timeShiftAbbrevExpand } from '../../view/utils';
-import { Button, PlotControlFrom, PlotControlTimeShifts, PlotControlTo, SwitchBox } from '../index';
-import { selectorParamsTimeShifts, selectorPlotsDataByIndex, selectorTimeRange, useStore } from '../../store';
+import { PlotControlFrom, PlotControlTimeShifts, PlotControlTo } from '../index';
+import {
+  selectorParamsTimeShifts,
+  selectorPlotsDataByIndex,
+  selectorTimeRange,
+  setGroupByVariable,
+  setNegativeVariable,
+  setUpdatedVariable,
+  setValuesVariable,
+  Store,
+  useStore,
+  useVariableListStore,
+  VariableListStore,
+} from 'store';
 import { metricKindToWhat } from '../../view/api';
 import { ReactComponent as SVGPcDisplay } from 'bootstrap-icons/icons/pc-display.svg';
 import { ReactComponent as SVGFilter } from 'bootstrap-icons/icons/filter.svg';
@@ -19,14 +29,38 @@ import { ReactComponent as SVGChevronCompactLeft } from 'bootstrap-icons/icons/c
 import { ReactComponent as SVGChevronCompactRight } from 'bootstrap-icons/icons/chevron-compact-right.svg';
 import { globalSettings } from '../../common/settings';
 import { MetricMetaValue } from '../../api/metric';
-import { QueryWhat } from '../../api/enum';
+import { METRIC_TYPE, METRIC_TYPE_DESCRIPTION, MetricType, QueryWhat, toMetricType } from '../../api/enum';
 import { PlotParams } from '../../url/queryParams';
+import { getMetricType } from '../../common/formatByMetricType';
+import { getTimeShifts, timeRangeAbbrev, timeShiftAbbrevExpand } from '../../view/utils2';
+import { Button, SwitchBox, TextArea } from '../UI';
+import { VariableControl } from '../VariableControl';
+
+const FallbackEditor = (props: { className?: string; value?: string; onChange?: (value: string) => void }) => (
+  <div className="input-group">
+    <TextArea {...props} className="form-control-sm rounded font-monospace" autoHeight style={{ minHeight: 202 }} />
+  </div>
+);
+
+const PromQLEditor = lazy(() =>
+  import('../UI/PromQLEditor').catch(() => ({
+    default: FallbackEditor,
+  }))
+);
 
 const { setParams, setTimeRange } = useStore.getState();
 
+const METRIC_TYPE_KEYS: MetricType[] = ['null', ...Object.values(METRIC_TYPE)] as MetricType[];
+const METRIC_TYPE_DESCRIPTION_SELECTOR = {
+  null: 'infer unit',
+  ...METRIC_TYPE_DESCRIPTION,
+};
+
+const selectorVariables = ({ params: { variables } }: Store) => variables;
+
 export const PlotControlsPromQL = memo(function PlotControlsPromQL_(props: {
   indexPlot: number;
-  setBaseRange: (r: utils.timeRangeAbbrev) => void;
+  setBaseRange: (r: timeRangeAbbrev) => void;
   sel: PlotParams;
   setSel: (state: React.SetStateAction<PlotParams>, replaceUrl?: boolean) => void;
   meta?: MetricMetaValue;
@@ -44,6 +78,13 @@ export const PlotControlsPromQL = memo(function PlotControlsPromQL_(props: {
   const timeShifts = useStore(selectorParamsTimeShifts);
 
   const timeRange = useStore(selectorTimeRange);
+
+  const allVariables = useStore(selectorVariables);
+  const variables = useMemo(
+    () => allVariables.filter((v) => sel.promQL.indexOf(v.name) > -1),
+    [allVariables, sel.promQL]
+  );
+  const variableItems = useVariableListStore((s: VariableListStore) => s.variables);
 
   // keep meta up-to-date when sel.metricName changes (e.g. because of navigation)
   useEffect(() => {
@@ -85,9 +126,8 @@ export const PlotControlsPromQL = memo(function PlotControlsPromQL_(props: {
     [setSel]
   );
 
-  const inputPromQL = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      const value = e.currentTarget.value;
+  const inputPromQLValue = useCallback(
+    (value: string) => {
       setPromQL(value);
     },
     [setPromQL]
@@ -102,12 +142,14 @@ export const PlotControlsPromQL = memo(function PlotControlsPromQL_(props: {
           s.groupBy = [];
           s.filterIn = {};
           s.filterNotIn = {};
+          s.metricType = undefined;
           s.promQL = '';
           s.numSeries = globalSettings.default_num_series;
         } else {
           s.metricName = globalSettings.default_metric;
           s.what = globalSettings.default_metric_what.slice();
           s.customName = '';
+          s.metricType = undefined;
           s.groupBy = globalSettings.default_metric_group_by.slice();
           s.filterIn = { ...globalSettings.default_metric_filter_in };
           s.filterNotIn = { ...globalSettings.default_metric_filter_not_in };
@@ -130,6 +172,29 @@ export const PlotControlsPromQL = memo(function PlotControlsPromQL_(props: {
     setPromQL(sel.promQL);
   }, [sel.promQL]);
 
+  const metricType = useMemo(() => {
+    if (sel.metricType != null) {
+      return sel.metricType;
+    }
+    return getMetricType(plotData.whats?.length ? plotData.whats : sel.what, plotData.metricType || meta?.metric_type);
+  }, [meta?.metric_type, plotData.metricType, plotData.whats, sel.metricType, sel.what]);
+
+  const onSelectUnit = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const unit = toMetricType(e.currentTarget.value);
+      setSel(
+        produce((s) => {
+          if (sel.metricType !== unit && unit != null) {
+            s.metricType = unit;
+          } else {
+            s.metricType = undefined;
+          }
+        })
+      );
+    },
+    [sel.metricType, setSel]
+  );
+
   useEffect(() => {
     setPromQL(sel.promQL);
   }, [sel.promQL, setPromQL]);
@@ -139,25 +204,34 @@ export const PlotControlsPromQL = memo(function PlotControlsPromQL_(props: {
       <div>
         <div className="row mb-3">
           <div className="col-12 d-flex">
-            <select
-              className={cn('form-select me-4', sel.customAgg > 0 && 'border-warning')}
-              value={sel.customAgg}
-              onChange={onCustomAggChange}
-            >
-              <option value={0}>Auto</option>
-              <option value={-1}>Auto (low)</option>
-              <option value={1}>1 second</option>
-              <option value={5}>5 seconds</option>
-              <option value={15}>15 seconds</option>
-              <option value={60}>1 minute</option>
-              <option value={5 * 60}>5 minutes</option>
-              <option value={15 * 60}>15 minutes</option>
-              <option value={60 * 60}>1 hour</option>
-              <option value={4 * 60 * 60}>4 hours</option>
-              <option value={24 * 60 * 60}>24 hours</option>
-              <option value={7 * 24 * 60 * 60}>7 days</option>
-              <option value={31 * 24 * 60 * 60}>1 month</option>
-            </select>
+            <div className="input-group  me-2">
+              <select
+                className={cn('form-select', sel.customAgg > 0 && 'border-warning')}
+                value={sel.customAgg}
+                onChange={onCustomAggChange}
+              >
+                <option value={0}>Auto</option>
+                <option value={-1}>Auto (low)</option>
+                <option value={1}>1 second</option>
+                <option value={5}>5 seconds</option>
+                <option value={15}>15 seconds</option>
+                <option value={60}>1 minute</option>
+                <option value={5 * 60}>5 minutes</option>
+                <option value={15 * 60}>15 minutes</option>
+                <option value={60 * 60}>1 hour</option>
+                <option value={4 * 60 * 60}>4 hours</option>
+                <option value={24 * 60 * 60}>24 hours</option>
+                <option value={7 * 24 * 60 * 60}>7 days</option>
+                <option value={31 * 24 * 60 * 60}>1 month</option>
+              </select>
+              <select className="form-select" value={metricType} onChange={onSelectUnit}>
+                {METRIC_TYPE_KEYS.map((unit_type) => (
+                  <option key={unit_type} value={unit_type}>
+                    {METRIC_TYPE_DESCRIPTION_SELECTOR[unit_type]}
+                  </option>
+                ))}
+              </select>
+            </div>
             <SwitchBox title="Host" checked={sel.maxHost} onChange={onHostChange}>
               <SVGPcDisplay />
             </SwitchBox>
@@ -173,16 +247,33 @@ export const PlotControlsPromQL = memo(function PlotControlsPromQL_(props: {
           </div>
           <PlotControlTimeShifts className="w-100 mt-2" />
         </div>
-
+        <div>
+          {variables.map((variable) => (
+            <VariableControl<string>
+              key={variable.name}
+              target={variable.name}
+              placeholder={variable.description || variable.name}
+              list={variableItems[variable.name].list}
+              loaded={variableItems[variable.name].loaded}
+              tagMeta={variableItems[variable.name].tagMeta}
+              more={variableItems[variable.name].more}
+              customValue={variableItems[variable.name].more || !variableItems[variable.name].list.length}
+              negative={variable.args.negative}
+              setNegative={setNegativeVariable}
+              groupBy={variable.args.groupBy}
+              setGroupBy={setGroupByVariable}
+              className="mb-2"
+              values={!variable.args.negative ? variable.values : undefined}
+              notValues={variable.args.negative ? variable.values : undefined}
+              onChange={setValuesVariable}
+              setOpen={setUpdatedVariable}
+            />
+          ))}
+        </div>
         <div className="row mb-3 align-items-baseline">
-          <div className="input-group">
-            <textarea
-              className="form-control font-monospace form-control-sm"
-              rows={10}
-              value={promQL}
-              onInput={inputPromQL}
-            ></textarea>
-          </div>
+          <Suspense fallback={<FallbackEditor value={promQL} onChange={inputPromQLValue} />}>
+            {!!PromQLEditor && <PromQLEditor className="input-group" value={promQL} onChange={inputPromQLValue} />}
+          </Suspense>
           <div className="d-flex flex-row justify-content-end mt-2">
             <Button
               onClick={toggleBigControl}

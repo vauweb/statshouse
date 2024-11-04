@@ -13,7 +13,68 @@ import (
 
 var _ = basictl.NatWrite
 
-func VectorDouble0Read(w []byte, vec *[]float64) (_ []byte, err error) {
+func BuiltinTuple2DoubleReset(vec *[2]float64) {
+	for i := range *vec {
+		(*vec)[i] = 0
+	}
+}
+
+func BuiltinTuple2DoubleRead(w []byte, vec *[2]float64) (_ []byte, err error) {
+	for i := range *vec {
+		if w, err = basictl.DoubleRead(w, &(*vec)[i]); err != nil {
+			return w, err
+		}
+	}
+	return w, nil
+}
+
+func BuiltinTuple2DoubleWrite(w []byte, vec *[2]float64) []byte {
+	for _, elem := range *vec {
+		w = basictl.DoubleWrite(w, elem)
+	}
+	return w
+}
+
+func BuiltinTuple2DoubleReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[2]float64) error {
+	index := 0
+	if in != nil {
+		in.Delim('[')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[2]float64", "expected json array")
+		}
+		for ; !in.IsDelim(']'); index++ {
+			if index == 2 {
+				return ErrorWrongSequenceLength("[2]float64", index+1, 2)
+			}
+			if err := Json2ReadFloat64(in, &(*vec)[index]); err != nil {
+				return err
+			}
+			in.WantComma()
+		}
+		in.Delim(']')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[2]float64", "expected json array's end")
+		}
+	}
+	if index != 2 {
+		return ErrorWrongSequenceLength("[2]float64", index+1, 2)
+	}
+	return nil
+}
+
+func BuiltinTuple2DoubleWriteJSON(w []byte, vec *[2]float64) []byte {
+	return BuiltinTuple2DoubleWriteJSONOpt(true, false, w, vec)
+}
+func BuiltinTuple2DoubleWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec *[2]float64) []byte {
+	w = append(w, '[')
+	for _, elem := range *vec {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = basictl.JSONWriteFloat64(w, elem)
+	}
+	return append(w, ']')
+}
+
+func BuiltinVectorDoubleRead(w []byte, vec *[]float64) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
 		return w, err
@@ -34,40 +95,50 @@ func VectorDouble0Read(w []byte, vec *[]float64) (_ []byte, err error) {
 	return w, nil
 }
 
-func VectorDouble0Write(w []byte, vec []float64) (_ []byte, err error) {
+func BuiltinVectorDoubleWrite(w []byte, vec []float64) []byte {
 	w = basictl.NatWrite(w, uint32(len(vec)))
 	for _, elem := range vec {
 		w = basictl.DoubleWrite(w, elem)
 	}
-	return w, nil
+	return w
 }
 
-func VectorDouble0ReadJSON(j interface{}, vec *[]float64) error {
-	l, _arr, err := JsonReadArray("[]float64", j)
-	if err != nil {
-		return err
-	}
-	if cap(*vec) < l {
-		*vec = make([]float64, l)
-	} else {
-		*vec = (*vec)[:l]
-	}
-	for i := range *vec {
-		if err := JsonReadFloat64(_arr[i], &(*vec)[i]); err != nil {
-			return err
+func BuiltinVectorDoubleReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]float64) error {
+	*vec = (*vec)[:cap(*vec)]
+	index := 0
+	if in != nil {
+		in.Delim('[')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[]float64", "expected json array")
+		}
+		for ; !in.IsDelim(']'); index++ {
+			if len(*vec) <= index {
+				var newValue float64
+				*vec = append(*vec, newValue)
+				*vec = (*vec)[:cap(*vec)]
+			}
+			if err := Json2ReadFloat64(in, &(*vec)[index]); err != nil {
+				return err
+			}
+			in.WantComma()
+		}
+		in.Delim(']')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[]float64", "expected json array's end")
 		}
 	}
+	*vec = (*vec)[:index]
 	return nil
 }
 
-func VectorDouble0WriteJSON(w []byte, vec []float64) (_ []byte, err error) {
-	return VectorDouble0WriteJSONOpt(false, w, vec)
+func BuiltinVectorDoubleWriteJSON(w []byte, vec []float64) []byte {
+	return BuiltinVectorDoubleWriteJSONOpt(true, false, w, vec)
 }
-func VectorDouble0WriteJSONOpt(short bool, w []byte, vec []float64) (_ []byte, err error) {
+func BuiltinVectorDoubleWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []float64) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = basictl.JSONWriteFloat64(w, elem)
 	}
-	return append(w, ']'), nil
+	return append(w, ']')
 }

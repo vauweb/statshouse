@@ -10,6 +10,7 @@ import { ReactComponent as SVGLightning } from 'bootstrap-icons/icons/lightning.
 import { ReactComponent as SVGGridFill } from 'bootstrap-icons/icons/grid-fill.svg';
 import { ReactComponent as SVGPlus } from 'bootstrap-icons/icons/plus.svg';
 import { ReactComponent as SVGCardList } from 'bootstrap-icons/icons/card-list.svg';
+import { ReactComponent as SVGCpu } from 'bootstrap-icons/icons/cpu.svg';
 import { ReactComponent as SVGBrightnessHighFill } from 'bootstrap-icons/icons/brightness-high-fill.svg';
 import { ReactComponent as SVGMoonStarsFill } from 'bootstrap-icons/icons/moon-stars-fill.svg';
 import { ReactComponent as SVGCircleHalf } from 'bootstrap-icons/icons/circle-half.svg';
@@ -20,22 +21,21 @@ import { produce } from 'immer';
 
 import { HeaderMenuItem } from './HeaderMenuItem';
 import {
-  selectorDevEnabled,
   selectorParams,
   selectorPlotList,
   selectorPromqltestfailed,
   selectorSetParams,
-  setDevEnabled,
-  setTheme,
-  THEMES,
   useStore,
-  useStoreDev,
-  useThemeStore,
-} from '../../store';
-import { currentAccessInfo, logoutURL } from '../../common/access';
+  useTVModeStore,
+} from 'store';
+import { currentAccessInfo, logoutURL } from 'common/access';
 import { HeaderMenuItemPlot } from './HeaderMenuItemPlot';
 import css from './style.module.css';
-import { decodeParams } from '../../url/queryParams';
+import { decodeParams } from 'url/queryParams';
+import { globalSettings } from 'common/settings';
+import { AppVersionToggle } from 'components2/AppVersionToggle';
+import { setTheme, THEMES, useThemeStore } from 'store/theme';
+import { selectorDevEnabled, setDevEnabled, useStoreDev } from 'store/dev';
 
 const themeIcon = {
   [THEMES.Light]: SVGBrightnessHighFill,
@@ -66,6 +66,8 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
   const isView = location.pathname === '/view';
   const isDashList = location.pathname === '/dash-list';
   const isSettings = location.pathname === '/settings' || location.pathname === '/settings/group';
+
+  const tvMode = useTVModeStore((state) => state.enable);
 
   const onPasteClipboard = useCallback(() => {
     (navigator.clipboard.readText ? navigator.clipboard.readText() : Promise.reject())
@@ -118,13 +120,13 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
 
   useEffect(() => {
     setTimeout(() => {
-      refListMenuItemPlot.current?.querySelector('.plot-active')?.scrollIntoView();
+      refListMenuItemPlot.current?.querySelector('.plot-active')?.scrollIntoView({ block: 'nearest' });
     }, 0);
-  }, []);
+  }, [params.tabNum, params.plots]);
 
   return (
-    <div className={cn('sticky-top align-self-start', css.navOuter, className)}>
-      <ul className={cn('nav pb-2 h-100 d-flex flex-column flex-nowrap ', css.nav)}>
+    <div className={cn('sticky-top align-self-start', css.navOuter, className)} hidden={tvMode && params.tabNum < 0}>
+      <ul className={cn('nav pb-2 h-100 d-flex flex-column flex-nowrap ', css.nav, css.mainNav)}>
         <HeaderMenuItem icon={SVGLightning} title="Home" to="/view" description="StatsHouse">
           <li className={css.splitter}></li>
           <li className="nav-item">
@@ -144,12 +146,7 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
             </a>
           </li>
           <li className="nav-item">
-            <a
-              className="nav-link"
-              href="https://github.com/VKCOM/statshouse#documentation"
-              target="_blank"
-              rel="noreferrer"
-            >
+            <a className="nav-link" href="https://vkcom.github.io/statshouse/" target="_blank" rel="noreferrer">
               Documentation
             </a>
           </li>
@@ -158,7 +155,7 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
               OpenAPI
             </a>
           </li>
-          <li className="nav-item">
+          {/*<li className="nav-item">
             <a
               className="nav-link"
               href="https://github.com/VKCOM/statshouse/discussions/categories/q-a"
@@ -167,12 +164,19 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
             >
               Support
             </a>
-          </li>
+          </li>*/}
           <li className="nav-item">
             <NavLink className="nav-link" to="/doc/faq" end>
               FAQ
             </NavLink>
           </li>
+          {!!globalSettings.links?.length && <li className={css.splitter}></li>}
+          {!!globalSettings.links?.length &&
+            globalSettings.links.map(({ url, name }, index) => (
+              <NavLink key={index} target="_blank" className="nav-link" to={url} end>
+                {name}
+              </NavLink>
+            ))}
           {ai.developer && (
             <>
               <li className={css.splitter}></li>
@@ -181,6 +185,7 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
                   {devEnabled ? 'DEV ON' : 'DEV OFF'}
                 </span>
               </li>
+              <AppVersionToggle />
             </>
           )}
           {!!ai.user && (
@@ -240,6 +245,13 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
             </li>
           </HeaderMenuItem>
         )}
+        {!!globalSettings.admin_dash && (
+          <HeaderMenuItem
+            icon={SVGCpu}
+            to={`/view?id=${globalSettings.admin_dash}`}
+            title="Hardware info"
+          ></HeaderMenuItem>
+        )}
         <HeaderMenuItem
           icon={SVGCardList}
           to="/dash-list"
@@ -252,8 +264,8 @@ export const HeaderMenu: React.FC<HeaderMenuProps> = ({ className }) => {
           title="Dashboard"
           className={cn(params.tabNum < 0 && isView && css.activeItem)}
         ></HeaderMenuItem>
-        <li className={cn('flex-grow-0 w-100 overflow-auto', css.scrollStyle)}>
-          <ul ref={refListMenuItemPlot} className={cn('nav d-flex flex-column', css.nav)}>
+        <li className={cn('flex-grow-0 d-flex flex-column overflow-auto', css.scrollStyle, css.plotMenu)}>
+          <ul ref={refListMenuItemPlot} className={cn('nav flex-grow-0 d-flex flex-column', css.nav, css.plotNav)}>
             {menuPlots.map((item) => (
               <HeaderMenuItemPlot key={item.indexPlot} indexPlot={item.indexPlot} />
             ))}

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/vkcom/statshouse/internal/vkgo/rpc"
 )
 
@@ -44,9 +45,15 @@ const (
 	AgentPercentileCompression      = 40 // TODO - will typically have 20-30 centroids for compression 40
 	AggregatorPercentileCompression = 80 // TODO - clickhouse has compression of 256 by default
 
-	MaxShortWindow    = 5    // Must be >= 2, 5 seconds to send recent data, if too late - send as historic
-	FutureWindow      = 4    // Allow a couple of seconds clocks difference on clients. Plus rounding to multiple of 3
-	MaxHistoricWindow = 7200 // 1 day to send historic data, then drop. TODO - return to 86400 after incident
+	// time between calendar second is finished and sending to aggregators starts
+	// so clients have this time after finishing second to send events to agent
+	// if they succeed, there is no sampling penalty.
+	// set to >300ms only after all libraries which send at 0.5 calendar second are updated
+	AgentWindow = 300 * time.Millisecond // must be < 1 seconds.
+
+	MaxShortWindow    = 5        // Must be >= 2, 5 seconds to send recent data, if too late - send as historic
+	FutureWindow      = 4        // Allow a couple of seconds clocks difference on clients. Plus rounding to multiple of 3
+	MaxHistoricWindow = 6 * 3600 // 1 day to send historic data, then drop. TODO - return to 86400 after ZK is faster and/or seconds table is partitioned by 12h
 
 	BelieveTimestampWindow = 86400 + 2*3600 // Margin for crons running once per day.
 	// Parts are quickly merged, so all timestamps in [-day..0] will be quickly and thoroughly optimized.
@@ -54,7 +61,7 @@ const (
 	MinCardinalityWindow = 300 // Our estimators GC depends on this not being too small
 	MinMaxCardinality    = 100
 
-	InsertBudgetFixed = 50000
+	InsertBudgetFixed = 300000
 	// fixed budget for BuiltinMetricIDAggKeepAlive and potentially other metrics which can be added with 0 contributors
 	// Also helps when # of contributors is very small
 
@@ -63,9 +70,7 @@ const (
 
 	MaxConveyorDelay = MaxShortWindow + FutureWindow + InsertDelay + AgentAggregatorDelay
 
-	MaxMissedSecondsIntoContributors = 60 // If source sends more MissedSeconds, they will be truncated. Do not make large. We scan 4 arrays of this size on each insert.
-
-	ClientRPCPongTimeout = 30 * time.Second
+	MaxFutureSecondsOnDisk = 122 // With tiny margin. Do not change this unless you change rules around CurrentBuckets/FutureQueue
 
 	AgentMappingTimeout1 = 10 * time.Second
 	AgentMappingTimeout2 = 30 * time.Second
@@ -74,9 +79,10 @@ const (
 	MaxJournalItemsSent = 1000 // TODO - increase, but limit response size in bytes
 	MaxJournalBytesSent = 800 * 1024
 
-	ClickHouseTimeoutConfig = time.Second * 10 // either quickly autoconfig or quickly exit
-	ClickhouseConfigRetries = 5
-	ClickHouseTimeout       = 5 * time.Minute // reduces chance of duplicates
+	ClickHouseTimeoutConfig   = time.Second * 10 // either quickly autoconfig or quickly exit
+	ClickhouseConfigRetries   = 5
+	ClickHouseTimeoutInsert   = 5 * time.Minute  // reduces chance of duplicates
+	ClickHouseTimeoutShutdown = 30 * time.Second // we do not delay aggregator shutdown by more than this time
 
 	KeepAliveMaxBackoff          = 30 * time.Second // for cases when aggregators quickly return error
 	JournalDDOSProtectionTimeout = 50 * time.Millisecond
@@ -92,18 +98,41 @@ const (
 	JournalDiskNamespace        = "metric_journal_v5:"
 	TagValueDiskNamespace       = "tag_value_v3:"
 	TagValueInvertDiskNamespace = "tag_value_invert_v3:"
-	BootstrapDiskNamespace      = "bootstrap:" // stored in aggregator only
+	BootstrapDiskNamespace      = "bootstrap:"  // stored in aggregator only
+	AutoconfigDiskNamespace     = "autoconfig:" // stored in agents only
 
 	MappingMaxMetricsInQueue = 1000
-	MappingMaxMemCacheSize   = 2_000_000
+	MappingMaxMemCacheSize   = 1_000_000
+	MappingMaxDiskCacheSize  = 10_000_000
 	MappingCacheTTLMinimum   = 7 * 24 * time.Hour
 	MappingNegativeCacheTTL  = 5 * time.Second
 	MappingMinInterval       = 1 * time.Millisecond
 
 	SimulatorMetricPrefix = "simulator_metric_"
 
-	StatshouseAgentRemoteConfigMetric = "statshouse_agent_remote_config"
+	StatshouseAgentRemoteConfigMetric      = "statshouse_agent_remote_config"
+	StatshouseAggregatorRemoteConfigMetric = "statshouse_aggregator_remote_config"
+	APIRemoteConfig                        = "statshouse_api_remote_config"
 )
+
+var ErrEntityNotExists = &rpc.Error{
+	Code:        -1234,
+	Description: "Entity doesn't exists",
+}
+var ErrEntityExists = &rpc.Error{
+	Code:        -1235,
+	Description: "Entity already exists",
+}
+
+var ErrEntityInvalidVersion = &rpc.Error{
+	Code:        -1236,
+	Description: "Invalid version. Reload this page and try again",
+}
+
+var ErrRequestIsTooBig = &rpc.Error{
+	Code:        -1237,
+	Description: "Entity is too big",
+}
 
 func NextBackoffDuration(backoffTimeout time.Duration) time.Duration {
 	if backoffTimeout < 0 {
@@ -118,13 +147,32 @@ func NextBackoffDuration(backoffTimeout time.Duration) time.Duration {
 
 // those can seriously fill our logs, we want to avoid it in a consistent manner
 func SilentRPCError(err error) bool {
-	var rpcError rpc.Error
+	var rpcError *rpc.Error
 	if !errors.As(err, &rpcError) {
 		return false
 	}
 	switch rpcError.Code {
 	case RPCErrorMissedRecentConveyor, RPCErrorInsert,
 		RPCErrorNoAutoCreate, RPCErrorTerminateLongpoll:
+		return true
+	default:
+		return false
+	}
+}
+
+func SetProxyHeaderStagingLevel(header *tlstatshouse.CommonProxyHeader, fieldsMask *uint32, stagingLevel int) {
+	header.SetAgentEnvStaging0(stagingLevel&1 == 1, fieldsMask)
+	header.SetAgentEnvStaging1(stagingLevel&2 == 2, fieldsMask)
+}
+
+func SetProxyHeaderBytesStagingLevel(header *tlstatshouse.CommonProxyHeaderBytes, fieldsMask *uint32, stagingLevel int) {
+	header.SetAgentEnvStaging0(stagingLevel&1 == 1, fieldsMask)
+	header.SetAgentEnvStaging1(stagingLevel&2 == 2, fieldsMask)
+}
+
+func RemoteConfigMetric(name string) bool {
+	switch name {
+	case StatshouseAgentRemoteConfigMetric, StatshouseAggregatorRemoteConfigMetric:
 		return true
 	default:
 		return false

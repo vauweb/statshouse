@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2024 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -191,6 +191,17 @@ func AppendArgMinMaxStringFloat64(buf []byte, arg string, v float64) []byte {
 	var tmp2 [8]byte
 	encoding.PutUint32(tmp1[:], uint32(len(arg)+1)) // string size + 1, or -1 if aggregate is empty
 	encoding.PutUint64(tmp2[:], math.Float64bits(v))
+	buf = append(buf, tmp1[:]...)
+	buf = append(buf, []byte(arg)...)
+	buf = append(buf, 0, 1) // string terminator, bool
+	return append(buf, tmp2[:]...)
+}
+
+func AppendArgMinMaxStringFloat32(buf []byte, arg string, v float32) []byte {
+	var tmp1 [4]byte
+	var tmp2 [4]byte
+	encoding.PutUint32(tmp1[:], uint32(len(arg)+1)) // string size + 1, or -1 if aggregate is empty
+	encoding.PutUint32(tmp2[:], math.Float32bits(v))
 	buf = append(buf, tmp1[:]...)
 	buf = append(buf, []byte(arg)...)
 	buf = append(buf, 0, 1) // string terminator, bool

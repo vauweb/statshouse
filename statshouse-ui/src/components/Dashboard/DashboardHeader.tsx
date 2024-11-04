@@ -10,33 +10,41 @@ import {
   selectorDashboardId,
   selectorDashboardLayoutEdit,
   selectorDisabledLive,
-  selectorLiveMode,
   selectorParams,
   selectorSetBaseRange,
   selectorSetDashboardLayoutEdit,
-  selectorSetLiveMode,
   selectorSetTimeRange,
   selectorTimeRange,
+  setLiveMode,
+  toggleEnableTVMode,
+  useLiveModeStore,
   useStore,
+  useTVModeStore,
 } from '../../store';
 import { ReactComponent as SVGGearFill } from 'bootstrap-icons/icons/gear-fill.svg';
 import { ReactComponent as SVGArrowCounterclockwise } from 'bootstrap-icons/icons/arrow-counterclockwise.svg';
+import { ReactComponent as SVGFullscreen } from 'bootstrap-icons/icons/fullscreen.svg';
+import { ReactComponent as SVGFullscreenExit } from 'bootstrap-icons/icons/fullscreen-exit.svg';
 import { NavLink } from 'react-router-dom';
 import { produce } from 'immer';
-import { encodeParams, fixMessageTrouble } from '../../url/queryParams';
+import { encodeParams } from '../../url/queryParams';
 import { Button, ToggleButton } from '../UI';
+import { fixMessageTrouble } from '../../url/fixMessageTrouble';
 
 export type DashboardHeaderProps = {};
 export const DashboardHeader: React.FC<DashboardHeaderProps> = () => {
   const dashboardId = useStore(selectorDashboardId);
+
+  const tvMode = useTVModeStore((state) => state.enable);
+
+  // const [] =
 
   const timeRange = useStore(selectorTimeRange);
   const setTimeRange = useStore(selectorSetTimeRange);
 
   const setBaseRange = useStore(selectorSetBaseRange);
 
-  const live = useStore(selectorLiveMode);
-  const setLive = useStore(selectorSetLiveMode);
+  const live = useLiveModeStore((s) => s.live);
   const disabledLive = useStore(selectorDisabledLive);
 
   const dashboardLayoutEdit = useStore(selectorDashboardLayoutEdit);
@@ -58,15 +66,15 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = () => {
   }, [params]);
 
   return (
-    <div className="d-flex flex-row flex-wrap mb-3 container-xl">
-      <div className="me-4 mb-2">
+    <div className="d-flex flex-row flex-wrap my-3 container-xl">
+      <div className="me-3 mb-2">
         <PlotNavigate
           className="btn-group-sm"
           setTimeRange={setTimeRange}
           live={live}
           link={copyLink}
           outerLink={copyLink}
-          setLive={setLive}
+          setLive={setLiveMode}
           disabledLive={disabledLive}
         />
       </div>
@@ -81,7 +89,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = () => {
             setBaseRange={setBaseRange}
           />
         </div>
-        <div className="ms-4 mb-2">
+        <div className="ms-3 mb-2">
           <PlotControlTo
             className="btn-group-sm"
             classNameInput="form-control-sm"
@@ -89,10 +97,10 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = () => {
             setTimeRange={setTimeRange}
           />
         </div>
-        <div className="ms-4 mb-2">
+        <div className="ms-3 mb-2">
           <PlotControlTimeShifts />
         </div>
-        <div className="ms-4 mb-2">
+        <div className="ms-3 mb-2">
           <ToggleButton
             className="btn btn-outline-primary btn-sm"
             checked={dashboardLayoutEdit}
@@ -111,6 +119,16 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = () => {
             </NavLink>
           </div>
         )}
+        <div className="ms-2 mb-2">
+          <ToggleButton
+            className="btn btn-outline-primary btn-sm"
+            checked={tvMode}
+            onChange={toggleEnableTVMode}
+            title={tvMode ? 'TV mode Off' : 'TV mode On'}
+          >
+            {tvMode ? <SVGFullscreenExit /> : <SVGFullscreen />}
+          </ToggleButton>
+        </div>
       </div>
     </div>
   );

@@ -11,13 +11,21 @@ import { IBackendMetric, IKind, IMetric, ITag, ITagAlias } from '../models/metri
 import { MetricFormValuesContext, MetricFormValuesStorage } from '../storages/MetricFormValues';
 import { ReactComponent as SVGTrash } from 'bootstrap-icons/icons/trash.svg';
 import { resetMetricFlood, saveMetric } from '../api/saveMetric';
-import { formatInputDate } from '../../view/utils';
 import { IActions } from '../storages/MetricFormValues/reducer';
-import { selectorListMetricsGroup, selectorLoadListMetricsGroup, useStore } from '../../store';
+import { useStore } from '../../store';
 import { RawValueKind } from '../../view/api';
 import { freeKeyPrefix } from '../../url/queryParams';
 import { METRIC_TYPE, METRIC_TYPE_DESCRIPTION, MetricType } from '../../api/enum';
 import { maxTagsSize } from '../../common/settings';
+import { Button } from 'components/UI';
+import { ReactComponent as SVGPlusLg } from 'bootstrap-icons/icons/plus-lg.svg';
+import { ReactComponent as SVGDashLg } from 'bootstrap-icons/icons/dash-lg.svg';
+import { isNotNil, toNumber } from '../../common/helpers';
+import { dequal } from 'dequal/lite';
+import { produce } from 'immer';
+import { TagDraft } from './TagDraft';
+import { formatInputDate } from '../../view/utils2';
+import { Select } from '../../components/Select';
 
 const { clearMetricsMeta } = useStore.getState();
 
@@ -30,7 +38,11 @@ export function FormPage(props: { yAxisSize: number; adminMode: boolean }) {
   React.useEffect(() => {
     fetch(`/api/metric?s=${metricName}`)
       .then<{ data: { metric: IBackendMetric } }>((res) => res.json())
-      .then(({ data: { metric } }) =>
+      .then(({ data: { metric } }) => {
+        const tags_draft: ITag[] = Object.entries(metric.tags_draft ?? {})
+          .map(([, t]) => t)
+          .filter(isNotNil);
+        tags_draft.sort((a, b) => (b.name < a.name ? 1 : b.name === a.name ? 0 : -1));
         setInitMetric({
           id: metric.metric_id === undefined ? 0 : metric.metric_id,
           name: metric.name,
@@ -46,22 +58,24 @@ export function FormPage(props: { yAxisSize: number; adminMode: boolean }) {
             name: tag.name === undefined || tag.name === `key${index}` ? '' : tag.name, // now API sends undefined for canonical names, but this can change in the future, so we keep the code
             alias: tag.description === undefined ? '' : tag.description,
             customMapping: tag.value_comments
-              ? Object.keys(tag.value_comments).map((key: string) => ({
-                  from: key,
-                  to: tag.value_comments![key],
+              ? Object.entries(tag.value_comments).map(([from, to]) => ({
+                  from,
+                  to,
                 }))
               : [],
             isRaw: tag.raw,
             raw_kind: tag.raw_kind,
           })),
+          tags_draft,
           tagsSize: metric.tags.length,
           pre_key_tag_id: metric.pre_key_tag_id && freeKeyPrefix(metric.pre_key_tag_id),
           pre_key_from: metric.pre_key_from,
           metric_type: metric.metric_type,
           version: metric.version,
           group_id: metric.group_id,
-        })
-      );
+          fair_key_tag_ids: metric.fair_key_tag_ids,
+        });
+      });
   }, [metricName]);
 
   // update document title
@@ -115,12 +129,22 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean }) {
     [values.pre_key_from]
   );
 
-  const loadListMetricsGroup = useStore(selectorLoadListMetricsGroup);
-  const listMetricsGroup = useStore(selectorListMetricsGroup);
-
-  useEffect(() => {
-    loadListMetricsGroup().finally();
-  }, [loadListMetricsGroup]);
+  const free_tags = useMemo(
+    () =>
+      values.tags.reduce((res, t, index) => {
+        if (!t.name && index > 0 && index < values.tagsSize) {
+          res.push(index);
+        }
+        return res;
+      }, [] as number[]),
+    [values.tags, values.tagsSize]
+  );
+  const otherResolution = useMemo(() => {
+    if ([1, 5, 15, 60].indexOf(values.resolution) < 0) {
+      return values.resolution;
+    }
+    return false;
+  }, [values.resolution]);
 
   return (
     <form key={values.version}>
@@ -213,17 +237,18 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean }) {
             disabled={isReadonly}
           >
             <option value="1">1 second (native, default)</option>
-            <option value="2">2 seconds</option>
-            <option value="3">3 seconds</option>
-            <option value="4">4 seconds</option>
+            {/*<option value="2">2 seconds</option>*/}
+            {/*<option value="3">3 seconds</option>*/}
+            {/*<option value="4">4 seconds</option>*/}
             <option value="5">5 seconds (native)</option>
-            <option value="6">6 seconds</option>
-            <option value="10">10 seconds</option>
-            <option value="12">12 seconds</option>
+            {/*<option value="6">6 seconds</option>*/}
+            {/*<option value="10">10 seconds</option>*/}
+            {/*<option value="12">12 seconds</option>*/}
             <option value="15">15 seconds (native)</option>
-            <option value="20">20 seconds</option>
-            <option value="30">30 seconds</option>
+            {/*<option value="20">20 seconds</option>*/}
+            {/*<option value="30">30 seconds</option>*/}
             <option value="60">60 seconds (native)</option>
+            {otherResolution !== false && <option value={otherResolution}>{otherResolution} seconds</option>}
           </select>
         </div>
         <div id="resolutionHelpBlock" className="form-text">
@@ -328,6 +353,25 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean }) {
               disabled={isReadonly}
             />
           ))}
+          <div className="mt-3">
+            <Button
+              className="btn btn-outline-secondary me-2"
+              disabled={values.tagsSize >= maxTagsSize}
+              onClick={() => dispatch({ type: 'numTags', num: `${values.tagsSize + 1}` })}
+            >
+              <SVGPlusLg className="me-1" />
+              Add tag
+            </Button>
+
+            <Button
+              className="btn btn-outline-secondary"
+              disabled={values.tagsSize <= 1}
+              onClick={() => dispatch({ type: 'numTags', num: `${values.tagsSize - 1}` })}
+            >
+              <SVGDashLg className="me-1" />
+              Remove last tag
+            </Button>
+          </div>
           <div id="tagsHelpBlock1" className="form-text">
             When sending data to statshouse, you can refer to tag by either Tag ID or Name.
           </div>
@@ -351,6 +395,27 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean }) {
           </div>
         </div>
       </div>
+      {values.tags_draft.length > 0 && (
+        <div className="row mb-3">
+          <label htmlFor="tagsDraft" className="col-sm-2 col-form-label">
+            Tags draft
+          </label>
+          <div className="col">
+            <div id="tagsDraft" className="form-text"></div>
+            {values.tags_draft.map((tag_draft_info, index) => (
+              <TagDraft
+                key={index}
+                tag_key={tag_draft_info.name}
+                tag={tag_draft_info}
+                free_tags={free_tags}
+                onMoveTag={(num_tag, tag_key, tag) => {
+                  dispatch({ type: 'move_draft', pos: num_tag, tag, tag_key });
+                }}
+              ></TagDraft>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="row align-items-baseline mb-3">
         <label htmlFor="visible" className="col-sm-2 col-form-label">
           Enabled
@@ -451,30 +516,6 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean }) {
         </div>
         <div id="pre_key_onlyHelpBlock" className="form-text"></div>
       </div>
-      <div className="row mb-3">
-        <label htmlFor="resolution" className="col-sm-2 col-form-label">
-          Metrics group
-        </label>
-        <div className="col-sm-auto d-flex align-items-center">
-          <select
-            name="metricsGroup"
-            className="form-select"
-            value={values.group_id || 0}
-            onChange={(e) => dispatch({ type: 'group_id', key: e.target.value })}
-            disabled={isReadonly || !adminMode}
-          >
-            <option key="0" value="0">
-              default
-            </option>
-            {listMetricsGroup.map((metricsGroup) => (
-              <option key={metricsGroup.id} value={metricsGroup.id.toString()}>
-                {metricsGroup.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="form-text">Select metrics group</div>
-      </div>
       <div className="row align-items-baseline mb-3">
         <label htmlFor="skip_max_host" className="col-sm-2 col-form-label">
           Enable max host
@@ -541,6 +582,44 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean }) {
         </div>
         <div id="skip_sum_squareHelpBlock" className="form-text"></div>
       </div>
+      <div className="row align-items-baseline mb-3">
+        <label htmlFor="fair_key_tag_ids" className="col-sm-2 col-form-label">
+          Fair key tags
+        </label>
+        <div className="col-sm-auto pt-1">
+          {
+            <Select
+              className="sh-select form-control"
+              classNameList="dropdown-menu"
+              multiple
+              options={values.tags.map((_, tI) => ({ value: tI.toString(), name: `tag ${tI}` }))}
+              value={values.fair_key_tag_ids ?? []}
+              onChange={(values) => {
+                dispatch({ type: 'fair_key_tag_ids', value: Array.isArray(values) ? values : [] });
+              }}
+            />
+          }
+          <div className="d-flex gap-1 mt-2">
+            {!values.fair_key_tag_ids?.length && <span className="text-body-tertiary">disabled</span>}
+            {(values.fair_key_tag_ids ?? []).map((tId) => (
+              <span
+                key={tId}
+                className="badge bg-success"
+                role="button"
+                onClick={() => {
+                  dispatch({
+                    type: 'fair_key_tag_ids',
+                    value: (values.fair_key_tag_ids ?? []).filter((tI) => tI !== tId),
+                  });
+                }}
+              >
+                tag {tId}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div id="fair_key_tag_idsHelpBlock" className="form-text"></div>
+      </div>
 
       <div>
         <button type="button" disabled={isRunning || isReadonly} className="btn btn-primary me-3" onClick={onSubmit}>
@@ -559,9 +638,23 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean }) {
     </form>
   );
 }
+
 type SortCustomMappingItem = {
-  mapping: { readonly from: string; readonly to: string };
+  mapping: { from: string; to: string };
   index: number;
+};
+
+const sortCustomMappingFn = (isRaw?: boolean) => (a: SortCustomMappingItem, b: SortCustomMappingItem) => {
+  if (isRaw) {
+    return toNumber(a.mapping.from.trimStart(), 0) - toNumber(b.mapping.from.trimStart(), 0);
+  } else {
+    if (a.mapping.from < b.mapping.from) {
+      return -1;
+    } else if (a.mapping.from === b.mapping.from) {
+      return 0;
+    }
+    return 1;
+  }
 };
 
 function AliasField(props: {
@@ -576,37 +669,16 @@ function AliasField(props: {
   const [sortCustomMapping, setSortCustomMapping] = useState<SortCustomMappingItem[]>([]);
   useEffect(() => {
     setSortCustomMapping((prevState) => {
-      if (prevState.length && prevState.length <= value.customMapping.length) {
-        const nextState = [...prevState];
-        const map: Record<string, SortCustomMappingItem> = prevState.reduce(
-          (res, item) => {
-            res[item.index] = item;
-            return res;
-          },
-          {} as Record<string, SortCustomMappingItem>
-        );
-        value.customMapping.forEach((mapping, index) => {
-          if (map[index]) {
-            map[index].mapping = mapping;
-          } else {
-            nextState.push({ mapping, index });
-          }
-        });
-        return nextState;
-      } else {
-        const nextState = value.customMapping.map((mapping, index) => ({ mapping, index }));
-        nextState.sort((a, b) => {
-          if (a.mapping.from < b.mapping.from) {
-            return -1;
-          } else if (a.mapping.from === b.mapping.from) {
-            return 0;
-          }
-          return 1;
-        });
-        return nextState;
+      const nextState = value.customMapping.map((mapping, index) => ({ mapping, index }));
+      nextState.sort(sortCustomMappingFn(value.isRaw));
+      const sortPrevState = [...prevState];
+      sortPrevState.sort(sortCustomMappingFn(value.isRaw));
+      if (dequal(nextState, sortPrevState)) {
+        return prevState;
       }
+      return nextState;
     });
-  }, [value.customMapping]);
+  }, [value.customMapping, value.isRaw]);
   return (
     <div className="row mt-3">
       <label htmlFor={`tag${tagNumber}`} className="col-sm-2 col-lg-1 col-form-label font-monospace">
@@ -677,7 +749,7 @@ function AliasField(props: {
           </div>
         </div>
         <>
-          {sortCustomMapping.map(({ mapping, index }) => (
+          {sortCustomMapping.map(({ mapping, index }, i) => (
             <div className="row mt-3" key={index}>
               <div className="col-sm-8">
                 <div className="row">
@@ -686,9 +758,14 @@ function AliasField(props: {
                       type={value.isRaw ? 'number' : 'text'}
                       className="form-control"
                       placeholder="Value"
-                      onChange={(e) =>
-                        onChangeCustomMapping(index, value.isRaw ? ` ${e.target.value}` : e.target.value, undefined)
-                      }
+                      onChange={(e) => {
+                        setSortCustomMapping(
+                          produce((s) => {
+                            s[i].mapping.from = value.isRaw ? ` ${e.target.value}` : e.target.value;
+                          })
+                        );
+                        onChangeCustomMapping(index, value.isRaw ? ` ${e.target.value}` : e.target.value, undefined);
+                      }}
                       defaultValue={value.isRaw ? mapping.from.trimStart() : mapping.from}
                       disabled={disabled}
                     />
@@ -698,7 +775,14 @@ function AliasField(props: {
                       type="text"
                       className="form-control"
                       placeholder="Comment"
-                      onChange={(e) => onChangeCustomMapping(index, undefined, e.target.value)}
+                      onChange={(e) => {
+                        setSortCustomMapping(
+                          produce((s) => {
+                            s[i].mapping.to = e.target.value;
+                          })
+                        );
+                        onChangeCustomMapping(index, undefined, e.target.value);
+                      }}
                       defaultValue={mapping.to}
                       disabled={disabled}
                     />
@@ -708,6 +792,11 @@ function AliasField(props: {
                       className="btn btn-outline-warning"
                       type="button"
                       onClick={() => {
+                        setSortCustomMapping(
+                          produce((s) => {
+                            s.splice(i, 1);
+                          })
+                        );
                         onChangeCustomMapping(index, undefined, undefined);
                       }}
                       disabled={disabled}
@@ -722,7 +811,14 @@ function AliasField(props: {
           <button
             type="button"
             className="btn btn-outline-secondary mt-3"
-            onClick={() => onChange({ customMapping: [{ from: '', to: '' }] })}
+            onClick={() => {
+              setSortCustomMapping(
+                produce((s) => {
+                  s.push({ mapping: { from: '', to: '' }, index: s.length });
+                })
+              );
+              onChange({ customMapping: [{ from: '', to: '' }] });
+            }}
             disabled={disabled}
           >
             Add value comment

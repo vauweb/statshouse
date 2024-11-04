@@ -9,220 +9,171 @@ package api
 import (
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
 
 	"github.com/vkcom/statshouse-go"
-
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/vkgo/rpc"
 	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
 )
 
 const (
-	RoutePrefix             = "/api/"
-	EndpointMetric          = "metric"
-	EndpointMetricList      = "metrics-list"
-	EndpointMetricTagValues = "metric-tag-values"
-	EndpointQuery           = "query"
-	EndpointTable           = "table"
-	EndpointPoint           = "point"
-	EndpointRender          = "render"
-	EndpointResetFlood      = "reset-flood"
-	EndpointLegacyRedirect  = "legacy-redirect"
-	EndpointDashboard       = "dashboard"
-	EndpointDashboardList   = "dashboards-list"
-	EndpointGroup           = "group"
-	EndpointNamespace       = "namespace"
-	EndpointNamespaceList   = "namespace-list"
-	EndpointGroupList       = "group-list"
-	EndpointPrometheus      = "prometheus"
-	EndpointStatistics      = "stat"
-	endpointChunk           = "chunk"
+	RoutePrefix                 = "/api/"
+	EndpointMetric              = "metric"
+	EndpointMetricList          = "metrics-list"
+	EndpointMetricTagValues     = "metric-tag-values"
+	EndpointQuery               = "query"
+	EndpointTable               = "table"
+	EndpointPoint               = "point"
+	EndpointRender              = "render"
+	EndpointResetFlood          = "reset-flood"
+	EndpointLegacyRedirect      = "legacy-redirect"
+	EndpointDashboard           = "dashboard"
+	EndpointDashboardList       = "dashboards-list"
+	EndpointGroup               = "group"
+	EndpointNamespace           = "namespace"
+	EndpointNamespaceList       = "namespace-list"
+	EndpointGroupList           = "group-list"
+	EndpointPrometheus          = "prometheus"
+	EndpointPrometheusGenerated = "prometheus-generated"
+	EndpointKnownTags           = "known-tags"
+	EndpointStatistics          = "stat"
+	endpointChunk               = "chunk"
+	EndpointHistory             = "history"
 
 	userTokenName = "user"
 )
 
 type endpointStat struct {
+	timestamp  time.Time
 	endpoint   string
+	protocol   int
 	method     string
-	metric     string
-	startTime  time.Time
-	tokenName  string
-	user       string
 	dataFormat string
-	lane       string
+	// TODO: currently lane comes from the first query that sets it, it's non deterministic
+	lane      string
+	laneMutex sync.Mutex // we access lane from main and badges query
+	metric    string
+	tokenName string
+	user      string
+	priority  string
+	timings   ServerTimingHeader
 }
 
-func (es *endpointStat) serviceTime(code int) {
-	LogMetric(format.TagValueIDHTTP, es.user, es.metric)
-	es.logEvent(format.BuiltinMetricNameAPIServiceTime, code)
-	es.logDeprecatedEvent(format.BuiltinMetricNameAPIEndpointServiceTime, code)
+func newEndpointStatRPC(endpoint, method string) *endpointStat {
+	return &endpointStat{
+		timestamp:  time.Now(),
+		endpoint:   endpoint,
+		protocol:   format.TagValueIDRPC,
+		method:     method,
+		dataFormat: "TL",
+	}
 }
 
-func (es *endpointStat) responseTime(code int) {
-	es.logEvent(format.BuiltinMetricNameAPIResponseTime, code)
-	es.logDeprecatedEvent(format.BuiltinMetricNameAPIEndpointResponseTime, code)
-}
-
-func (es *endpointStat) logEvent(statName string, code int) {
-	var (
-		v = time.Since(es.startTime).Seconds()
-		t = statshouse.Tags{
-			1: es.endpoint,
-			2: strconv.Itoa(int(format.TagValueIDHTTP)),
-			3: es.method,
-			4: es.dataFormat,
-			5: es.lane,
-			6: srvfunc.HostnameForStatshouse(),
-			7: es.tokenName,
-			8: strconv.Itoa(code),
-			9: es.metric,
+func (es *endpointStat) reportServiceTime(code int, err error) {
+	if len(es.metric) != 0 {
+		statshouse.Count(
+			format.BuiltinMetricNameAPIMetricUsage,
+			statshouse.Tags{
+				1: strconv.FormatInt(int64(es.protocol), 10),
+				2: es.user,
+				3: es.metric,
+			}, 1)
+	}
+	if es.protocol == format.TagValueIDRPC && code == 0 {
+		switch e := err.(type) {
+		case *rpc.Error:
+			code = int(e.Code)
+		case nil:
+			// code = 0
+		default:
+			code = -1
 		}
-	)
-	statshouse.Metric(statName, t).Value(v)
+	}
+	es.report(code, format.BuiltinMetricNameAPIServiceTime)
 }
 
-func (es *endpointStat) logDeprecatedEvent(statName string, code int) {
-	v := time.Since(es.startTime).Seconds()
-	statshouse.Metric(
-		statName,
-		statshouse.Tags{
-			1: es.endpoint,
-			2: es.metric,
-			3: strconv.Itoa(code),
-			4: es.tokenName,
-			5: es.dataFormat,
-			6: es.method,
-		},
-	).Value(v)
+func (es *endpointStat) setAccessInfo(ai accessInfo) {
+	es.user = ai.user
+	es.tokenName = getStatTokenName(ai.user)
 }
 
-func (es *endpointStat) setTokenName(user string) {
-	es.tokenName = getStatTokenName(user)
-	es.user = user
+func (es *endpointStat) setMetricMeta(metricMeta *format.MetricMetaValue) {
+	if metricMeta != nil {
+		es.metric = strconv.Itoa(int(metricMeta.MetricID))
+	}
+}
+
+func (es *endpointStat) report(code int, metric string) {
+	v := time.Since(es.timestamp).Seconds()
+	t := statshouse.Tags{
+		1:  es.endpoint,
+		2:  strconv.Itoa(es.protocol),
+		3:  es.method,
+		4:  es.dataFormat,
+		5:  es.lane,
+		6:  srvfunc.HostnameForStatshouse(),
+		7:  es.tokenName,
+		8:  strconv.Itoa(code),
+		9:  es.metric,
+		10: es.priority,
+	}
+	statshouse.Value(metric, t, v)
 }
 
 func getStatTokenName(user string) string {
 	if strings.Contains(user, "@") {
 		return userTokenName
 	}
-
 	return user
-}
-
-func newEndpointStat(endpoint, method string, metricID int32, dataFormat string) *endpointStat {
-	return &endpointStat{
-		endpoint:   endpoint,
-		metric:     strconv.Itoa(int(metricID)), // metric ID key is considered "raw"
-		startTime:  time.Now(),
-		dataFormat: dataFormat,
-		method:     method,
-	}
-}
-
-type rpcMethodStat struct {
-	startTime time.Time
-	endpoint  string
-	method    string
-	lane      string
-}
-
-func newRPCMethodStat(endpoint, method string) *rpcMethodStat {
-	return &rpcMethodStat{startTime: time.Now(), endpoint: endpoint, method: method}
-}
-
-func (ms *rpcMethodStat) serviceTime(ai accessInfo, meta *format.MetricMetaValue, err error) {
-	var errorCode string
-	switch e := err.(type) {
-	case rpc.Error:
-		errorCode = strconv.FormatInt(int64(e.Code), 10)
-	case nil:
-		errorCode = "0"
-	default:
-		errorCode = "-1"
-	}
-	var (
-		v = time.Since(ms.startTime).Seconds()
-		t = statshouse.Tags{
-			1: ms.endpoint,
-			2: strconv.Itoa(int(format.TagValueIDRPC)),
-			3: ms.method,
-			4: "TL",
-			5: ms.lane,
-			6: srvfunc.HostnameForStatshouse(),
-			7: getStatTokenName(ai.user),
-			8: errorCode,
-		}
-	)
-	if meta != nil {
-		t[9] = strconv.Itoa(int(meta.MetricID))
-	}
-	statshouse.Metric(format.BuiltinMetricNameAPIServiceTime, t).Value(v)
-}
-
-func (ms *rpcMethodStat) serviceTimeDeprecated(ai accessInfo, err error) {
-	var errorCode string
-	switch e := err.(type) {
-	case rpc.Error:
-		errorCode = strconv.FormatInt(int64(e.Code), 10)
-	case nil:
-		errorCode = "0"
-	default:
-		errorCode = "-1"
-	}
-	v := time.Since(ms.startTime).Seconds()
-	statshouse.Metric(
-		format.BuiltinMetricNameAPIRPCServiceTime,
-		statshouse.Tags{
-			1: ms.method,
-			2: errorCode,
-			3: getStatTokenName(ai.user),
-			4: srvfunc.HostnameForStatshouse(),
-		},
-	).Value(v)
 }
 
 func CurrentChunksCount(brs *BigResponseStorage) func(*statshouse.Client) {
 	return func(c *statshouse.Client) {
-		c.Metric(
+		c.Value(
 			format.BuiltinMetricNameAPIBRS,
 			statshouse.Tags{
 				1: srvfunc.HostnameForStatshouse(),
 			},
-		).Value(float64(brs.Count()))
+			float64(brs.Count()))
 	}
 }
 
-func ChSelectMetricDuration(duration time.Duration, metricID int32, token, table, kind string, isFast, isLight bool, err error) {
+func ChSelectMetricDuration(duration time.Duration, metricID int32, user, table, kind string, isFast, isLight, isHardware bool, err error) {
 	ok := "ok"
 	if err != nil {
 		ok = "error"
 	}
-	statshouse.Metric(
+	statshouse.Value(
 		format.BuiltinMetricNameAPISelectDuration,
 		statshouse.Tags{
-			1: modeStr(isFast, isLight),
+			1: modeStr(isFast, isLight, isHardware),
 			2: strconv.Itoa(int(metricID)),
 			3: table,
 			4: kind,
 			5: ok,
-			6: getStatTokenName(token),
-			7: token,
+			6: getStatTokenName(user),
+			7: user,
+			8: strconv.Itoa(int(uint32(metricID) % 16)), // experimental to see load distribution if we shard data by metricID
 		},
-	).Value(duration.Seconds())
+		duration.Seconds())
 }
 
-func ChSelectProfile(isFast, isLight bool, info proto.Profile, err error) {
-	chSelectPushMetric(format.BuiltinMetricNameAPISelectBytes, isFast, isLight, float64(info.Bytes), err)
-	chSelectPushMetric(format.BuiltinMetricNameAPISelectRows, isFast, isLight, float64(info.Rows), err)
+func ChSelectProfile(isFast, isLight, isHardware bool, info proto.Profile, err error) {
+	chSelectPushMetric(format.BuiltinMetricNameAPISelectBytes, isFast, isLight, isHardware, float64(info.Bytes), err)
+	chSelectPushMetric(format.BuiltinMetricNameAPISelectRows, isFast, isLight, isHardware, float64(info.Rows), err)
 }
 
-func modeStr(isFast, isLight bool) string {
+func modeStr(isFast, isLight, isHardware bool) string {
 	mode := "slow"
 	if isFast {
 		mode = "fast"
+	}
+	if isHardware {
+		return mode + "_hardware"
 	}
 	if isLight {
 		mode += "light"
@@ -232,12 +183,11 @@ func modeStr(isFast, isLight bool) string {
 	return mode
 }
 
-func chSelectPushMetric(metric string, isFast, isLight bool, data float64, err error) {
-
-	m := statshouse.Metric(
+func chSelectPushMetric(metric string, isFast, isLight, isHardware bool, data float64, err error) {
+	m := statshouse.GetMetricRef(
 		metric,
 		statshouse.Tags{
-			1: modeStr(isFast, isLight),
+			1: modeStr(isFast, isLight, isHardware),
 		},
 	)
 	m.Value(data)
@@ -247,34 +197,23 @@ func chSelectPushMetric(metric string, isFast, isLight bool, data float64, err e
 }
 
 func ChCacheRate(cachedRows, chRows int, metricID int32, table, kind string) {
-	statshouse.Metric(
-		"ch_video_select_test",
+	statshouse.Value(
+		format.BuiltinMetricNameAPICacheHit,
 		statshouse.Tags{
 			1: "cache",
 			2: strconv.Itoa(int(metricID)),
 			3: table,
 			4: kind,
 		},
-	).Value(float64(cachedRows))
+		float64(cachedRows))
 
-	statshouse.Metric(
-		"ch_video_select_test",
+	statshouse.Value(
+		format.BuiltinMetricNameAPICacheHit,
 		statshouse.Tags{
 			1: "clickhouse",
 			2: strconv.Itoa(int(metricID)),
 			3: table,
 			4: kind,
 		},
-	).Value(float64(chRows))
-}
-
-func LogMetric(type_ int64, user string, metricID string) {
-	statshouse.Metric(
-		format.BuiltinMetricNameAPIMetricUsage,
-		statshouse.Tags{
-			1: strconv.FormatInt(type_, 10),
-			2: user,
-			3: metricID,
-		},
-	).Count(1)
+		float64(chRows))
 }
