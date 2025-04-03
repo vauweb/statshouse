@@ -1,12 +1,12 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import React, { memo, useCallback } from 'react';
-import { toNumber } from 'common/helpers';
-import { defaultInterval, setTVMode, useTvModeStore } from 'store2/tvModeStore';
+import { toNumber } from '@/common/helpers';
+import { defaultInterval, setTVMode, useTvModeStore } from '@/store2/tvModeStore';
 
 export type TvModeIntervalProps = {
   className?: string;
@@ -25,7 +25,7 @@ const tvModeIntervalsOptions = [
   { value: 300000, name: '6 min.' },
 ];
 
-export function _TvModeInterval({ className }: TvModeIntervalProps) {
+export const TvModeInterval = memo(function TvModeInterval() {
   const interval = useTvModeStore(({ interval }) => interval);
   const onChange = useCallback((event: React.ChangeEvent<HTMLSelectElement>) => {
     const value = toNumber(event.currentTarget.value, defaultInterval);
@@ -40,6 +40,4 @@ export function _TvModeInterval({ className }: TvModeIntervalProps) {
       ))}
     </select>
   );
-}
-
-export const TvModeInterval = memo(_TvModeInterval);
+});

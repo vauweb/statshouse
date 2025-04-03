@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -173,6 +173,8 @@ func init() {
 	meta.SetGlobalFactoryCreateForFunction(0x28bea524, func() meta.Object { var ret internal.StatshouseAutoCreate; return &ret }, func() meta.Function { var ret internal.StatshouseAutoCreate; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForObject(0x73fd01e0, func() meta.Object { var ret internal.StatshouseCentroidFloat; return &ret })
 	meta.SetGlobalFactoryCreateForFunction(0x4285ff57, func() meta.Object { var ret internal.StatshouseGetConfig2; return &ret }, func() meta.Function { var ret internal.StatshouseGetConfig2; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForFunction(0x7d7b4991, func() meta.Object { var ret internal.StatshouseGetConfig3; return &ret }, func() meta.Function { var ret internal.StatshouseGetConfig3; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForObject(0xf13698cb, func() meta.Object { var ret internal.StatshouseGetConfigResult3; return &ret })
 	meta.SetGlobalFactoryCreateForFunction(0x42855554, func() meta.Object { var ret internal.StatshouseGetMetrics3; return &ret }, func() meta.Function { var ret internal.StatshouseGetMetrics3; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForObject(0x0c803d05, func() meta.Object { var ret internal.StatshouseGetMetricsResult; return &ret })
 	meta.SetGlobalFactoryCreateForFunction(0x4285ff56, func() meta.Object { var ret internal.StatshouseGetTagMapping2; return &ret }, func() meta.Function { var ret internal.StatshouseGetTagMapping2; return &ret }, nil)
@@ -187,9 +189,13 @@ func init() {
 	meta.SetGlobalFactoryCreateForObject(0x486affde, func() meta.Object { var ret internal.StatshousePutTagMappingBootstrapResult; return &ret })
 	meta.SetGlobalFactoryCreateForObject(0x4f7b7822, func() meta.Object { var ret internal.StatshouseSampleFactor; return &ret })
 	meta.SetGlobalFactoryCreateForFunction(0x4285ff53, func() meta.Object { var ret internal.StatshouseSendKeepAlive2; return &ret }, func() meta.Function { var ret internal.StatshouseSendKeepAlive2; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForFunction(0x4285ff54, func() meta.Object { var ret internal.StatshouseSendKeepAlive3; return &ret }, func() meta.Function { var ret internal.StatshouseSendKeepAlive3; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForFunction(0x44575940, func() meta.Object { var ret internal.StatshouseSendSourceBucket2; return &ret }, func() meta.Function { var ret internal.StatshouseSendSourceBucket2; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForFunction(0x0d04aa3f, func() meta.Object { var ret internal.StatshouseSendSourceBucket3; return &ret }, func() meta.Function { var ret internal.StatshouseSendSourceBucket3; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForObject(0x0e177acc, func() meta.Object { var ret internal.StatshouseSendSourceBucket3Response; return &ret })
 	meta.SetGlobalFactoryCreateForObject(0x4124cf9c, func() meta.Object { var ret internal.StatshouseShutdownInfo; return &ret })
 	meta.SetGlobalFactoryCreateForObject(0x3af6e822, func() meta.Object { var ret internal.StatshouseSourceBucket2; return &ret })
+	meta.SetGlobalFactoryCreateForObject(0x16c4dd7b, func() meta.Object { var ret internal.StatshouseSourceBucket3; return &ret })
 	meta.SetGlobalFactoryCreateForFunction(0x4285ff58, func() meta.Object { var ret internal.StatshouseTestConnection2; return &ret }, func() meta.Function { var ret internal.StatshouseTestConnection2; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForObject(0x9ffdea42, func() meta.Object { var ret internal.StatshouseTopElement; return &ret })
 	meta.SetGlobalFactoryCreateForObject(0xb5286e24, func() meta.Object { var ret internal.String; return &ret })

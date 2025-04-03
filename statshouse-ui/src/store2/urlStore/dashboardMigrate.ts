@@ -1,13 +1,19 @@
-import { DashboardInfo } from 'api/dashboard';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import { DashboardInfo } from '@/api/dashboard';
 import {
-  type DashboardParams as OldDashboardParams,
   encodeParams,
   PLOT_TYPE as OLD_PLOT_TYPE,
+  type DashboardParams as OldDashboardParams,
   type PlotParams as OldPlotParams,
   type QueryParams as OldQueryParams,
   type VariableParams as OldVariableParams,
-} from 'url/queryParams';
-import { type PlotKey, type QueryParams } from 'url2';
+} from '@/url/queryParams';
+import type { PlotKey, QueryParams } from '@/url2';
 import { deepClone, toNumber } from '../../common/helpers';
 import { METRIC_TYPE, METRIC_VALUE_BACKEND_VERSION, PLOT_TYPE } from '../../api/enum';
 import { normalizeDashboard as normalizeDashboardOld } from '../../view/normalizeDashboard';
@@ -50,6 +56,7 @@ export function dashboardMigrateNewToOld(params: QueryParams): OldQueryParams {
       eventsHide: params.plots[pK]?.events.map((e) => e) ?? [],
       totalLine: params.plots[pK]?.totalLine ?? false,
       filledGraph: params.plots[pK]?.filledGraph ?? true,
+      logScale: params.plots[pK]?.logScale ?? false,
     };
     return plot;
   });

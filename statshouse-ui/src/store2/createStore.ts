@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -21,9 +21,6 @@ export type StoreSlice<S, T, Mos extends [StoreMutatorIdentifier, T][] = []> = S
   T
 >;
 
-export function createStore<T, Mos extends [StoreMutatorIdentifier, T][] = []>(
-  store: Store<T, Mos>,
-  name: string = ''
-) {
+export function createStore<T, Mos extends [StoreMutatorIdentifier, T][] = []>(store: Store<T, Mos>) {
   return create<T>()(immer(store));
 }

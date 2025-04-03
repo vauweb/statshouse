@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10,17 +10,16 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/vkcom/statshouse/internal/metajournal"
-
 	"github.com/vkcom/statshouse/internal/agent"
+	"github.com/vkcom/statshouse/internal/metajournal"
 	"github.com/vkcom/statshouse/internal/receiver"
 )
 
 type statsHandler struct {
-	receiversUDP   []*receiver.UDP
-	receiverRPC    *receiver.RPCReceiver
-	sh2            *agent.Agent
-	metricsStorage *metajournal.MetricsStorage
+	receiversUDP []*receiver.UDP
+	receiverRPC  *receiver.RPCReceiver
+	sh2          *agent.Agent
+	journal      *metajournal.JournalFast
 }
 
 func (h statsHandler) handleStats(stats map[string]string) {
@@ -58,7 +57,11 @@ func (h statsHandler) handleStats(stats map[string]string) {
 	stats["statshouse_rpc_recv_calls_ok"] = strconv.FormatUint(h.receiverRPC.StatBatchesTotalOK(), 10)
 	stats["statshouse_rpc_recv_calls_err"] = strconv.FormatUint(h.receiverRPC.StatBatchesTotalErr(), 10)
 
-	stats["statshouse_journal_version"] = strconv.FormatInt(h.metricsStorage.Version(), 10)
+	{
+		version, hash := h.journal.VersionHash()
+		stats["statshouse_journal_version"] = strconv.FormatInt(version, 10)
+		stats["statshouse_journal_hash"] = hash
+	}
 	for i, s := range h.sh2.Shards {
 		t, u := s.HistoricBucketsDataSizeDisk()
 		stats[fmt.Sprintf("statshouse_queue_size_disk_total_%d", i)] = fmt.Sprintf("%d", t)

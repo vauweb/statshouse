@@ -253,6 +253,7 @@ func (s *scraper) run() {
 		<-timer.C
 	}
 	// scrape loop
+	var scratch []byte
 	for s.ctx.Err() == nil {
 		// read options
 		var opt scrapeOptions
@@ -267,14 +268,14 @@ func (s *scraper) run() {
 			return
 		case start := <-timer.C:
 			// work
-			err := s.scrape(opt)
+			err := s.scrape(opt, &scratch)
 			dur := time.Since(start)
-			s.reportScrapeTime(opt.job, err, dur)
+			s.reportScrapeTime(opt.job, err, dur, &scratch)
 		}
 	}
 }
 
-func (s *scraper) scrape(opt scrapeOptions) error {
+func (s *scraper) scrape(opt scrapeOptions, scratch *[]byte) error {
 	buf, contentType, err := s.getScrapeData(opt.timeout)
 	if err != nil {
 		log.Printf("scrape failed to get metrics %s: %v\n", s.request.URL.Path, err)
@@ -377,6 +378,7 @@ func (s *scraper) scrape(opt scrapeOptions) error {
 					MetricBytes:    &b,
 					Description:    meta.help,
 					ScrapeInterval: int(opt.interval.Seconds()),
+					Scratch:        scratch,
 				})
 			case textparse.MetricTypeCounter:
 				if s.hash == nil {
@@ -500,6 +502,7 @@ func (s *scraper) scrape(opt scrapeOptions) error {
 					MetricBytes:    &b,
 					Description:    prev.description,
 					ScrapeInterval: int(opt.interval.Seconds()),
+					Scratch:        scratch,
 				})
 				stat.seriesSent++
 			}
@@ -556,6 +559,7 @@ func (s *scraper) scrape(opt scrapeOptions) error {
 							MetricBytes:    &b,
 							Description:    metric.descriptionB,
 							ScrapeInterval: int(opt.interval.Seconds()),
+							Scratch:        scratch,
 						})
 						stat.seriesSent++
 					} else {
@@ -576,6 +580,7 @@ func (s *scraper) scrape(opt scrapeOptions) error {
 					MetricBytes:    &b,
 					Description:    metric.descriptionS,
 					ScrapeInterval: int(opt.interval.Seconds()),
+					Scratch:        scratch,
 				})
 				stat.seriesSent++
 			} else {
@@ -584,7 +589,13 @@ func (s *scraper) scrape(opt scrapeOptions) error {
 			metric.series[hashSum] = curr
 		}
 	}
-	s.metric = b
+	s.metric = tlstatshouse.MetricBytes{
+		Name:      b.Name[:0],
+		Tags:      b.Tags[:0],
+		Value:     b.Value[:0],
+		Unique:    b.Unique[:0],
+		Histogram: b.Histogram[:0],
+	}
 	if s.stat != stat {
 		log.Printf("scrape metrics %s: seen %d, dropped %d\n", s.request.URL.Path, stat.metricsSeen, stat.metricsDropped)
 		log.Printf("scrape series  %s: sent %d, dropped (unnamed %d, untyped %d, zero_count %d)\n", s.request.URL.Path, stat.seriesSent, stat.seriesDroppedUnnamed, stat.seriesDroppedUntyped, stat.seriesDroppedZeroCount)
@@ -608,7 +619,7 @@ func (s *scraper) getScrapeData(timeout time.Duration) ([]byte, string, error) {
 		}
 	}()
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf(resp.Status)
+		return nil, "", fmt.Errorf("%v", resp.Status)
 	}
 	// read response
 	s.buffer.Reset()
@@ -630,10 +641,10 @@ func (s *scraper) resetMetric(b *tlstatshouse.MetricBytes, job string, tagsCap i
 	setTagAt(b.Tags, 1, "instance", s.instance)
 }
 
-func (s *scraper) reportScrapeTime(job string, err error, v time.Duration) {
+func (s *scraper) reportScrapeTime(job string, err error, v time.Duration, scratch *[]byte) {
 	b := s.metric
 	b.Reset()
-	b.Name = appendString(s.metric.Name, format.BuiltinMetricNamePromScrapeTime)
+	b.Name = appendString(s.metric.Name, format.BuiltinMetricMetaPromScrapeTime.Name)
 	b.Tags = appendTag(b.Tags, "2", job)
 	if err != nil {
 		b.Tags = appendTag(b.Tags, "5", "1") // error
@@ -643,6 +654,7 @@ func (s *scraper) reportScrapeTime(job string, err error, v time.Duration) {
 	setMetricValue(&b, v.Seconds())
 	s.handler.HandleMetrics(data_model.HandlerArgs{
 		MetricBytes: &s.metric,
+		Scratch:     scratch,
 	})
 	s.metric = b
 }

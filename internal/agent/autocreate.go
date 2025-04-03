@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -21,5 +21,6 @@ func (s *Agent) AutoCreateMetric(ctx context.Context, args tlstatshouse.AutoCrea
 	}
 	shard.fillProxyHeader(&args.FieldsMask, &args.Header)
 	extra := rpc.InvokeReqExtra{FailIfNoConnection: true}
-	return shard.client.AutoCreate(ctx, args, &extra, nil)
+	client := shard.client()
+	return client.AutoCreate(ctx, args, &extra, nil)
 }

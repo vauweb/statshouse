@@ -1,29 +1,66 @@
 package api
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/spf13/pflag"
+	"github.com/vkcom/statshouse/internal/chutil"
 	"github.com/vkcom/statshouse/internal/config"
 )
 
 type Config struct {
 	ApproxCacheMaxSize int
+	Version3Start      int64
+	Version3Prob       float64
+	Version3StrcmpOff  bool
+	UserLimitsStr      string
+	UserLimits         []chutil.ConnLimits
+	CacheVersion       int
+	MaxCacheSize       int // hard limit, in bytes
+	MaxCacheSizeSoft   int // soft limit, in bytes
+	MaxCacheAge        int // seconds
+	CacheChunkSize     int
+	CacheBlacklist     []string
+	CacheWhitelist     []string
 }
 
 func (argv *Config) ValidateConfig() error {
+	if argv.UserLimitsStr != "" {
+		var userLimits []chutil.ConnLimits
+		err := json.Unmarshal([]byte(argv.UserLimitsStr), &userLimits)
+		if err != nil {
+			return fmt.Errorf("failed to parse user limit config: %w err", err)
+		}
+		argv.UserLimits = userLimits
+	}
+
 	return nil
 }
 
 func (argv *Config) Copy() config.Config {
 	cp := *argv
+	cp.UserLimits = make([]chutil.ConnLimits, len(cp.UserLimits))
+	copy(cp.UserLimits, argv.UserLimits)
 	return &cp
 }
 
-func (argv *Config) Bind(pflag *pflag.FlagSet, defaultI config.Config) {
+func (argv *Config) Bind(f *flag.FlagSet, defaultI config.Config) {
 	default_ := defaultI.(*Config)
-	pflag.IntVar(&argv.ApproxCacheMaxSize, "approx-cache-max-size", default_.ApproxCacheMaxSize, "approximate max amount of rows to cache for each table+resolution")
+	f.IntVar(&argv.ApproxCacheMaxSize, "approx-cache-max-size", default_.ApproxCacheMaxSize, "approximate max amount of rows to cache for each table+resolution")
+	f.Int64Var(&argv.Version3Start, "version3-start", 0, "timestamp of schema version 3 start, zero means not set")
+	f.Float64Var(&argv.Version3Prob, "version3-prob", 0, "the probability of choosing version 3 when version was set to 2 or empty")
+	f.BoolVar(&argv.Version3StrcmpOff, "version3-strcmp-off", false, "disable string comparision for schema version 3")
+	f.IntVar(&argv.CacheVersion, "cache-version", 1, "cache version")
+	f.IntVar(&argv.MaxCacheSize, "max-cache-size", 4*1024*1024*1024, "cache hard memory limit (in bytes)")
+	f.IntVar(&argv.MaxCacheSizeSoft, "max-cache-size-soft", 0, "cache soft memory limit (in bytes)")
+	f.IntVar(&argv.MaxCacheAge, "max-cache-age", 120, "maximum cache age in seconds")
+	f.IntVar(&argv.CacheChunkSize, "cache-chunk-size", 0, "cache chunk size")
+	config.StringSliceVar(f, &argv.CacheBlacklist, "cache-blacklist", "", "user(s) with cache disabled")
+	config.StringSliceVar(f, &argv.CacheWhitelist, "cache-whitelist", "", "user(s) with cache enabled")
+	f.StringVar(&argv.UserLimitsStr, "user-limits", "", "array of ConnLimits encoded to json")
 }
 
 func DefaultConfig() *Config {
@@ -33,32 +70,38 @@ func DefaultConfig() *Config {
 }
 
 type HandlerOptions struct {
-	insecureMode            bool
-	LocalMode               bool
-	querySequential         bool
-	readOnly                bool
-	verbose                 bool
-	timezone                string
-	protectedMetricPrefixes []string
-	querySelectTimeout      time.Duration
-	weekStartAt             int
-	location                *time.Location
-	utcOffset               int64
+	insecureMode             bool
+	LocalMode                bool
+	querySequential          bool
+	readOnly                 bool
+	verbose                  bool
+	timezone                 string
+	protectedMetricPrefixesS string
+	protectedMetricPrefixes  []string
+	querySelectTimeout       time.Duration
+	weekStartAt              int
+	location                 *time.Location
+	utcOffset                int64
+	proxyWhiteList           []string
 }
 
-func (argv *HandlerOptions) Bind(pflag *pflag.FlagSet) {
-	pflag.BoolVar(&argv.insecureMode, "insecure-mode", false, "set insecure-mode if you don't need any access verification")
-	pflag.BoolVar(&argv.LocalMode, "local-mode", false, "set local-mode if you need to have default access without access token")
-	pflag.BoolVar(&argv.querySequential, "query-sequential", false, "disables query parallel execution")
-	pflag.BoolVar(&argv.readOnly, "readonly", false, "read only mode")
-	pflag.BoolVar(&argv.verbose, "verbose", false, "verbose logging")
-	pflag.DurationVar(&argv.querySelectTimeout, "query-select-timeout", QuerySelectTimeoutDefault, "query select timeout")
-	pflag.StringSliceVar(&argv.protectedMetricPrefixes, "protected-metric-prefixes", nil, "comma-separated list of metric prefixes that require access bits set")
-	pflag.StringVar(&argv.timezone, "timezone", "Europe/Moscow", "location of the desired timezone")
-	pflag.IntVar(&argv.weekStartAt, "week-start", int(time.Monday), "week day of beginning of the week (from sunday=0 to saturday=6)")
+func (argv *HandlerOptions) Bind(f *flag.FlagSet) {
+	f.BoolVar(&argv.insecureMode, "insecure-mode", false, "set insecure-mode if you don't need any access verification")
+	f.BoolVar(&argv.LocalMode, "local-mode", false, "set local-mode if you need to have default access without access token")
+	f.BoolVar(&argv.querySequential, "query-sequential", false, "disables query parallel execution")
+	f.BoolVar(&argv.readOnly, "readonly", false, "read only mode")
+	f.BoolVar(&argv.verbose, "verbose", false, "verbose logging")
+	f.DurationVar(&argv.querySelectTimeout, "query-select-timeout", QuerySelectTimeoutDefault, "query select timeout")
+	f.StringVar(&argv.protectedMetricPrefixesS, "protected-metric-prefixes", "", "comma-separated list of metric prefixes that require access bits set")
+	f.StringVar(&argv.timezone, "timezone", "Europe/Moscow", "location of the desired timezone")
+	f.IntVar(&argv.weekStartAt, "week-start", int(time.Monday), "week day of beginning of the week (from sunday=0 to saturday=6)")
+	config.StringSliceVar(f, &argv.proxyWhiteList, "proxy-whitelist", "", "list of hosts to which API is allowed to proxy requests")
 }
 
-func (argv *HandlerOptions) LoadLocation() error {
+func (argv *HandlerOptions) Parse() error {
+	argv.protectedMetricPrefixes = strings.Split(argv.protectedMetricPrefixesS, ",")
+
+	// Parse location
 	if argv.weekStartAt < int(time.Sunday) || argv.weekStartAt > int(time.Saturday) {
 		return fmt.Errorf("invalid --week-start value, only 0-6 allowed %q given", argv.weekStartAt)
 	}

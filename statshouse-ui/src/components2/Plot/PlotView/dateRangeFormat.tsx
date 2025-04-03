@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,9 +6,14 @@
 
 import uPlot from 'uplot';
 
-import { fmtInputDateTime } from 'view/utils2';
+import { fmtInputDateTime } from '@/view/utils2';
 
-export function dateRangeFormat(self: uPlot, rawValue: number, seriesIdx: number, idx: number | null): string | number {
+export function dateRangeFormat(
+  self: uPlot,
+  rawValue: number,
+  _seriesIdx: number,
+  idx: number | null
+): string | number {
   if (idx === null) {
     return rawValue;
   }

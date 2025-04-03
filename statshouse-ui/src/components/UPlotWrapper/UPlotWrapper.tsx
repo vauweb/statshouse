@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,11 +6,11 @@
 
 import React, { memo, ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import uPlot from 'uplot';
-import { debug } from '../../common/debug';
-import { deepClone } from '../../common/helpers';
-import { useResizeObserver } from '../../hooks/useResizeObserver';
+import { debug } from '@/common/debug';
+import { deepClone } from '@/common/helpers';
+import { useResizeObserver } from '@/hooks/useResizeObserver';
 
-export type LegendItem<T = {}> = {
+export type LegendItem<T = Record<string, unknown>> = {
   label: string;
   width: number;
   fill?: string;
@@ -46,7 +46,7 @@ export type UPlotWrapperPropsHooks = {
   onSetSelect?: (u: uPlot) => void;
 };
 
-export type UPlotWrapperProps = {
+export type UPlotWrapperProps<LV = Record<string, unknown>> = {
   opts?: UPlotWrapperPropsOpts;
   data?: uPlot.AlignedData;
   scales?: UPlotWrapperPropsScales;
@@ -54,22 +54,22 @@ export type UPlotWrapperProps = {
   bands?: uPlot.Band[];
   legendTarget?: HTMLDivElement | null;
   onUpdatePreview?: (u: uPlot) => void;
-  onUpdateLegend?: React.Dispatch<React.SetStateAction<LegendItem[]>>;
+  onUpdateLegend?: React.Dispatch<React.SetStateAction<LegendItem<LV>[]>>;
   className?: string;
   children?: ReactNode;
 } & UPlotWrapperPropsHooks;
 
-export const microTask =
+const microTask =
   typeof queueMicrotask === 'undefined' ? (fn: () => void) => Promise.resolve().then(fn) : queueMicrotask;
 
-function readLegend(u: uPlot): LegendItem[] {
+function readLegend<LV = Record<string, unknown>>(u: uPlot): LegendItem<LV>[] {
   let lastIdx = (u.data?.[0]?.length ?? 0) - 1;
   const xMax = u.scales.x?.max ?? 0;
   while (lastIdx >= 0 && u.data?.[0]?.[lastIdx] > xMax) {
     lastIdx--;
   }
   return u.series.map((s, index) => {
-    let idx = u.legend.idxs?.[index];
+    let idx = u.legend.idxs?.[index] ?? null;
     let lastTime = '';
     let deltaTime = 0;
     let noFocus = false;
@@ -83,12 +83,12 @@ function readLegend(u: uPlot): LegendItem[] {
       if (idx / u.data[index].length < 0.9) {
         deltaTime = ((u.data?.[0] && u.data[0][idx]) ?? 0) - xMax;
       }
-      if (index === 0) {
-        lastTime =
-          (typeof s.value === 'function' ? s.value(u, u.data[index][idx], 0, idx) : s.value)
-            ?.toString()
-            .replace('--', '') ?? ''; // replace '--' uplot
-      }
+    }
+    if (idx != null && index === 0) {
+      lastTime =
+        (typeof s.value === 'function' ? s.value(u, u.data[index][idx], 0, idx) : s.value)
+          ?.toString()
+          .replace('--', '') ?? ''; // replace '--' uplot
     }
     return {
       label: s.label ?? '',
@@ -99,7 +99,7 @@ function readLegend(u: uPlot): LegendItem[] {
       stroke: s.stroke instanceof Function ? s.stroke(u, index)?.toString() : s.stroke?.toString(),
       show: s.show ?? false,
       value: u.legend.values?.[index]?.['_']?.toString().replace('--', '') || lastTime, // replace '--' uplot
-      values: typeof idx === 'number' ? s.values?.(u, index, idx) : undefined,
+      values: typeof idx === 'number' ? (s.values?.(u, index, idx) as LV) : undefined,
       alpha: s.alpha,
       dash: s.dash,
       deltaTime,
@@ -113,7 +113,7 @@ const defaultSeries: uPlot.Series[] = [];
 const defaultScales: UPlotWrapperPropsScales = {};
 const defaultBands: uPlot.Band[] = [];
 
-export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
+function UPlotWrapperNoMemo<LV = Record<string, unknown>>({
   opts,
   data = defaultData,
   series = defaultSeries,
@@ -141,13 +141,13 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
   onDraw,
   onSetSelect,
   children,
-}) => {
-  const uRef = useRef<uPlot>();
+}: UPlotWrapperProps<LV>) {
+  const uRef = useRef<uPlot>(undefined);
   const uRefDiv = useRef<HTMLDivElement>(null);
   const { width, height } = useResizeObserver(uRefDiv);
   const hooksEvent = useRef<UPlotWrapperPropsHooks>({});
   const [seriesFocus, setSeriesFocus] = useState<null | number>(null);
-  const [legend, setLegend] = useState<LegendItem[]>([]);
+  const [legend, setLegend] = useState<LegendItem<LV>[]>([]);
 
   useEffect(() => {
     hooksEvent.current = {
@@ -191,14 +191,12 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
 
   const updateScales = useCallback((scales?: UPlotWrapperPropsScales) => {
     if (scales && uRef.current) {
-      const nextScales: UPlotWrapperPropsScales = Object.fromEntries(
-        Object.entries(scales).map(([key, value]) => [key, { ...value }])
-      );
       uRef.current?.batch((u: uPlot) => {
-        Object.entries(nextScales).forEach(([key, scale]) => {
-          u.setScale(key, scale);
+        Object.entries(scales).forEach(([key, scale]) => {
+          u.setScale(key, { ...scale });
         });
       });
+      uRef.current?.redraw(true, true);
     }
   }, []);
 
@@ -214,7 +212,7 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
 
           let nextSeries = series.map((s) => ({
             ...s,
-            show: typeof show[s.label!] !== 'undefined' ? show[s.label!] : s.show ?? true,
+            show: typeof show[s.label!] !== 'undefined' ? show[s.label!] : (s.show ?? true),
           }));
 
           if (nextSeries.every((s) => !s.show)) {
@@ -237,9 +235,7 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
 
   const updateData = useCallback((data: uPlot.AlignedData) => {
     if (uRef.current) {
-      uRef.current.batch((u: uPlot) => {
-        u.setData(deepClone(data));
-      });
+      uRef.current.setData(deepClone(data));
     }
   }, []);
 
@@ -271,7 +267,7 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
 
   const uPlotPlugin = useMemo(
     (): uPlot.Plugin => ({
-      opts: (u, opts) => {
+      opts: (_u, opts) => {
         delete opts.title;
         return opts;
       },
@@ -430,7 +426,9 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
   useEffect(() => {
     if (uRef.current) {
       microTask(() => {
-        uRef.current && onUpdatePreview?.(uRef.current);
+        if (uRef.current) {
+          onUpdatePreview?.(uRef.current);
+        }
       });
     }
   }, [series, data, scales, width, height, onUpdatePreview]);
@@ -440,6 +438,6 @@ export const _UPlotWrapper: React.FC<UPlotWrapperProps> = ({
       {children}
     </div>
   );
-};
+}
 
-export const UPlotWrapper = memo(_UPlotWrapper);
+export const UPlotWrapper = memo(UPlotWrapperNoMemo) as typeof UPlotWrapperNoMemo;

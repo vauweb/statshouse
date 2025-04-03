@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -44,7 +44,12 @@ func init() {
 		parser.TOPK:              funcTopK,
 		parser.SORT:              funcTopK,
 		parser.SORT_DESC:         funcTopK,
+		parser.AGGREGATE:         aggregateNOP,
 	}
+}
+
+func aggregateNOP(ev *evaluator, expr *parser.AggregateExpr) ([]Series, error) {
+	return ev.eval(expr.Expr)
 }
 
 func aggregateAt0(fn func([]SeriesData, parser.Expr)) aggregateFunc {
@@ -583,8 +588,8 @@ func init() {
 			return v
 		}),
 		"sqrt":               simpleCall(math.Sqrt),
-		"time":               generatorCall(funcTime),
-		"timestamp":          seriesCall(funcTimestamp),
+		"time":               funcTimestamp,
+		"timestamp":          funcTimestamp,
 		"vector":             funcVector,
 		"year":               timeCall(time.Time.Year),
 		"avg_over_time":      overTimeCall(funcAvgOverTime, false, NilValue),
@@ -595,7 +600,7 @@ func init() {
 		"quantile_over_time": funcQuantileOverTime,
 		"stddev_over_time":   overTimeCall(funcStdDevOverTime, true, NilValue),
 		"stdvar_over_time":   overTimeCall(funcStdVarOverTime, true, NilValue),
-		"last_over_time":     nopCall,
+		"last_over_time":     overTimeCall(funcLastOverTime, false, NilValue),
 		"present_over_time":  funcPresentOverTime,
 		"acos":               simpleCall(math.Acos),
 		"acosh":              simpleCall(math.Acosh),
@@ -610,7 +615,7 @@ func init() {
 		"tan":                simpleCall(math.Tan),
 		"tanh":               simpleCall(math.Tanh),
 		"deg":                simpleCall(func(v float64) float64 { return v * 180 / math.Pi }),
-		"pi":                 generatorCall(funcPi),
+		"pi":                 funcPi,
 		"rad":                simpleCall(func(v float64) float64 { return v * math.Pi / 180 }),
 	}
 }
@@ -769,20 +774,6 @@ func seriesCall(fn func(*evaluator, Series) Series) callFunc {
 		}
 		return res, nil
 	}
-}
-
-func generatorCall(fn func(ev *evaluator, args parser.Expressions) Series) callFunc {
-	return func(ev *evaluator, args parser.Expressions) ([]Series, error) {
-		res := make([]Series, len(ev.opt.Offsets))
-		for i := range ev.opt.Offsets {
-			res[i] = fn(ev, args)
-		}
-		return res, nil
-	}
-}
-
-func nopCall(ev *evaluator, args parser.Expressions) ([]Series, error) {
-	return ev.eval(args[0])
 }
 
 func overTimeCall(fn func(v []float64) float64, strict bool, nilValue float64) callFunc {
@@ -1180,7 +1171,7 @@ func funcHistogramQuantile(ev *evaluator, args parser.Expressions) ([]Series, er
 					var hi float64    // bucket upper bound count
 					var x int         // bucket upper bound index
 					rank := q * total // quantile corresponding count
-					buckets := res[i].Meta.Metric.HistorgamBuckets
+					buckets := res[i].Meta.Metric.HistogramBuckets
 					for k := 0; x < len(buckets) && k < len(h.buckets); x++ {
 						if buckets[x] == h.buckets[k].le {
 							v := (*d[h.buckets[k].x].Values)[j]
@@ -1421,7 +1412,7 @@ func (ev *evaluator) funcPrefixSum(sr Series) Series {
 			}
 			if j > 0 {
 				for k := range d.MinMaxHost {
-					if j < len(d.MinMaxHost[k]) && d.MinMaxHost[k][j] == 0 && d.MinMaxHost[k][j-1] != 0 {
+					if j < len(d.MinMaxHost[k]) && d.MinMaxHost[k][j].Empty() && !d.MinMaxHost[k][j-1].Empty() {
 						d.MinMaxHost[k][j] = d.MinMaxHost[k][j-1]
 					}
 				}
@@ -1488,24 +1479,34 @@ func funcScalar(ev *evaluator, args parser.Expressions) ([]Series, error) {
 	return res, nil
 }
 
-func funcTime(ev *evaluator, _ parser.Expressions) Series {
-	var (
-		t = ev.time()
-		d = SeriesData{Values: ev.alloc()}
-	)
-	for i := range *d.Values {
-		(*d.Values)[i] = float64(t[i])
-	}
-	return Series{Data: []SeriesData{d}}
-}
-
-func funcTimestamp(ev *evaluator, sr Series) Series {
-	for i := range sr.Data {
-		for j, t := range ev.time() {
-			(*sr.Data[i].Values)[j] = float64(t)
+func funcTimestamp(ev *evaluator, args parser.Expressions) (res []Series, err error) {
+	if len(args) != 0 {
+		res, err = ev.eval(args[0])
+		if err != nil {
+			return res, err
+		}
+	} else {
+		res = make([]Series, len(ev.opt.Offsets))
+		for i := 0; i < len(res); i++ {
+			res[i] = Series{
+				Data: []SeriesData{{
+					Values: ev.alloc(),
+					Offset: ev.opt.Offsets[i],
+				}},
+			}
 		}
 	}
-	return sr
+	for i := 0; i < len(res); i++ {
+		for j := 0; j < len(res[i].Data); j++ {
+			s := *res[i].Data[j].Values
+			v := res[i].Data[j].Offset
+			for k := 0; k < len(s); k++ {
+				s[k] = float64(ev.t.Time[k] - v)
+			}
+		}
+		res[i].Meta.Units = "second"
+	}
+	return res, nil
 }
 
 func funcVector(ev *evaluator, args parser.Expressions) ([]Series, error) {
@@ -1707,12 +1708,27 @@ func funcStdVarOverTime(s []float64) float64 {
 	return res
 }
 
-func funcPi(ev *evaluator, _ parser.Expressions) Series {
-	d := SeriesData{Values: ev.alloc()}
-	for i := range *d.Values {
-		(*d.Values)[i] = math.Pi
+func funcLastOverTime(s []float64) float64 {
+	for i := len(s) - 1; i >= 0; i-- {
+		if !math.IsNaN(s[i]) {
+			return s[i]
+		}
 	}
-	return Series{Data: []SeriesData{d}}
+	return NilValue
+}
+
+func funcPi(ev *evaluator, _ parser.Expressions) ([]Series, error) {
+	res := make([]Series, len(ev.opt.Offsets))
+	for i := 0; i < len(res); i++ {
+		res[i] = Series{
+			Data: []SeriesData{{Values: ev.alloc()}},
+		}
+		s := *res[i].Data[0].Values
+		for j := 0; j < len(s); j++ {
+			s[j] = math.Pi
+		}
+	}
+	return res, nil
 }
 
 // endregion Call

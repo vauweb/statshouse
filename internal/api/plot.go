@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -223,7 +223,7 @@ type gnuplotTemplateData struct {
 func (d *gnuplotTemplateData) WriteData(i int) string {
 	var blank bool
 	for j, v := range *d.Data.Series.SeriesData[i] {
-		if math.IsNaN(v) {
+		if !v.IsDefined() {
 			if !blank {
 				// blank line tells GNUPlot to not connect adjacent points
 				fmt.Fprint(d.wr, "\n")
@@ -545,43 +545,43 @@ func convert(kind string, input int, utcOffset int64) string {
 // XXX: keep in sync with TypeScript
 func WhatToWhatDesc(what string) string {
 	switch what {
-	case ParamQueryFnP999:
+	case format.ParamQueryFnP999:
 		return "p99.9"
-	case ParamQueryFnCountNorm:
+	case format.ParamQueryFnCountNorm:
 		return "count/sec"
-	case ParamQueryFnCumulCount:
+	case format.ParamQueryFnCumulCount:
 		return "count (cumul)"
-	case ParamQueryFnCardinalityNorm:
+	case format.ParamQueryFnCardinalityNorm:
 		return "cardinality/sec"
-	case ParamQueryFnCumulCardinality:
+	case format.ParamQueryFnCumulCardinality:
 		return "cardinality (cumul)"
-	case ParamQueryFnCumulAvg:
+	case format.ParamQueryFnCumulAvg:
 		return "avg (cumul)"
-	case ParamQueryFnSumNorm:
+	case format.ParamQueryFnSumNorm:
 		return "sum/sec"
-	case ParamQueryFnCumulSum:
+	case format.ParamQueryFnCumulSum:
 		return "sum (cumul)"
-	case ParamQueryFnUniqueNorm:
+	case format.ParamQueryFnUniqueNorm:
 		return "unique/sec"
-	case ParamQueryFnMaxCountHost:
+	case format.ParamQueryFnMaxCountHost:
 		return "max(count)@host"
-	case ParamQueryFnDerivativeCount:
+	case format.ParamQueryFnDerivativeCount:
 		return "count (derivative)"
-	case ParamQueryFnDerivativeSum:
+	case format.ParamQueryFnDerivativeSum:
 		return "sum (derivative)"
-	case ParamQueryFnDerivativeAvg:
+	case format.ParamQueryFnDerivativeAvg:
 		return "avg (derivative)"
-	case ParamQueryFnDerivativeCountNorm:
+	case format.ParamQueryFnDerivativeCountNorm:
 		return "count/sec (derivative)"
-	case ParamQueryFnDerivativeSumNorm:
+	case format.ParamQueryFnDerivativeSumNorm:
 		return "sum/sec (derivative)"
-	case ParamQueryFnDerivativeUnique:
+	case format.ParamQueryFnDerivativeUnique:
 		return "unique (derivative)"
-	case ParamQueryFnDerivativeUniqueNorm:
+	case format.ParamQueryFnDerivativeUniqueNorm:
 		return "unique/sec (derivative)"
-	case ParamQueryFnDerivativeMin:
+	case format.ParamQueryFnDerivativeMin:
 		return "min (derivative)"
-	case ParamQueryFnDerivativeMax:
+	case format.ParamQueryFnDerivativeMax:
 		return "max (derivative)"
 	default:
 		return what

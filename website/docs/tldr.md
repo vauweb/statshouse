@@ -108,7 +108,13 @@ Categorize hosts by a _datacenter_, a _cluster_, etc. — not by their names.
       increased sampling.
 3. _Reduce the metric resolution_. Learn [how to customize resolution](guides/edit-metrics.md#resolution).
 4. _Increase the budget_. Only administrators are allowed to [manage budgets](admin/manage-budgets.md) for
-   specific metrics (as well as groups and namespaces). Use this option sparingly.
+   specific metrics (as well as groups and namespaces). Use this option sparingly. 
+
+:::tip
+You can [enable the "Fair key tags" feature](./guides/edit-metrics.md#fair-key-tags) to share the budget fairly 
+between the services sending data to the same metric.
+Read more about [tag-level budgeting](./overview/concepts.md#tag-level-budgeting-fair-key-tags).
+:::
 
 ### Things that do not minimize sampling
 
@@ -118,3 +124,15 @@ Imagine you send two data rows: `[a=1, b=2]` и `[a=1, b=3]` — they are differ
 different tag values. It does not matter if you write four values or one million values to these rows (it works for
 _counter_ and _value_ types). But if your metric generates **two million rows per second**, they **will likely be
 sampled**.
+
+### Why StatsHouse cannot guarantee the absence of sampling
+
+You can't get rid of sampling in general. StatsHouse is designed to work as a communal cluster: the resource is 
+fairly distributed among tenants.
+
+The resource allocated to a tenant is the fixed percentage of the total resource.
+If the resource in your organization has already been distributed among tenants and there are no new ones, then 
+tenants will not interfere with each other, and it is even possible to empirically [minimize sampling](#how-to-minimize-sampling).
+
+Upon scaling (when new tenants appear), the actual budget in bytes may decrease. To solve this problem in the real 
+organization, one should increase the total budget, i.e., physically scale up the cluster.

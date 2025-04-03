@@ -1,10 +1,10 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { dequal } from 'dequal/lite';
 import { produce } from 'immer';
 import { ReactComponent as SVGArrowCounterclockwise } from 'bootstrap-icons/icons/arrow-counterclockwise.svg';
@@ -13,12 +13,12 @@ import { ReactComponent as SVGPlusLg } from 'bootstrap-icons/icons/plus-lg.svg';
 import { ReactComponent as SVGSearch } from 'bootstrap-icons/icons/search.svg';
 
 import { VariableCard } from './VariableCard';
-import { Button } from 'components/UI';
-import { useStatsHouseShallow } from 'store2';
-import { getNewVariable, VariableKey, VariableParams } from 'url2';
-import { ProduceUpdate } from 'store2/helpers';
-import { GET_PARAMS } from 'api/enum';
-import { getNextVariableKey } from 'store2/urlStore/updateParamsPlotStruct';
+import { Button } from '@/components/UI';
+import { useStatsHouseShallow } from '@/store2';
+import { getNewVariable, VariableKey, VariableParams } from '@/url2';
+import { ProduceUpdate } from '@/store2/helpers';
+import { GET_PARAMS } from '@/api/enum';
+import { getNextVariableKey } from '@/store2/urlStore/updateParamsPlotStruct';
 
 export type DashboardVariableProps = {};
 export function DashboardVariable() {
@@ -84,6 +84,22 @@ export function DashboardVariable() {
     setParams((p) => {
       p.variables = localVariable.variables;
       p.orderVariables = localVariable.orderVariables;
+      p.orderVariables.forEach((variabeKey) => {
+        p.variables[variabeKey]?.link.forEach(([plotKey, tagKey]) => {
+          const plot = p.plots[plotKey];
+          if (plot) {
+            if (plot.filterIn[tagKey]) {
+              delete plot.filterIn[tagKey];
+            }
+            if (plot.filterNotIn[tagKey]) {
+              delete plot.filterNotIn[tagKey];
+            }
+            if (plot.groupBy.indexOf(tagKey) > -1) {
+              plot.groupBy = plot.groupBy.filter((tagGroup) => tagGroup !== tagKey);
+            }
+          }
+        });
+      });
     });
   }, [localVariable.orderVariables, localVariable.variables, setParams]);
 

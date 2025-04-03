@@ -1,7 +1,13 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { useCallback, useEffect, useState } from 'react';
 
 function getRect(target: Element, fixed: boolean = false) {
-  let nextRect = target.getBoundingClientRect();
+  const nextRect = target.getBoundingClientRect();
   if (!fixed) {
     nextRect.x += window.scrollX;
     nextRect.y += window.scrollY;

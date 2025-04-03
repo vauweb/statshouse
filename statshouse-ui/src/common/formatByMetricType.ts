@@ -1,5 +1,11 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { formatFixed } from './formatFixed';
-import { METRIC_TYPE, MetricType, QUERY_WHAT, QueryWhat, toMetricType } from '../api/enum';
+import { METRIC_TYPE, MetricType, QUERY_WHAT, QueryWhat, toMetricType } from '@/api/enum';
 import { floor, round } from './helpers';
 
 const siPrefixes = ['y', 'z', 'a', 'f', 'p', 'n', 'μ', 'm', '', 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y'];
@@ -96,8 +102,8 @@ const baseMetricTypeSecond: ConfigConvertMetric = {
       this.baseOffset < 0
         ? Math.pow(10, this.baseOffset * 3)
         : this.baseOffset === 3
-        ? 86400
-        : Math.pow(60, this.baseOffset);
+          ? 86400
+          : Math.pow(60, this.baseOffset);
     const an = Math.abs(n * p);
     if (an < 1) {
       const base = Math.floor(Math.log10(an)) - 2;
@@ -120,8 +126,8 @@ const baseMetricTypeSecond: ConfigConvertMetric = {
       this.baseOffset < 0
         ? Math.pow(10, this.baseOffset * 3)
         : this.baseOffset === 3
-        ? 86400
-        : Math.pow(60, this.baseOffset);
+          ? 86400
+          : Math.pow(60, this.baseOffset);
 
     const normalizeN = n * p;
     const base = this.getBase(n);
@@ -165,6 +171,7 @@ const baseMetricTypeByte: ConfigConvertMetric = {
     '8': 'YiB',
   },
 };
+
 export const suffixesByMetricType: Record<MetricType, ConfigConvertMetric> = {
   [METRIC_TYPE.none]: {
     ...baseMetricTypeSi,
@@ -194,88 +201,12 @@ export const suffixesByMetricType: Record<MetricType, ConfigConvertMetric> = {
 
 export function formatByMetricType(metricType: MetricType): (n: number) => string {
   const conf = suffixesByMetricType[metricType];
+
   return (n: number): string => {
     if (n === 0) {
       return n.toString();
     }
     return conf.format(n);
-  };
-}
-
-export function splitByMetricType(metricType: MetricType) {
-  return (
-    self: unknown, //uPlot unknown for test
-    axisIdx: number,
-    scaleMin: number,
-    scaleMax: number,
-    foundIncr: number,
-    foundSpace: number
-  ): number[] => {
-    let splits: number[] = [];
-    const conf = suffixesByMetricType[metricType];
-    let base = conf.getBase(Math.max(Math.abs(scaleMin), Math.abs(scaleMax)));
-    function fixFloat(v: number) {
-      return round(v, 14);
-    }
-    function incrRoundUp(num: number, incr: number) {
-      return fixFloat(Math.ceil(fixFloat(num / incr)) * incr);
-    }
-    let p = 1;
-    switch (metricType) {
-      case METRIC_TYPE.nanosecond:
-        p = 0.000000001;
-        break;
-      case METRIC_TYPE.microsecond:
-        p = 0.000001;
-        break;
-      case METRIC_TYPE.millisecond:
-        p = 0.001;
-        break;
-      case METRIC_TYPE.byte_as_bits:
-        p = 8;
-        break;
-    }
-    let incr = fixFloat(foundIncr);
-    let start = incrRoundUp(scaleMin, incr);
-    let end = scaleMax + incr / 100;
-    switch (metricType) {
-      case METRIC_TYPE.nanosecond:
-      case METRIC_TYPE.microsecond:
-      case METRIC_TYPE.millisecond:
-      case METRIC_TYPE.second:
-        if (base === 3) {
-          incr = round(foundIncr * p, -1, 43200) / p || round(2 * foundIncr * p, -1, 43200) / p;
-          start = round(incrRoundUp(round(scaleMin * p, -1, 86400), incr)) / p;
-          end = scaleMax + incr / 100;
-        } else if (base > 0) {
-          incr = round(foundIncr * p, -base, 30 * base) / p || round(2 * foundIncr * p, -base, 30 * base) / p;
-          start = round(incrRoundUp(round(scaleMin * p, -base, 60), incr)) / p;
-          end = scaleMax + incr / 100;
-        }
-        break;
-
-      case METRIC_TYPE.byte:
-        if (base > 0) {
-          const r1 = Math.pow(2, 10 * base - base - 1);
-          const r2 = Math.pow(2, 10 * base);
-          const radix = Math.abs(foundIncr - r1) < Math.abs(foundIncr - r2) ? r1 : r2;
-          incr = round(foundIncr * p, -1, radix) / p || round(2 * foundIncr * p, -1, radix) / p;
-          start = round(incrRoundUp(round(scaleMin * p, -1, radix), incr)) / p;
-          end = scaleMax + incr / 100;
-        }
-        break;
-      case METRIC_TYPE.byte_as_bits:
-        // base = conf.getBase(Math.max(Math.abs(8 * scaleMin), Math.abs(8 * scaleMax)));
-        break;
-      default:
-    }
-    if (incr > 0) {
-      for (let val = start; val <= end; val = val + incr) {
-        const pos = round(val, 10);
-        splits.push(pos === minusZero ? 0 : pos);
-      }
-    }
-    return splits;
   };
 }
 
@@ -303,20 +234,3 @@ export function getMetricType(whats?: QueryWhat[], metricType?: string) {
   }
   return toMetricType(metricType, METRIC_TYPE.none);
 }
-
-export const incrs = [
-  1e-16, 2e-16, 2.5e-16, 5e-16, 1e-15, 2e-15, 2.5e-15, 5e-15, 1e-14, 2e-14, 2.5e-14, 5e-14, 1e-13, 2e-13, 2.5e-13,
-  5e-13, 1e-12, 2e-12, 2.5e-12, 5e-12, 1e-11, 2e-11, 2.5e-11, 5e-11, 1e-10, 2e-10, 2.5e-10, 5e-10, 1e-9, 2e-9, 2.5e-9,
-  5e-9, 1e-8, 2e-8, 2.5e-8, 5e-8, 1e-7, 2e-7, 2.5e-7, 5e-7, 0.000001, 0.000002, 0.0000025, 0.000005, 0.00001, 0.00002,
-  0.000025, 0.00005, 0.0001, 0.0002, 0.00025, 0.0005, 0.001, 0.002, 0.0025, 0.005, 0.01, 0.02, 0.025, 0.05, 0.1, 0.2,
-  0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000, 2500, 5000, 10000, 20000, 25000, 50000,
-  100000, 200000, 250000, 500000, 1000000, 2000000, 2500000, 5000000, 10000000, 20000000, 25000000, 50000000, 100000000,
-  200000000, 250000000, 500000000, 1000000000, 2000000000, 2500000000, 5000000000, 10000000000, 20000000000,
-  25000000000, 50000000000, 100000000000, 200000000000, 250000000000, 500000000000, 1000000000000, 2000000000000,
-  2500000000000, 5000000000000, 10000000000000, 20000000000000, 25000000000000, 50000000000000, 100000000000000,
-  200000000000000, 250000000000000, 500000000000000, 1000000000000000, 2000000000000000, 2500000000000000,
-  5000000000000000, 10e15, 25e15, 50e15, 10e16, 25e16, 50e16, 10e17, 25e17, 50e17, 10e18, 25e18, 50e18, 10e19, 25e19,
-  50e19, 10e20, 25e20, 50e20, 10e21, 25e21, 50e21, 10e22, 25e22, 50e22, 10e23, 25e23, 50e23, 10e24, 25e24, 50e24, 10e25,
-  25e25, 50e25, 10e26, 25e26, 50e26, 10e27, 25e27, 50e27, 10e28, 25e28, 50e28, 10e29, 25e29, 50e29, 10e30, 25e30, 50e30,
-  10e31, 25e31, 50e31,
-];

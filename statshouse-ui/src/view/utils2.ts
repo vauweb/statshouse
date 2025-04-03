@@ -1,9 +1,14 @@
-import { MetricMetaValue } from '../api/metric';
-import { isTagKey, TAG_KEY, TagKey } from '../api/enum';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import { MetricMetaValue } from '@/api/metric';
+import { isTagKey, TAG_KEY, TagKey } from '@/api/enum';
 import uPlot from 'uplot';
-import { TimeRange } from '../common/TimeRange';
-import { formatFixed } from '../common/formatFixed';
-import { formatFixedFloor } from '../common/formatFixedFloor';
+import { formatFixed } from '@/common/formatFixed';
+import { formatFixedFloor } from '@/common/formatFixedFloor';
 import { RawValueKind } from './api';
 
 export function isValidVariableName(name: string): boolean {
@@ -39,6 +44,16 @@ export function getTagDescription(meta: MetricMetaValue | undefined, tagKey: num
   return `tag ${tagKey}`;
 }
 
+export function getTagValue(meta: MetricMetaValue | undefined, tagKey: TagKey | null, value: string): string {
+  if (tagKey != null) {
+    const infoTag = meta?.tags?.[+tagKey];
+    if (infoTag?.raw || infoTag?.raw_kind != null) {
+      return parseRawToInt(infoTag.raw_kind, value);
+    }
+  }
+  return value;
+}
+
 export function secondsRangeToString(seconds: number, short?: boolean): string {
   const suffix: Array<[number, string, string, string]> = [
     [60, 'second', 'seconds', 's'],
@@ -48,8 +63,8 @@ export function secondsRangeToString(seconds: number, short?: boolean): string {
     [0, 'year', 'years', 'y'],
   ];
   let range = seconds;
-  let result = [];
-  for (let key in suffix) {
+  const result = [];
+  for (const key in suffix) {
     if (suffix[key][0] > 0) {
       const num = range % (suffix[key][0] as number);
       if (num > 0) {
@@ -306,39 +321,6 @@ export function timeRangeAbbrevExpand(abbr: timeRangeAbbrev, to: number): timeRa
   }
 }
 
-export function timeRangeToAbbrev(r: TimeRange): timeRangeAbbrev | '' {
-  const tolerance = 60;
-  const candidates: timeRangeAbbrev[] = [
-    'last-5m',
-    'last-15m',
-    'last-1h',
-    'last-2h',
-    'last-6h',
-    'last-12h',
-    'last-1d',
-    'last-2d',
-    'last-3d',
-    'last-7d',
-    'last-14d',
-    'last-30d',
-    'last-90d',
-    'last-180d',
-    'last-1y',
-    'last-2y',
-  ];
-
-  for (const abbr of candidates) {
-    const rr = timeRangeAbbrevExpand(abbr, now());
-    if (
-      Math.abs(rr.from - r.relativeFrom) <= tolerance &&
-      (Math.abs(rr.to - r.to) <= tolerance || Math.abs(r.relativeTo) <= tolerance)
-    ) {
-      return abbr;
-    }
-  }
-  return '';
-}
-
 export function timeRangeToAbbrev2(r: timeRange): timeRangeAbbrev | '' {
   const tolerance = 60;
   const candidates: timeRangeAbbrev[] = [
@@ -398,8 +380,13 @@ export function timeShiftToDash(ts: number, usedDashes: Record<string, number[]>
   return (usedDashes[ts.toString()] = dashes[nextKey]);
 }
 
-export function formatLegendValue(value: number | null): string {
-  if (value === null) {
+export function timeShiftToDashGenerator() {
+  const usedDashes = {};
+  return (time_shift: number) => (time_shift ? timeShiftToDash(time_shift, usedDashes) : undefined);
+}
+
+export function formatLegendValue(value?: number | null): string {
+  if (value == null) {
     return '';
   }
   const abs = Math.abs(value);
@@ -411,8 +398,8 @@ export function ieee32ToFloat(intval: number): number {
   let fval = 0.0;
   let x; //exponent
   let m; //mantissa
-  let s; //sign
-  s = intval & 0x80000000 ? -1 : 1;
+  //sign
+  const s = intval & 0x80000000 ? -1 : 1;
   x = (intval >> 23) & 0xff;
   m = intval & 0x7fffff;
   switch (x) {
@@ -432,41 +419,196 @@ export function ieee32ToFloat(intval: number): number {
   }
   return fval;
 }
+export function floatToIeee32(value: number): number {
+  if (isNaN(value)) {
+    return NaN;
+  }
+  if (!value) {
+    return 0;
+  }
+  const dataView = new DataView(new ArrayBuffer(4));
+  dataView.setFloat32(0, value);
+  return dataView.getInt32(0, false);
+}
+
+export function intToUint(value: number): number {
+  if (isNaN(value)) {
+    return NaN;
+  }
+  const dataView = new DataView(new ArrayBuffer(4));
+  dataView.setInt32(0, value);
+  return dataView.getUint32(0, false);
+}
+
+export function uintToInt(value: number): number {
+  if (isNaN(value)) {
+    return NaN;
+  }
+  const dataView = new DataView(new ArrayBuffer(4));
+  dataView.setUint32(0, value);
+  return dataView.getInt32(0, false);
+}
+
+export function bigUInt64ToBigInt64(value: bigint): bigint {
+  const dataView = new DataView(new ArrayBuffer(8));
+  dataView.setBigUint64(0, value);
+  return dataView.getBigInt64(0, false);
+}
 
 export function lexDecode(intval: number): number {
   return ieee32ToFloat(intval < 0 ? (intval >>> 0) ^ 0x7fffffff : intval >>> 0);
 }
 
-export function convert(kind: RawValueKind | undefined, input: number): string {
+export function lexEncode(value: number): number {
+  const num = floatToIeee32(value);
+  if (isNaN(num)) {
+    return NaN;
+  }
+  return num < 0 ? (num >>> 0) ^ 0x7fffffff : num >>> 0;
+}
+
+export function convert(kind: RawValueKind | undefined, input: string): string {
+  if (input[0] !== ' ') {
+    return input;
+  }
+  const input32 = parseInt(input);
+  switch (kind) {
+    case 'hex': {
+      const biteArr = new Uint8Array(4);
+      const dataView = new DataView(biteArr.buffer);
+      dataView.setInt32(0, input32);
+      return '0x' + ('00000000' + dataView.getUint32(0, false).toString(16)).slice(-8);
+    }
+    case 'hex_bswap': {
+      const biteArr = new Uint8Array(4);
+      const dataView = new DataView(biteArr.buffer);
+      dataView.setInt32(0, input32);
+      biteArr.reverse();
+      return '0x' + ('00000000' + dataView.getUint32(0, false).toString(16)).slice(-8);
+    }
+    case 'hex64': {
+      const biteArr = new Uint8Array(8);
+      const dataView = new DataView(biteArr.buffer);
+      dataView.setBigInt64(0, BigInt(input));
+      return '0x' + ('0000000000000000' + dataView.getBigUint64(0, false).toString(16)).slice(-16);
+    }
+    case 'hex64_bswap': {
+      const biteArr = new Uint8Array(8);
+      const dataView = new DataView(biteArr.buffer);
+      dataView.setBigInt64(0, BigInt(input));
+      biteArr.reverse();
+      return '0x' + ('0000000000000000' + dataView.getBigUint64(0, false).toString(16)).slice(-16);
+    }
+    case 'timestamp':
+      return fmtInputDateTime(uPlot.tzDate(new Date(intToUint(input32) * 1000), 'UTC'));
+    case 'timestamp_local':
+      return fmtInputDateTime(new Date(intToUint(input32) * 1000));
+    case 'ip':
+      return (
+        ((input32 >> 24) & 255) + '.' + ((input32 >> 16) & 255) + '.' + ((input32 >> 8) & 255) + '.' + (input32 & 255)
+      );
+    case 'ip_bswap':
+      return (
+        (input32 & 255) + '.' + ((input32 >> 8) & 255) + '.' + ((input32 >> 16) & 255) + '.' + ((input32 >> 24) & 255)
+      );
+    case 'uint':
+      return intToUint(input32).toString(10);
+    case 'lexenc_float':
+      return parseFloat(lexDecode(input32).toPrecision(8)).toString(10);
+    case 'float':
+      return parseFloat(ieee32ToFloat(input32).toPrecision(8)).toString(10);
+    case 'int64':
+      try {
+        return BigInt(input).toString(10);
+      } catch (_) {
+        return input;
+      }
+    case 'uint64':
+      try {
+        return BigInt.asUintN(64, BigInt(input)).toString(10);
+      } catch (_) {
+        return input;
+      }
+    case 'int':
+      return input32.toString(10);
+    default:
+      return input;
+  }
+}
+export function parseRawToInt(kind: RawValueKind | undefined, value: string): string {
+  if (value[0] === ' ') {
+    return value;
+  }
   switch (kind) {
     case 'hex':
-      return '0x' + `00000000${(input >>> 0).toString(16)}`.slice(-8);
-    case 'hex_bswap':
-      return (
-        '0x' +
-        (`00${(input & 255).toString(16)}`.slice(-2) +
-          `00${((input >> 8) & 255).toString(16)}`.slice(-2) +
-          `00${((input >> 16) & 255).toString(16)}`.slice(-2) +
-          `00${((input >> 24) & 255).toString(16)}`.slice(-2))
-      );
-    case 'timestamp':
-      return fmtInputDateTime(uPlot.tzDate(new Date(input * 1000), 'UTC'));
+      return ' ' + (parseInt(value, 16) << 0);
+    case 'hex_bswap': {
+      const biteArr = new Uint8Array(4);
+      const dataView = new DataView(biteArr.buffer);
+      dataView.setInt32(0, parseInt(value, 16) << 0);
+      biteArr.reverse();
+      return ' ' + dataView.getInt32(0, false);
+    }
+    case 'hex64':
+      return ' ' + BigInt.asIntN(64, BigInt(value)).toString(10);
+    case 'hex64_bswap': {
+      const biteArr = new Uint8Array(8);
+      const dataView = new DataView(biteArr.buffer);
+      dataView.setBigInt64(0, BigInt.asIntN(64, BigInt(value)));
+      biteArr.reverse();
+      return ' ' + dataView.getBigInt64(0, false).toString(10);
+    }
+    case 'timestamp': {
+      const date = new Date(value);
+      return ' ' + uintToInt(Math.floor((+date - date.getTimezoneOffset() * 6e4) / 1000));
+    }
     case 'timestamp_local':
-      return fmtInputDateTime(new Date(input * 1000));
-    case 'ip':
-      return ((input >> 24) & 255) + '.' + ((input >> 16) & 255) + '.' + ((input >> 8) & 255) + '.' + (input & 255);
-    case 'ip_bswap':
-      return (input & 255) + '.' + ((input >> 8) & 255) + '.' + ((input >> 16) & 255) + '.' + ((input >> 24) & 255);
+      return ' ' + uintToInt(Math.floor(+new Date(value) / 1000));
+    case 'ip': {
+      const strSplit = value.split('.');
+      const biteArr = new Uint8Array(4);
+      biteArr[0] = parseInt(strSplit[0]) ?? 0;
+      biteArr[1] = parseInt(strSplit[1]) ?? 0;
+      biteArr[2] = parseInt(strSplit[2]) ?? 0;
+      biteArr[3] = parseInt(strSplit[3]) ?? 0;
+      const dataView = new DataView(biteArr.buffer);
+      return ' ' + dataView.getInt32(0, false).toString(10);
+    }
+    case 'ip_bswap': {
+      const strSplit = value.split('.');
+      const biteArr = new Uint8Array(4);
+      biteArr[3] = parseInt(strSplit[0]) ?? 0;
+      biteArr[2] = parseInt(strSplit[1]) ?? 0;
+      biteArr[1] = parseInt(strSplit[2]) ?? 0;
+      biteArr[0] = parseInt(strSplit[3]) ?? 0;
+      const dataView = new DataView(biteArr.buffer);
+      return ' ' + dataView.getInt32(0, false).toString(10);
+    }
     case 'uint':
-      return (input >>> 0).toString(10);
+      return ' ' + uintToInt(parseInt(value, 10));
     case 'lexenc_float':
-      return parseFloat(lexDecode(input).toPrecision(8)).toString(10);
-    case 'float':
-      const buffer = new ArrayBuffer(4);
-      const dataView = new DataView(buffer);
-      dataView.setInt32(0, input, false);
-      return parseFloat(dataView.getFloat32(0, false).toPrecision(8)).toString(10);
+      return ' ' + lexEncode(parseFloat(value));
+    case 'float': {
+      const input = parseFloat(value);
+      return ' ' + floatToIeee32(input);
+    }
+    case 'int64': {
+      try {
+        return ' ' + BigInt(value);
+      } catch (_) {
+        return value;
+      }
+    }
+    case 'uint64': {
+      try {
+        return ' ' + bigUInt64ToBigInt64(BigInt(value));
+      } catch (_) {
+        return value;
+      }
+    }
+    case 'int':
+      return ' ' + parseInt(value);
     default:
-      return input.toString(10);
+      return value;
   }
 }

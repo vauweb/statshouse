@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -22,6 +22,7 @@ export const initialValues: IMetric = {
   resolution: 1,
   withPercentiles: false,
   visible: true,
+  disable: false,
   tags: [getDefaultTag()],
   tags_draft: [],
   tagsSize: 1,
@@ -35,11 +36,16 @@ export type IActions =
   | { type: 'preSortKey'; key: string }
   | { type: 'group_id'; key: string }
   | { type: 'move_draft'; pos: number; tag: Partial<ITag>; tag_key: string }
-  | { type: 'fair_key_tag_ids'; value?: string[] | null };
+  | { type: 'fair_key_tag_ids'; value?: string[] | null }
+  | { type: 'reset'; newState?: IMetric };
 
 export function reducer(state: IMetric, data: IActions): IMetric {
   if (!('type' in data)) {
     return { ...state, ...data };
+  }
+
+  if (data.type === 'reset') {
+    return { ...initialValues, ...(data.newState || {}) };
   }
 
   if (data.type === 'numTags') {
@@ -109,7 +115,7 @@ export function reducer(state: IMetric, data: IActions): IMetric {
   }
 
   if (data.type === 'move_draft') {
-    let newState: IMetric = {
+    const newState: IMetric = {
       ...state,
       tags: [...state.tags],
       tags_draft: [...state.tags_draft.filter((t) => t.name !== data.tag.name)],

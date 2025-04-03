@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -81,12 +81,8 @@ func Test_SaveMetric(t *testing.T) {
 	e, err := db.SaveEntity(context.Background(), "a", 0, 0, "{}", true, false, format.MetricEvent, metadata)
 	require.NoError(t, err)
 	require.Equal(t, metadata, e.Metadata)
-	updates, err := db.JournalEvents(context.Background(), 0, 100)
-	require.NoError(t, err)
-	require.Len(t, updates, 1)
-	m := updates[0]
-	require.Equal(t, "a", m.Name)
-	require.Equal(t, "{}", m.Data)
+	_, err = db.SaveEntity(context.Background(), "a", 0, 0, "{}", true, false, format.MetricEvent, metadata)
+	require.Error(t, err)
 }
 
 func Test_GetOldVersion(t *testing.T) {

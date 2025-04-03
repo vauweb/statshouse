@@ -1,4 +1,10 @@
-import { type PlotParams } from '../../queryParams';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import type { PlotParams } from '../../queryParams';
 import { getNewMetric } from './getNewMetric';
 import { GET_PARAMS, metricTypeToMetricTypeUrl, PLOT_TYPE, type TagKey } from '../../../api/enum';
 import { toPlotPrefix } from '../../urlHelpers';
@@ -88,21 +94,36 @@ export function metricEncode(plot: PlotParams, defaultPlot: PlotParams = getNewM
   }
 
   if (!dequal(defaultPlot.events, plot.events)) {
-    plot.events.forEach((e) => {
-      paramArr.push([prefix + GET_PARAMS.metricEvent, e]);
-    });
+    //remove metric event
+    if (plot.events.length === 0 && defaultPlot.events.length > 0) {
+      paramArr.push([prefix + GET_PARAMS.metricEvent, removeValueChar]);
+    } else {
+      plot.events.forEach((e) => {
+        paramArr.push([prefix + GET_PARAMS.metricEvent, e]);
+      });
+    }
   }
 
   if (!dequal(defaultPlot.eventsBy, plot.eventsBy)) {
-    plot.eventsBy.forEach((e) => {
-      paramArr.push([prefix + GET_PARAMS.metricEventBy, e]);
-    });
+    //remove event by
+    if (plot.eventsBy.length === 0 && defaultPlot.eventsBy.length > 0) {
+      paramArr.push([prefix + GET_PARAMS.metricEventBy, removeValueChar]);
+    } else {
+      plot.eventsBy.forEach((e) => {
+        paramArr.push([prefix + GET_PARAMS.metricEventBy, e]);
+      });
+    }
   }
 
   if (!dequal(defaultPlot.eventsHide, plot.eventsHide)) {
-    plot.eventsHide.forEach((e) => {
-      paramArr.push([prefix + GET_PARAMS.metricEventHide, e]);
-    });
+    //remove event hide
+    if (plot.eventsHide.length === 0 && defaultPlot.eventsHide.length > 0) {
+      paramArr.push([prefix + GET_PARAMS.metricEventHide, removeValueChar]);
+    } else {
+      plot.eventsHide.forEach((e) => {
+        paramArr.push([prefix + GET_PARAMS.metricEventHide, e]);
+      });
+    }
   }
 
   if (defaultPlot.totalLine !== plot.totalLine) {
@@ -113,14 +134,23 @@ export function metricEncode(plot: PlotParams, defaultPlot: PlotParams = getNewM
     paramArr.push([prefix + GET_PARAMS.viewFilledGraph, plot.filledGraph ? '1' : '0']);
   }
 
+  if (defaultPlot.logScale !== plot.logScale) {
+    paramArr.push([prefix + GET_PARAMS.viewLogScale, plot.logScale ? '1' : '0']);
+  }
+
   if (defaultPlot.prometheusCompat !== plot.prometheusCompat) {
     paramArr.push([prefix + GET_PARAMS.prometheusCompat, plot.prometheusCompat ? '1' : '0']);
   }
 
   if (!dequal(defaultPlot.timeShifts, plot.timeShifts)) {
-    plot.timeShifts.forEach((t) => {
-      paramArr.push([prefix + GET_PARAMS.metricLocalTimeShifts, t.toString()]);
-    });
+    //remove local time shifts
+    if (plot.timeShifts.length === 0 && defaultPlot.timeShifts.length > 0) {
+      paramArr.push([prefix + GET_PARAMS.metricLocalTimeShifts, removeValueChar]);
+    } else {
+      plot.timeShifts.forEach((t) => {
+        paramArr.push([prefix + GET_PARAMS.metricLocalTimeShifts, t.toString()]);
+      });
+    }
   }
   if (!paramArr.length && !defaultPlot.id) {
     if (plot.metricName === promQLMetric) {

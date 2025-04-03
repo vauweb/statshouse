@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,39 +7,24 @@
 import { createStore, type Store } from './createStore';
 import { updateTitle, urlStore, type UrlStore } from './urlStore';
 import { useShallow } from 'zustand/react/shallow';
-import { userStore, type UserStore } from './userStore';
-import { plotsInfoStore, type PlotsInfoStore } from './plotsInfoStore';
+import { type UserStore, userStore } from './userStore';
+import { type PlotsInfoStore, plotsInfoStore } from './plotsInfoStore';
 import { updateLiveMode, useLiveModeStore } from './liveModeStore';
-import { metricMetaStore, MetricMetaStore } from './metricsMetaStore';
 import { usePlotPreviewStore } from './plotPreviewStore';
-import { plotHealsStore, type PlotHealsStore } from './plotHealsStore';
-import { plotsDataStore, PlotsDataStore } from './plotDataStore';
-import { plotEventsDataStore, PlotEventsDataStore } from './plotEventsDataStore';
+import { type PlotHealsStore, plotHealsStore } from './plotHealsStore';
 import { updateFavicon } from './helpers/updateFavicon';
 import { useVariableChangeStatusStore } from './variableChangeStatusStore';
 import { dequal } from 'dequal/lite';
-import { useLinkPlots } from 'hooks/useLinkPlot';
+import { useLinkPlots } from '@/hooks/useLinkPlot';
 import { updateTheme } from './themeStore';
-import { viewPath } from './constants';
-import { getUrlObject } from '../common/getUrlObject';
-import { getAddPlotLink } from './helpers';
 
-export type StatsHouseStore = UrlStore &
-  UserStore &
-  PlotsInfoStore &
-  MetricMetaStore &
-  PlotHealsStore &
-  PlotsDataStore &
-  PlotEventsDataStore;
+export type StatsHouseStore = UrlStore & UserStore & PlotsInfoStore & PlotHealsStore;
 
 const statsHouseStore: Store<StatsHouseStore> = (...props) => ({
   ...urlStore(...props),
   ...userStore(...props),
   ...plotsInfoStore(...props),
-  ...metricMetaStore(...props),
   ...plotHealsStore(...props),
-  ...plotsDataStore(...props),
-  ...plotEventsDataStore(...props),
 });
 export const useStatsHouse = createStore<StatsHouseStore>(statsHouseStore);
 
@@ -52,12 +37,10 @@ useLiveModeStore.setState(updateLiveMode(useStatsHouse.getState()));
 useStatsHouse.subscribe((state, prevState) => {
   const {
     params: { tabNum, plots, dashboardName, variables, orderVariables },
-    plotsData,
     dashboardLayoutEdit,
   } = state;
   const {
     params: { tabNum: prevTabNum, plots: prevPlots, dashboardName: prevDashboardName, variables: prevVariables },
-    plotsData: prevPlotsData,
   } = prevState;
 
   if (
@@ -75,13 +58,8 @@ useStatsHouse.subscribe((state, prevState) => {
     });
   });
 
-  if (
-    tabNum !== prevTabNum ||
-    plots[tabNum] !== prevPlots[prevTabNum] ||
-    plotsData[tabNum] !== prevPlotsData[prevTabNum] ||
-    dashboardName !== prevDashboardName
-  ) {
-    updateTitle(state);
+  if (tabNum !== prevTabNum || plots[tabNum] !== prevPlots[prevTabNum] || dashboardName !== prevDashboardName) {
+    updateTitle(state.params.tabNum, state.params.dashboardName, state.params.plots[state.params.tabNum]);
     updateFavicon(usePlotPreviewStore.getState().plotPreviewUrlList[tabNum]);
   }
 

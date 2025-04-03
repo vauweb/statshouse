@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,12 +7,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import cn from 'classnames';
 import { ReactComponent as SVGChevronUp } from 'bootstrap-icons/icons/chevron-up.svg';
 import { ReactComponent as SVGChevronDown } from 'bootstrap-icons/icons/chevron-down.svg';
-import { Tooltip } from 'components/UI';
-import { FilterTag } from 'url2';
-import { MetricMetaValue } from 'api/metric';
-import { emptyObject } from 'common/helpers';
-import { toTagKey } from 'api/enum';
-import { formatTagValue } from 'view/api';
+import { Tooltip } from '@/components/UI';
+import { FilterTag } from '@/url2';
+import { MetricMetaValue } from '@/api/metric';
+import { emptyObject } from '@/common/helpers';
+import { toTagKey } from '@/api/enum';
+import { formatTagValue } from '@/view/api';
 
 export type BadgesProps = {
   children?: React.ReactNode;

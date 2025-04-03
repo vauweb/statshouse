@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,7 +8,7 @@ import React from 'react';
 
 import css from './style.module.css';
 import cn from 'classnames';
-import { Tooltip } from 'components/UI';
+import { Tooltip } from '@/components/UI';
 
 export type AlignByDotProps = {
   value: string;
@@ -20,7 +20,7 @@ export type AlignByDotProps = {
 export const AlignByDot: React.FC<AlignByDotProps> = ({ value, title, unit = '', className }) => {
   const [i, f = ''] = value.replace(unit, '').split('.', 2);
   return (
-    <Tooltip<'span'> as="span" className={cn(className)} title={title}>
+    <Tooltip<'span'> as="span" className={cn(className, 'font-monospace')} title={title}>
       <span>{i}</span>
       <span className={cn(css.dotSpace)}>
         {f && '.'}

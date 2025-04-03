@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -291,10 +291,18 @@ func run() error {
 	start := strconv.FormatInt(format.TagValueIDHeartbeatEventStart, 10)
 	heartbeat := strconv.FormatInt(format.TagValueIDHeartbeatEventHeartbeat, 10)
 
-	statshouse.Value(format.BuiltinMetricNameHeartbeatVersion, statshouse.Tags{1: component, 2: start}, 0)
+	heartbeatTags := statshouse.Tags{
+		1: component,
+		2: start,
+		4: fmt.Sprint(build.CommitTag()),
+		6: fmt.Sprint(build.CommitTimestamp()),
+		7: srvfunc.HostnameForStatshouse(),
+	}
+	statshouse.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, 0)
+	heartbeatTags[2] = heartbeat
 	defer statshouse.StopRegularMeasurement(statshouse.StartRegularMeasurement(func(c *statshouse.Client) {
 		uptime := float64(time.Now().Unix() - startTimestamp)
-		c.Value(format.BuiltinMetricNameHeartbeatVersion, statshouse.Tags{1: component, 2: heartbeat}, uptime)
+		c.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, uptime)
 	}))
 
 	proxy := metadata.ProxyHandler{Host: host}

@@ -1,13 +1,13 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { useCallback } from 'react';
-import { useError } from 'hooks/useError';
-import { useErrorStore } from 'store/errors';
-import { Button } from 'components/UI';
+import { useCallback } from 'react';
+import { useError } from '@/hooks/useError';
+import { useErrorStore } from '@/store2/errors';
+import { Button } from '@/components/UI';
 
 export type ErrorMessagesProps = {
   channel?: string;

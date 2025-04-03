@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -12,14 +12,14 @@ import {
   namespaceLoad,
   namespaceSave,
   useNamespaceListStore,
-} from 'store/namespace';
+} from '@/store2/namespace';
 import { ReactComponent as SVGPlus } from 'bootstrap-icons/icons/plus.svg';
 import cn from 'classnames';
-import { toNumber } from 'common/helpers';
+import { toNumber } from '@/common/helpers';
 import { produce } from 'immer';
-import { type Namespace } from 'api/namespace';
-import { ErrorMessages } from '../../components/ErrorMessages';
-import { InputText } from '../../components/UI';
+import type { Namespace } from '@/api/namespace';
+import { ErrorMessages } from '@/components/ErrorMessages';
+import { InputText } from '@/components/UI';
 
 type SelectNamespace = {
   namespace: Pick<Namespace, 'name' | 'weight'> & Partial<Omit<Namespace, 'name' | 'weight'>>;

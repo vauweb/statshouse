@@ -16,8 +16,8 @@ type (
 		user              string
 		metricMeta        *format.MetricMetaValue
 		isStringTop       bool
-		mappedFilterIn    map[string][]interface{}
-		mappedFilterNotIn map[string][]interface{}
+		mappedFilterIn    data_model.TagFilters
+		mappedFilterNotIn data_model.TagFilters
 		rawValue          bool
 		desiredStepMul    int64
 		location          *time.Location
@@ -29,11 +29,11 @@ type (
 	}
 )
 
-type loadPoints func(ctx context.Context, version string, key string, pq *preparedPointsQuery, lod data_model.LOD, avoidCache bool) ([][]tsSelectRow, error)
-type maybeAddQuerySeriesTagValue func(m map[string]SeriesMetaTag, metricMeta *format.MetricMetaValue, version string, by []string, tagIndex int, id int32) bool
+type loadPointsFunc func(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD, avoidCache bool) ([][]tsSelectRow, error)
+type maybeAddQuerySeriesTagValue func(m map[string]SeriesMetaTag, metricMeta *format.MetricMetaValue, version string, by []string, tagIndex int, id int64) bool
 
-func getTableFromLODs(ctx context.Context, lods []data_model.LOD, tableReqParams tableReqParams,
-	loadPoints loadPoints,
+func (h *requestHandler) getTableFromLODs(ctx context.Context, lods []data_model.LOD, tableReqParams tableReqParams,
+	loadPoints loadPointsFunc,
 	maybeAddQuerySeriesTagValue maybeAddQuerySeriesTagValue) (_ []queryTableRow, hasMore bool, _ error) {
 	req := tableReqParams.req
 	metricMeta := tableReqParams.metricMeta
@@ -48,23 +48,9 @@ func getTableFromLODs(ctx context.Context, lods []data_model.LOD, tableReqParams
 	if toTime == 0 {
 		toTime = math.MaxInt
 	}
-	for qIndex, q := range tableReqParams.req.what {
+	what := h.getHandlerWhat(req.what)
+	for qIndex, q := range what {
 		rowsCount := 0
-		kind := q.What.Kind(req.maxHost)
-		qs := normalizedQueryString(req.metricName, kind, req.by, req.filterIn, req.filterNotIn, true)
-		pq := &preparedPointsQuery{
-			user:        tableReqParams.user,
-			version:     req.version,
-			metricID:    metricMeta.MetricID,
-			preKeyTagID: metricMeta.PreKeyTagID,
-			isStringTop: tableReqParams.isStringTop,
-			kind:        kind,
-			by:          req.by,
-			filterIn:    tableReqParams.mappedFilterIn,
-			filterNotIn: tableReqParams.mappedFilterNotIn,
-			orderBy:     true,
-			desc:        req.fromEnd,
-		}
 		for k := range lods {
 			if tableReqParams.req.fromEnd {
 				k = len(lods) - k - 1
@@ -73,10 +59,23 @@ func getTableFromLODs(ctx context.Context, lods []data_model.LOD, tableReqParams
 			if toTime < lod.FromSec || lod.ToSec < fromTime {
 				continue
 			}
-			m, err := loadPoints(ctx, req.version, qs, pq, data_model.LOD{
+			pq := queryBuilder{
+				version:     h.version,
+				user:        tableReqParams.user,
+				metric:      metricMeta,
+				what:        q.qry,
+				by:          metricMeta.GroupBy(req.by),
+				filterIn:    tableReqParams.mappedFilterIn,
+				filterNotIn: tableReqParams.mappedFilterNotIn,
+				sort:        req.tableSort(),
+				strcmpOff:   h.Version3StrcmpOff.Load(),
+				utcOffset:   h.utcOffset,
+			}
+			m, err := loadPoints(ctx, h, &pq, data_model.LOD{
 				FromSec:    shiftTimestamp(lod.FromSec, lod.StepSec, 0, lod.Location),
 				ToSec:      shiftTimestamp(lod.ToSec, lod.StepSec, 0, lod.Location),
 				StepSec:    lod.StepSec,
+				Version:    lod.Version,
 				Table:      lod.Table,
 				HasPreKey:  lod.HasPreKey,
 				PreKeyOnly: lod.PreKeyOnly,
@@ -105,9 +104,14 @@ func getTableFromLODs(ctx context.Context, lods []data_model.LOD, tableReqParams
 						})
 					}
 				}
-				skey := maybeAddQuerySeriesTagValueString(kvs, req.by, &tags.tagStr)
-				rowRepr.SKey = skey
-				data := selectTSValue(q.What, req.maxHost, tableReqParams.desiredStepMul, &rows[i])
+				if tags.stag[format.StringTopTagIndexV3] != "" {
+					rowRepr.SKey = maybeAddQuerySeriesTagValueString(kvs, req.by, tags.stag[format.StringTopTagIndexV3])
+				} else if tags.tag[format.StringTopTagIndexV3] != 0 {
+					v := h.getRichTagValue(metricMeta, req.version, format.StringTopTagID, tags.tag[format.StringTopTagIndexV3])
+					v = emptyToUnspecified(v)
+					kvs[format.LegacyStringTopTagID] = SeriesMetaTag{Value: v}
+					rowRepr.SKey = v
+				}
 				key := tableRowKey{
 					time:   rows[i].time,
 					tsTags: rows[i].tsTags,
@@ -119,24 +123,24 @@ func getTableFromLODs(ctx context.Context, lods []data_model.LOD, tableReqParams
 					rowsIdx[key] = ix
 					queryRows = append(queryRows, queryTableRow{
 						Time:    rows[i].time,
-						Data:    make([]float64, 0, len(req.what)),
+						Data:    make([]Float64, 0, len(req.what)),
 						Tags:    kvs,
 						row:     rows[i],
 						rowRepr: rowRepr,
 					})
 					for j := 0; j < qIndex; j++ {
-						queryRows[ix].Data = append(queryRows[ix].Data, math.NaN())
+						queryRows[ix].Data = append(queryRows[ix].Data, NaN())
 					}
 					shouldSort = shouldSort || qIndex > 0
 				}
 				used[ix] = struct{}{}
-				queryRows[ix].Data = append(queryRows[ix].Data, data)
+				queryRows[ix].Data = q.appendRowValues(queryRows[ix].Data, &rows[i], tableReqParams.desiredStepMul, &lod)
 			}
 			for _, ix := range rowsIdx {
 				if _, ok := used[ix]; ok {
 					delete(used, ix)
 				} else {
-					queryRows[ix].Data = append(queryRows[ix].Data, math.NaN())
+					queryRows[ix].Data = append(queryRows[ix].Data, NaN())
 				}
 			}
 			if hasMoreValues {
@@ -182,14 +186,22 @@ func limitQueries(rowsByTime [][]tsSelectRow, from, to RowMarker, fromEnd bool, 
 
 func inRange(row tsSelectRow, from, to RowMarker, fromEnd bool) bool {
 	if from.Time != 0 {
-		if !lessThan(from, row, skeyFromFixedString(&row.tsTags.tagStr), false, fromEnd) {
+		if !lessThan(from, row, row.tsTags.stag[format.StringTopTagIndexV3], false, fromEnd) {
 			return false
 		}
 	}
 	if to.Time != 0 {
-		if lessThan(to, row, skeyFromFixedString(&row.tsTags.tagStr), true, fromEnd) {
+		if lessThan(to, row, row.tsTags.stag[format.StringTopTagIndexV3], true, fromEnd) {
 			return false
 		}
 	}
 	return true
+}
+
+func (r *seriesRequest) tableSort() querySort {
+	if r.fromEnd {
+		return sortDescending
+	} else {
+		return sortAscending
+	}
 }

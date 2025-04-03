@@ -20,6 +20,9 @@ import PqlDash1 from '../img/pql-dash-1.png'
 import PqlDash2 from '../img/pql-dash-2.png'
 import PqlDash3 from '../img/pql-dash-3.png'
 import PqlDash4 from '../img/pql-dash-4.png'
+import MarkdownDashboard from '../img/markdown_dashboard.png'
+import MarkdownDashboardEdit from '../img/markdown_dashboard_edit.png'
+import FavoriteDashboards from '../img/favorite-dashboards.png'
 
 # Как пользоваться дашбордами
 
@@ -49,6 +52,14 @@ import PqlDash4 from '../img/pql-dash-4.png'
 
 <img src={DashList} width="700"/>
 
+## Избранные дашборды
+
+Чтобы поместить часто используемый дашборд в список избранного, нажмите на "звёздочку" рядом с названием дашборда:
+
+<img src={FavoriteDashboards} width="400"/>
+
+Метрики тоже можно [помещать в список избранного](./view-graph.md#избранные-метрики).
+
 ## Создание дашборда
 
 StatsHouse автоматически помещает открытый график на дашборд.
@@ -77,6 +88,15 @@ StatsHouse автоматически помещает открытый граф
 В разделе _Setting_ можно указать название дашборда и добавить более подробное описание:
 
 <img src={DashName} width="800"/>
+
+В описаниях можно использовать [стандартную разметку Markdown](https://commonmark.org/help/).
+
+<img src={MarkdownDashboardEdit} width="650"/>
+
+Обратите внимание: форматирование отобразится только при наведении курсора на описание графика (в "тултипе" с
+описанием).
+
+<img src={MarkdownDashboard} width="650"/>
 
 Чтобы завершить создание дашборда, нажмите кнопку _Create_. Кнопка активна только тогда, когда у дашборда есть название.
 

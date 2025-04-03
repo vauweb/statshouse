@@ -1,5 +1,11 @@
-import type { PlotParams } from '../../queryParams';
-import { METRIC_VALUE_BACKEND_VERSION, PLOT_TYPE, QUERY_WHAT } from '../../../api/enum';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import type { PlotParams } from '@/url2';
+import { METRIC_VALUE_BACKEND_VERSION, PLOT_TYPE, QUERY_WHAT } from '@/api/enum';
 
 export function getNewMetric(): PlotParams {
   return {
@@ -27,7 +33,10 @@ export function getNewMetric(): PlotParams {
     eventsHide: [],
     totalLine: false,
     filledGraph: true,
+    logScale: false,
     timeShifts: [],
     prometheusCompat: false,
   };
 }
+
+export const defaultMetric = Object.freeze(getNewMetric());

@@ -1,7 +1,13 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 export type EventObserverCallback = (...payload: any[]) => void;
 export class EventObserver<T extends string> {
   protected _ob: Record<string, EventObserverCallback[]> = {};
-  protected _lastTriggerPayload: Record<string, any[]> = {};
+  protected _lastTriggerPayload: Record<string, unknown[]> = {};
   protected _lastTrigger = false;
 
   constructor(lastTrigger: boolean = false) {

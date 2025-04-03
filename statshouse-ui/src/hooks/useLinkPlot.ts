@@ -1,12 +1,18 @@
-import { type PlotKey } from 'url2';
-import { useStatsHouse, useStatsHouseShallow, viewPath } from 'store2';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import type { PlotKey } from '@/url2';
+import { useStatsHouse, useStatsHouseShallow, viewPath } from '@/store2';
 import { useEffect, useMemo } from 'react';
-import { getAddPlotLink, getPlotLink, getPlotSingleLink } from 'store2/helpers';
+import { getAddPlotLink, getPlotLink, getPlotSingleLink } from '@/store2/helpers';
 import { To } from 'react-router-dom';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
-import { usePlotVisibilityStore } from 'store2/plotVisibilityStore';
-import { getUrlObject } from '../common/getUrlObject';
+import { usePlotVisibilityStore } from '@/store2/plotVisibilityStore';
+import { getUrlObject } from '@/common/getUrlObject';
 
 type LinkPlot = {
   plotLinks: Partial<Record<PlotKey, To>>;
@@ -70,7 +76,7 @@ export function useLinkPlot(plotKey: PlotKey, visible?: boolean, single?: boolea
   return link;
 }
 
-export function useAddLinkPlot(visible: boolean): To {
+export function useAddLinkPlot(_visible: boolean): To {
   const { params, saveParams } = useStatsHouseShallow(({ params, saveParams }) => ({ params, saveParams }));
   return useMemo<To>(
     () => ({

@@ -1,11 +1,11 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { isTagKey, TAG_KEY, TagKey, toTagKey } from 'api/enum';
+import { isTagKey, TAG_KEY, TagKey, toTagKey } from '@/api/enum';
 
 import { ReactComponent as SVGTrash } from 'bootstrap-icons/icons/trash.svg';
 import { ReactComponent as SVGPencil } from 'bootstrap-icons/icons/pencil.svg';
@@ -13,14 +13,15 @@ import cn from 'classnames';
 import { produce } from 'immer';
 import { TagBadges } from './TagBadges';
 import { dequal } from 'dequal/lite';
-import { mergeLeft } from 'common/helpers';
-import { FilterTag, VariableParamsSource, VariableSourceKey } from 'url2';
-import { useStatsHouseShallow } from 'store2';
-import { setUpdatedSource, useVariableListStore, VariableItem } from 'store2/variableList';
-import { getTagDescription, isTagEnabled } from 'view/utils2';
-import { Button, ToggleButton } from 'components/UI';
-import { SelectMetric } from 'components/SelectMertic';
-import { VariableControl } from 'components/VariableControl';
+import { mergeLeft } from '@/common/helpers';
+import { FilterTag, VariableParamsSource, VariableSourceKey } from '@/url2';
+import { setUpdatedSource, useVariableListStore, VariableItem } from '@/store2/variableList';
+import { getTagDescription, isTagEnabled } from '@/view/utils2';
+import { Button, ToggleButton } from '@/components/UI';
+import { SelectMetric } from '@/components/SelectMertic';
+import { VariableControl } from '@/components/VariableControl';
+import { useMetricMeta } from '@/hooks/useMetricMeta';
+import { useMetricName } from '@/hooks/useMetricName';
 
 export type VariableSourceProps = {
   value?: VariableParamsSource;
@@ -37,14 +38,9 @@ export function VariableSource({ value, valueKey = '0', onChange }: VariableSour
   const listTags = useVariableListStore<Partial<Record<TagKey, VariableItem>>>(
     ({ source }) => (localMetric && source[localMetric]) ?? {}
   );
-  // const listTags = useVariableListStore<Partial<Record<TagKey, VariableItem>>>(
-  //   (s) => (localMetric && s.source[localMetric]) ?? {}
-  // );
-  const { meta, loadMetricMeta } = useStatsHouseShallow(({ metricMeta, loadMetricMeta }) => ({
-    meta: metricMeta[localMetric ?? ''],
-    loadMetricMeta,
-  }));
-  // const meta = useStore((s) => s.metricsMeta[localMetric ?? '']);
+
+  const meta = useMetricMeta(useMetricName(true));
+
   const prevValue = useRef(value);
 
   const negativeTags = useMemo(() => {
@@ -162,10 +158,9 @@ export function VariableSource({ value, valueKey = '0', onChange }: VariableSour
     if (!localMetric) {
       setLocalTag(undefined);
     } else {
-      loadMetricMeta(localMetric);
       setLocalTag((t) => (t != null ? t : TAG_KEY._0));
     }
-  }, [loadMetricMeta, localMetric]);
+  }, [localMetric]);
 
   useEffect(() => {
     if (dequal(prevValue.current, value)) {
@@ -231,7 +226,7 @@ export function VariableSource({ value, valueKey = '0', onChange }: VariableSour
             <SelectMetric value={localMetric} onChange={onChangeMetric} placeholder={placeholder} />
           </div>
           <div>
-            {(meta?.tags || []).map((t, indexTag) => {
+            {(meta?.tags || []).map((_t, indexTag) => {
               const tagKey = toTagKey(indexTag, TAG_KEY._0);
               return !tagKey || !isTagEnabled(meta, tagKey) ? null : (
                 <div key={indexTag} className="form-check">

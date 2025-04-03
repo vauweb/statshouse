@@ -21,7 +21,7 @@ esac
 NAME_RELEASE=$(echo $NAME_RELEASE | sed -e 's/-/./g;s/:/./g')
 
 if [[ -z $GOLANG_VERSION ]]; then
-  GOLANG_VERSION='1.21.9'
+  GOLANG_VERSION='1.22.9'
   echo "Go version is not specified, using $GOLANG_VERSION"
 fi
 
@@ -93,7 +93,7 @@ docker run -i --rm -u "$UID:$GID" -v "$PWD:/src" -w /src \
   -e BUILD_TIME \
   $BUILD_IMAGE /bin/bash <<EOF
   set -x &&\
-  make build-sh build-sh-metadata build-sh-api &&\
+  make build-sh build-sh-metadata build-sh-api build-igp build-agg &&\
   mkdir -p BUILD BUILDROOT SOURCES SPECS SRPMS RPMS &&\
   cp build/statshouse.spec SPECS/statshouse.spec &&\
   BUILD_VERSION=\$(echo $BUILD_VERSION | sed -e 's:-:.:g') &&\

@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,14 +9,12 @@ import { ReactComponent as SVGListCheck } from 'bootstrap-icons/icons/list-check
 import { PlotEventsSelectColumns } from './PlotEventsSelectColumns';
 import cn from 'classnames';
 import css from './style.module.css';
-import { Button } from 'components/UI';
-import { PlotKey } from 'url2';
+import { Button } from '@/components/UI';
 
 export type PlotEventsButtonColumnsProps = {
-  plotKey: PlotKey;
   loader?: boolean;
 };
-export function PlotEventsButtonColumns({ plotKey, loader }: PlotEventsButtonColumnsProps) {
+export function PlotEventsButtonColumns({ loader }: PlotEventsButtonColumnsProps) {
   const [eventColumnShow, setEventColumnShow] = useState(false);
   const toggleEventColumnShow = useCallback((event?: React.MouseEvent) => {
     setEventColumnShow((s) => !s);
@@ -38,7 +36,6 @@ export function PlotEventsButtonColumns({ plotKey, loader }: PlotEventsButtonCol
       </Button>
       {eventColumnShow && (
         <PlotEventsSelectColumns
-          plotKey={plotKey}
           className="position-absolute card p-2 start-100 top-0"
           onClose={toggleEventColumnShow}
         />

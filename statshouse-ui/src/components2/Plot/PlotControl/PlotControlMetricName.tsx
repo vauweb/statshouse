@@ -1,31 +1,45 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo, useCallback } from 'react';
-import { SelectMetric } from 'components/SelectMertic';
-import { useStatsHouseShallow } from 'store2';
-import { type PlotKey } from 'url2';
+import { memo, useCallback } from 'react';
+import { SelectMetric } from '@/components/SelectMertic';
+import { useMetricName } from '@/hooks/useMetricName';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
+import { filterVariableByPlot } from '@/store2/helpers/filterVariableByPlot';
+import { StatsHouseStore, useStatsHouseShallow } from '@/store2';
+import { setParams } from '@/store2/methods';
 
-export type PlotControlMetricNameProps = {
-  plotKey: PlotKey;
-};
-export function _PlotControlMetricName({ plotKey }: PlotControlMetricNameProps) {
-  const { metricName, setPlot, removeVariableLinkByPlotKey } = useStatsHouseShallow(
-    ({ params: { plots }, setPlot, removeVariableLinkByPlotKey }) => ({
-      metricName: plots[plotKey]?.metricName,
-      setPlot,
-      removeVariableLinkByPlotKey,
-    })
-  );
+const selectorStore = ({ params: { variables, orderVariables } }: StatsHouseStore) => ({ variables, orderVariables });
+
+export const PlotControlMetricName = memo(function PlotControlMetricName() {
+  const { variables, orderVariables } = useStatsHouseShallow(selectorStore);
+  const { plot, setPlot } = useWidgetPlotContext();
+  const metricName = useMetricName(true);
+
+  const removeVariableLink = useCallback(() => {
+    const plotFilter = filterVariableByPlot(plot);
+    const variableKeys = orderVariables.filter((vK) => plotFilter(variables[vK]));
+    if (variableKeys.length) {
+      setParams((params) => {
+        variableKeys.forEach((vK) => {
+          const variable = params.variables[vK];
+          if (variable) {
+            variable.link = variable.link.filter(([pKey]) => pKey !== plot.id);
+          }
+        });
+      }, true);
+    }
+  }, [orderVariables, plot, variables]);
+
   const onChange = useCallback(
     (value?: string | string[]) => {
       if (typeof value !== 'string') {
         return;
       }
-      setPlot(plotKey, (p) => {
+      setPlot((p) => {
         p.metricName = value;
         p.customName = '';
         p.groupBy = [];
@@ -33,11 +47,9 @@ export function _PlotControlMetricName({ plotKey }: PlotControlMetricNameProps) 
         p.filterNotIn = {};
         p.customDescription = '';
       });
-      removeVariableLinkByPlotKey(plotKey);
+      removeVariableLink();
     },
-    [plotKey, removeVariableLinkByPlotKey, setPlot]
+    [removeVariableLink, setPlot]
   );
   return <SelectMetric value={metricName} onChange={onChange} />;
-}
-
-export const PlotControlMetricName = memo(_PlotControlMetricName);
+});

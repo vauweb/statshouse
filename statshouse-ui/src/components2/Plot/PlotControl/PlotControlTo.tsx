@@ -1,53 +1,49 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { type ChangeEvent, memo, useCallback } from 'react';
+import { type ChangeEvent, memo, useCallback } from 'react';
 
-import { ReactComponent as SVGLockClock } from 'assets/svg/LockClock.svg';
-import { ReactComponent as SVGUnlockClock } from 'assets/svg/UnlockClock.svg';
+import { ReactComponent as SVGLockClock } from '@/assets/svg/LockClock.svg';
+import { ReactComponent as SVGUnlockClock } from '@/assets/svg/UnlockClock.svg';
 import cn from 'classnames';
-import { ToggleButton } from 'components/UI';
-import { TIME_RANGE_KEYS_TO } from 'api/enum';
-import { useStatsHouseShallow } from 'store2';
-import { constToTime } from 'url2';
-import {
-  formatInputDate,
-  formatInputTime,
-  maxTimeRange,
-  now,
-  parseInputDate,
-  parseInputTime,
-} from '../../../view/utils2';
+import { ToggleButton } from '@/components/UI';
+import { TIME_RANGE_KEYS_TO } from '@/api/enum';
+import { constToTime, readTimeRange } from '@/url2';
+import { formatInputDate, formatInputTime, maxTimeRange, now, parseInputDate, parseInputTime } from '@/view/utils2';
+import { StatsHouseStore, useStatsHouse } from '@/store2';
+import { setParams } from '@/store2/methods';
 
 export type PlotControlToProps = {
   className?: string;
   classNameInput?: string;
 };
 
-export const _PlotControlTo: React.FC<PlotControlToProps> = ({ className, classNameInput }) => {
-  const { timeRange, setTimeRange } = useStatsHouseShallow(({ params: { timeRange }, setTimeRange }) => ({
-    timeRange,
-    setTimeRange,
-  }));
+const selectorStore = ({ params: { timeRange } }: StatsHouseStore) => timeRange;
+
+export const PlotControlTo = memo(function PlotControlTo({ className, classNameInput }: PlotControlToProps) {
+  const timeRange = useStatsHouse(selectorStore);
 
   const onRelativeToChange = useCallback(
     (status: boolean) => {
       if (status) {
-        setTimeRange({
-          from: timeRange.from,
-          to:
+        setParams((p) => {
+          p.timeRange = readTimeRange(
+            timeRange.from,
             Object.values(TIME_RANGE_KEYS_TO).find(
               (key) => Math.abs(timeRange.to - constToTime(timeRange.now, key)) < 60
-            ) ?? TIME_RANGE_KEYS_TO.Now,
+            ) ?? TIME_RANGE_KEYS_TO.Now
+          );
         });
       } else {
-        setTimeRange({ from: timeRange.from, to: timeRange.to });
+        setParams((p) => {
+          p.timeRange = readTimeRange(timeRange.from, timeRange.to);
+        });
       }
     },
-    [setTimeRange, timeRange.from, timeRange.now, timeRange.to]
+    [timeRange.from, timeRange.now, timeRange.to]
   );
 
   const onToDateChange = useCallback(
@@ -59,9 +55,11 @@ export const _PlotControlTo: React.FC<PlotControlToProps> = ({ className, classN
       }
       const nextTime = new Date(timeRange.to * 1000);
       nextTime.setFullYear(y, m, d);
-      setTimeRange({ from: timeRange.from, to: Math.floor(+nextTime / 1000) });
+      setParams((p) => {
+        p.timeRange = readTimeRange(timeRange.from, Math.floor(+nextTime / 1000));
+      });
     },
-    [setTimeRange, timeRange.from, timeRange.to]
+    [timeRange.from, timeRange.to]
   );
 
   const onToTimeChange = useCallback(
@@ -70,9 +68,11 @@ export const _PlotControlTo: React.FC<PlotControlToProps> = ({ className, classN
       const [h, m, sec] = v !== '' ? parseInputTime(v) : [0, 0, 0];
       const nextTime = new Date(timeRange.to * 1000);
       nextTime.setHours(h, m, sec);
-      setTimeRange({ from: timeRange.from, to: Math.floor(+nextTime / 1000) });
+      setParams((p) => {
+        p.timeRange = readTimeRange(timeRange.from, Math.floor(+nextTime / 1000));
+      });
     },
-    [setTimeRange, timeRange.from, timeRange.to]
+    [timeRange.from, timeRange.to]
   );
 
   return (
@@ -103,6 +103,4 @@ export const _PlotControlTo: React.FC<PlotControlToProps> = ({ className, classN
       </ToggleButton>
     </div>
   );
-};
-
-export const PlotControlTo = memo(_PlotControlTo);
+});

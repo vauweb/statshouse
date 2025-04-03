@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,25 +11,23 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/vkgo/vkuth"
 )
 
 type accessInfo struct {
-	user                 string
-	service              bool
-	insecureMode         bool // full access to everything; can not be obtained from bits
-	protectedPrefixes    []string
-	bitAdmin             bool
-	bitDeveloper         bool
-	bitViewDefault       bool
-	bitEditDefault       bool
-	bitViewPrefix        map[string]bool
-	bitEditPrefix        map[string]bool
-	bitViewMetric        map[string]bool
-	bitEditMetric        map[string]bool
-	skipBadgesValidation bool
+	user              string
+	service           bool
+	insecureMode      bool // full access to everything; can not be obtained from bits
+	protectedPrefixes []string
+	bitAdmin          bool
+	bitDeveloper      bool
+	bitViewDefault    bool
+	bitEditDefault    bool
+	bitViewPrefix     map[string]bool
+	bitEditPrefix     map[string]bool
+	bitViewMetric     map[string]bool
+	bitEditMetric     map[string]bool
 }
 
 func parseAccessToken(jwtHelper *vkuth.JWTHelper,
@@ -122,13 +120,10 @@ func (ai *accessInfo) protectedMetric(name string) bool {
 }
 
 func (ai *accessInfo) CanViewMetricName(name string) bool {
-	if name == format.BuiltinMetricNameBadges && ai.skipBadgesValidation {
-		return true
-	}
 	if ai.insecureMode {
 		return true
 	}
-	if data_model.RemoteConfigMetric(name) && !ai.bitAdmin {
+	if format.RemoteConfigMetric(name) && !ai.bitAdmin {
 		return false // remote config can only be viewed by administrators
 	}
 	return ai.bitViewMetric[name] ||
@@ -148,7 +143,7 @@ func (ai *accessInfo) canChangeMetricByName(create bool, old format.MetricMetaVa
 	oldName := old.Name
 	newName := new_.Name
 
-	if data_model.RemoteConfigMetric(oldName) || data_model.RemoteConfigMetric(newName) {
+	if format.RemoteConfigMetric(oldName) || format.RemoteConfigMetric(newName) {
 		return false // remote config can only be set by administrators
 	}
 	return ai.bitEditMetric[oldName] && ai.bitEditMetric[newName] ||

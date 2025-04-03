@@ -1,15 +1,15 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { createStore, type StoreSlice } from '../createStore';
-import { type StatsHouseStore, useStatsHouse } from '../statsHouseStore';
+import { type StatsHouseStore, useStatsHouse } from '@/store2';
 import { isValidPath, type ProduceUpdate } from '../helpers';
-import { appHistory } from 'common/appHistory';
-import { debug } from 'common/debug';
-import { METRIC_VALUE_BACKEND_VERSION, TIME_RANGE_KEYS_TO } from 'api/enum';
+import { appHistory } from '@/common/appHistory';
+import { debug } from '@/common/debug';
+import { METRIC_VALUE_BACKEND_VERSION, TIME_RANGE_KEYS_TO } from '@/api/enum';
 import { useShallow } from 'zustand/react/shallow';
 
 export type LiveModeStore = {
@@ -18,7 +18,7 @@ export type LiveModeStore = {
   disabled: boolean;
 };
 
-export const liveModeStore: StoreSlice<LiveModeStore, LiveModeStore> = (setState, getState, store) => {
+export const liveModeStore: StoreSlice<LiveModeStore, LiveModeStore> = (_setState, _getState, store) => {
   let id: NodeJS.Timeout | undefined = undefined;
 
   store.subscribe((state, prevState) => {

@@ -1,15 +1,17 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { useCallback, useEffect } from 'react';
-import { TAG_KEY, TagKey, toTagKey } from 'api/enum';
-import { PlotKey, promQLMetric } from 'url2';
-import { useStatsHouseShallow } from 'store2';
-import { getMetricFullName } from 'store2/helpers';
-import { getTagDescription, isTagEnabled } from '../../../view/utils2';
+import React, { useCallback, useMemo } from 'react';
+import { TAG_KEY, TagKey, toTagKey } from '@/api/enum';
+import { PlotKey, promQLMetric } from '@/url2';
+import { getMetricFullName, getMetricName } from '@/store2/helpers';
+import { getTagDescription, isTagEnabled } from '@/view/utils2';
+import { useMetricMeta } from '@/hooks/useMetricMeta';
+import { useStatsHouse } from '@/store2';
+import { usePlotsDataStore } from '@/store2/plotDataStore';
 
 export type VariablePlotLinkSelectProps = {
   plotKey: PlotKey;
@@ -17,20 +19,11 @@ export type VariablePlotLinkSelectProps = {
   onChange?: (plotKey: PlotKey, selectTag?: TagKey) => void;
 };
 export function VariablePlotLinkSelect({ plotKey, selectTag, onChange }: VariablePlotLinkSelectProps) {
-  const { plot, plotData, metricName, metricMeta, loadMetricMeta } = useStatsHouseShallow(
-    ({ params: { plots }, metricMeta, plotsData, loadMetricMeta }) => {
-      const metricName =
-        (plots[plotKey]?.metricName !== promQLMetric ? plots[plotKey]?.metricName : plotsData[plotKey]?.metricName) ??
-        '';
-      return {
-        plot: plots[plotKey],
-        plotData: plotsData[plotKey],
-        metricName,
-        metricMeta: metricMeta[metricName],
-        loadMetricMeta,
-      };
-    }
-  );
+  const plot = useStatsHouse(useCallback(({ params: { plots } }) => plots[plotKey], [plotKey]));
+  const plotData = usePlotsDataStore(useCallback(({ plotsData }) => plotsData[plotKey], [plotKey]));
+  const metricName = useMemo(() => getMetricName(plot, plotData), [plot, plotData]);
+  const metricMeta = useMetricMeta(metricName, true);
+
   const changeTag = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
       const iTag = toTagKey(e.currentTarget.value) ?? undefined;
@@ -38,10 +31,6 @@ export function VariablePlotLinkSelect({ plotKey, selectTag, onChange }: Variabl
     },
     [plotKey, onChange]
   );
-
-  useEffect(() => {
-    loadMetricMeta(metricName);
-  }, [loadMetricMeta, metricName]);
 
   if (plot == null) {
     return null;
@@ -55,7 +44,7 @@ export function VariablePlotLinkSelect({ plotKey, selectTag, onChange }: Variabl
         ) : (
           <select className="form-select form-select-sm" value={selectTag?.toString() ?? 'null'} onChange={changeTag}>
             <option value="null">-</option>
-            {metricMeta?.tags?.map((tag, indexTag) => {
+            {metricMeta?.tags?.map((_tag, indexTag) => {
               const keyTag = toTagKey(indexTag);
               return (
                 keyTag != null &&

@@ -20,9 +20,13 @@ mkdir -p %{buildroot}/usr/lib/statshouse-api/statshouse-ui/
 install -m 755 %{_topdir}/target/statshouse-api %{buildroot}/usr/bin/
 install -m 755 %{_topdir}/target/statshouse %{buildroot}/usr/share/engine/bin
 install -m 755 %{_topdir}/target/statshouse-metadata %{buildroot}/usr/share/engine/bin
+install -m 755 %{_topdir}/target/statshouse-igp %{buildroot}/usr/share/engine/bin
+install -m 755 %{_topdir}/target/statshouse-agg %{buildroot}/usr/share/engine/bin
 cp -a %{_topdir}/statshouse-ui/build/* %{buildroot}/usr/lib/statshouse-api/statshouse-ui/
 install -m 444 %{_topdir}/cmd/statshouse-api/statshouse-api.service %{buildroot}/usr/lib/systemd/system/
 install -m 444 %{_topdir}/cmd/statshouse/statshouse.service %{buildroot}/usr/lib/systemd/system/
+install -m 444 %{_topdir}/cmd/statshouse/statshouse.service %{buildroot}/usr/lib/systemd/system/statshouse-igp.service
+install -m 444 %{_topdir}/cmd/statshouse/statshouse.service %{buildroot}/usr/lib/systemd/system/statshouse-agg.service
 
 %files
 /usr/share/engine/bin/statshouse
@@ -45,3 +49,17 @@ Group: misc
 %description metadata
 %files metadata
 /usr/share/engine/bin/statshouse-metadata
+
+%package igp
+Summary: Provides ingress proxy for StatsHouse.
+%description igp
+%files igp
+/usr/share/engine/bin/statshouse-igp
+/usr/lib/systemd/system/statshouse-igp.service
+
+%package agg
+Summary: Provides aggregator for StatsHouse.
+%description agg
+%files agg
+/usr/share/engine/bin/statshouse-agg
+/usr/lib/systemd/system/statshouse-agg.service

@@ -1,10 +1,10 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { ReactComponent as SVGSortAlphaDown } from 'bootstrap-icons/icons/sort-alpha-down.svg';
 import { ReactComponent as SVGLayers } from 'bootstrap-icons/icons/layers.svg';
 import { Select, SelectOptionProps } from '../Select';
@@ -17,7 +17,7 @@ export type TagSelectProps = {
   onBlur?: () => void;
   options?: SelectOptionProps[];
   moreOption?: boolean;
-  customValue?: boolean;
+  customValue?: boolean | ((value: string) => SelectOptionProps);
   groupBy?: boolean;
   setGroupBy?: (value: boolean) => void;
   sort?: boolean;
@@ -27,7 +27,8 @@ export type TagSelectProps = {
   loading?: boolean;
   placeholder?: string;
 };
-export function _TagSelect({
+
+export const TagSelect = memo(function TagSelect({
   values,
   onChange,
   onBlur,
@@ -81,6 +82,4 @@ export function _TagSelect({
       )}
     </>
   );
-}
-
-export const TagSelect = memo(_TagSelect);
+});

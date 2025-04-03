@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,12 +8,12 @@ package aggregator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tl"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
@@ -33,24 +33,12 @@ type autoCreate struct {
 	ctx        context.Context
 	shutdownFn func()
 
-	defaultNamespaceAllowed bool      // never changes
-	knownTags               KnownTags // protected by "configMu"
-	scrapeNamespaces        []int32   // protected by "configMu"
+	defaultNamespaceAllowed bool                 // never changes
+	knownTags               data_model.KnownTags // protected by "configMu"
+	scrapeNamespaces        []int32              // protected by "configMu"
 	configMu                sync.RWMutex
 
 	running bool // guard against double "run"
-}
-
-type KnownTags map[int32]knownTags
-
-type knownTags struct {
-	namespace map[string]string           // namespace level tags
-	groups    map[int32]map[string]string // group level tags, by group ID
-}
-
-type KnownTagsJSON struct {
-	Namespace map[string]string            `json:"known_tags,omitempty"` // tag name -> tag ID
-	Groups    map[string]map[string]string `json:"groups,omitempty"`     // group name -> tag name -> tag ID
 }
 
 func newAutoCreate(a *Aggregator, client *tlmetadata.Client, defaultNamespaceAllowed bool) *autoCreate {
@@ -77,7 +65,7 @@ func (ac *autoCreate) run(storage *metajournal.MetricsStorage) {
 func (ac *autoCreate) applyConfig(configID int32, configS string) {
 	switch configID {
 	case format.KnownTagsConfigID:
-		if v, err := ParseKnownTags([]byte(configS), ac.storage); err == nil {
+		if v, err := data_model.ParseKnownTags([]byte(configS), ac.storage); err == nil {
 			ac.configMu.Lock()
 			ac.knownTags = v
 			ac.configMu.Unlock()
@@ -203,7 +191,6 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 			Name:        string(validName),
 			Description: string(args.Description),
 			Tags:        make([]format.MetricMetaTag, format.MaxTags),
-			Visible:     true,
 			Kind:        string(args.Kind),
 		}
 		if i := strings.Index(value.Name, ":"); i != -1 {
@@ -215,6 +202,10 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 			value.Resolution = int(args.Resolution)
 		} else {
 			value.Resolution = 1
+		}
+		err = value.BeforeSavingCheck()
+		if err != nil {
+			return fmt.Errorf("BeforeSavingCheck failed: %w", err)
 		}
 		err = value.RestoreCachedInfo()
 		if err != nil {
@@ -230,7 +221,7 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 		if len(value.TagsDraft) >= format.MaxDraftTags {
 			break
 		}
-		if _, ok := value.Name2Tag[string(tagName)]; ok {
+		if tag := value.Name2TagBytes(tagName); tag != nil {
 			continue // already mapped
 		}
 		if _, ok := value.GetTagDraft(tagName); ok {
@@ -241,12 +232,6 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 			continue // tag name is not valid
 		}
 		t := format.MetricMetaTag{Name: string(validName)}
-		if t.Name == format.LETagName {
-			t.Description = "histogram bucket label"
-			t.Index = format.LETagIndex
-			t.Raw = true
-			t.RawKind = "lexenc_float"
-		}
 		if value.TagsDraft == nil {
 			value.TagsDraft = map[string]format.MetricMetaTag{t.Name: t}
 		} else {
@@ -262,7 +247,7 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 		return nil // nothing to do
 	}
 	// build edit request
-	data, err := json.Marshal(value)
+	data, err := value.MarshalBinary()
 	if err != nil {
 		return fmt.Errorf("failed to serialize metric: %w", err)
 	}
@@ -275,11 +260,9 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 			Data:      string(data),
 		},
 	}
-	var tags [16]int32
-	if metricExists {
-		tags[1] = 2 // edit
-	} else {
-		tags[1] = 1 // create
+	tagEditCreate := int32(2) // edit
+	if !metricExists {
+		tagEditCreate = 1 // create
 		edit.SetCreate(true)
 	}
 	// issue RPC call
@@ -288,41 +271,39 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 	defer cancel()
 	err = ac.client.EditEntitynew(ctx, edit, nil, &ret)
 	if err != nil {
-		tags[2] = 2 // failure
-		ac.agg.sh2.AddCounter(ac.agg.aggKey(uint32(time.Now().Unix()), format.BuiltinMetricIDAutoCreateMetric, tags), 1, format.BuiltinMetricMetaAutoCreateMetric)
+		ac.agg.sh2.AddCounter(uint32(time.Now().Unix()), format.BuiltinMetricMetaAutoCreateMetric,
+			[]int32{0, tagEditCreate, 2}, 1) // 2 - failure
 		return fmt.Errorf("failed to create or update metric: %w", err)
 	}
 	// succeeded, wait a bit until changes applied locally
-	tags[2] = 1 // success
-	ac.agg.sh2.AddCounter(ac.agg.aggKey(uint32(time.Now().Unix()), format.BuiltinMetricIDAutoCreateMetric, tags), 1, format.BuiltinMetricMetaAutoCreateMetric)
+	ac.agg.sh2.AddCounter(uint32(time.Now().Unix()), format.BuiltinMetricMetaAutoCreateMetric,
+		[]int32{0, tagEditCreate, 1}, 1) // 1 - success
 	ctx, cancel = context.WithTimeout(ac.ctx, 5*time.Second)
 	defer cancel()
-	_ = ac.storage.Journal().WaitVersion(ctx, ret.Version)
+	_ = ac.storage.WaitVersion(ctx, ret.Version)
 	return nil
 }
 
-func (ac *autoCreate) publishDraftTags(meta *format.MetricMetaValue) int {
+func (ac *autoCreate) publishDraftTags(meta *format.MetricMetaValue) (n int) {
 	ac.configMu.RLock()
 	defer ac.configMu.RUnlock()
-	if len(ac.knownTags) == 0 {
-		return 0
+	if ac.knownTags != nil {
+		n = ac.knownTags.PublishDraftTags(meta)
 	}
-	return ac.knownTags.PublishDraftTags(meta)
+	return n
 }
 
-func (ac *autoCreate) namespaceAllowed(namespaceID int32) bool {
+func (ac *autoCreate) namespaceAllowed(namespaceID int32) (ok bool) {
 	defaultNamespace := namespaceID == 0 || namespaceID == format.BuiltinNamespaceIDDefault
 	if defaultNamespace {
 		return ac.defaultNamespaceAllowed
 	}
 	ac.configMu.RLock()
 	defer ac.configMu.RUnlock()
-	for _, v := range ac.scrapeNamespaces {
-		if v == namespaceID {
-			return true
-		}
+	if ac.knownTags != nil {
+		_, ok = ac.knownTags[namespaceID]
 	}
-	return false
+	return ok
 }
 
 func (ac *autoCreate) done() bool {
@@ -332,89 +313,4 @@ func (ac *autoCreate) done() bool {
 	default:
 		return false
 	}
-}
-
-func (m KnownTags) PublishDraftTags(meta *format.MetricMetaValue) int {
-	if meta.NamespaceID == 0 ||
-		meta.NamespaceID == format.BuiltinNamespaceIDDefault ||
-		meta.NamespaceID == format.BuiltinNamespaceIDMissing {
-		return 0
-	}
-	c, ok := m[meta.NamespaceID]
-	if !ok {
-		return 0
-	}
-	var n int
-	if len(c.namespace) != 0 {
-		n = publishDraftTags(meta, c.namespace)
-	}
-	if len(c.groups) == 0 ||
-		meta.GroupID == 0 ||
-		meta.GroupID == format.BuiltinGroupIDDefault {
-		return n
-	}
-	if v := c.groups[meta.GroupID]; len(v) != 0 {
-		return n + publishDraftTags(meta, v)
-	}
-	return n
-}
-
-func publishDraftTags(meta *format.MetricMetaValue, knownTags map[string]string) int {
-	var n int
-	for k, v := range meta.TagsDraft {
-		tagID, ok := knownTags[k]
-		if !ok || tagID == "" {
-			continue
-		}
-		if tagID == format.StringTopTagID {
-			if meta.StringTopName == "" {
-				meta.StringTopName = v.Name
-				meta.StringTopDescription = v.Description
-				n++
-			}
-		} else if x := format.TagIndex(tagID); 0 <= x && x < format.MaxTags && meta.Tags[x].Name == "" {
-			meta.Tags[x] = v
-			delete(meta.TagsDraft, k)
-			n++
-		}
-	}
-	return n
-}
-
-func ParseKnownTags(configS []byte, meta format.MetaStorageInterface) (KnownTags, error) {
-	var s map[string]KnownTagsJSON
-	err := json.Unmarshal(configS, &s)
-	if err != nil {
-		return nil, err
-	}
-	res := make(map[int32]knownTags)
-	for namespaceName, v := range s {
-		if namespaceName == "" {
-			return nil, fmt.Errorf("namespace not set")
-		}
-		namespace := meta.GetNamespaceByName(namespaceName)
-		if namespace == nil {
-			return nil, fmt.Errorf("namespace not found %q", namespaceName)
-		}
-		if namespace.ID == format.BuiltinNamespaceIDDefault {
-			return nil, fmt.Errorf("namespace can not be __default")
-		}
-		knownTagsG := make(map[int32]map[string]string, len(v.Groups))
-		for groupName, g := range v.Groups {
-			groupName := namespaceName + format.NamespaceSeparator + groupName
-			group := meta.GetGroupByName(groupName)
-			if group == nil {
-				return nil, fmt.Errorf("group not found %q", groupName)
-			}
-			if group.ID == format.BuiltinGroupIDDefault {
-				return nil, fmt.Errorf("scrape group can not be __default")
-			}
-			knownTagsG[group.ID] = g
-		}
-		res[namespace.ID] = knownTags{
-			namespace: v.Namespace,
-			groups:    knownTagsG,
-		}
-	}
-	return res, nil
 }

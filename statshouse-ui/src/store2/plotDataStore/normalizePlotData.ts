@@ -1,34 +1,35 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { type SeriesResponse } from 'api/query';
-import { type PlotParams, promQLMetric, type QueryParams } from 'url2';
-import { type ProduceUpdate } from '../helpers';
-import { isQueryWhat, METRIC_TYPE, PLOT_TYPE, QUERY_WHAT, type QueryWhat, toMetricType } from 'api/enum';
+import type { SeriesResponse } from '@/api/query';
+import { type PlotParams, promQLMetric, type TimeRange } from '@/url2';
+import type { ProduceUpdate } from '../helpers';
+import { isQueryWhat, METRIC_TYPE, PLOT_TYPE, QUERY_WHAT, type QueryWhat, toMetricType } from '@/api/enum';
 import uPlot from 'uplot';
-import type { SelectOptionProps } from 'components/Select';
-import { type PlotData, type PlotValues } from './plotsDataStore';
-import { metaToBaseLabel, metaToLabel } from '../../view/api';
-import { pxPerChar } from '../../common/settings';
-import { stackData } from '../../common/stackData';
-import { rgba, selectColor } from '../../view/palette';
-import { filterPoints } from '../../common/filterPoints';
+import type { SelectOptionProps } from '@/components/Select';
+import type { PlotData, PlotValues } from './plotsDataStore';
+import { metaToBaseLabel, metaToLabel } from '@/view/api';
+import { pxPerChar } from '@/common/settings';
+import { stackData } from '@/common/stackData';
+import { rgba, selectColor } from '@/view/palette';
+import { filterPoints } from '@/common/filterPoints';
 import { dequal } from 'dequal/lite';
-import { calcYRange2 } from '../../common/calcYRange';
+import { calcYRange2 } from '@/common/calcYRange';
 import { getEmptyPlotData } from './getEmptyPlotData';
-import { deepClone } from '../../common/helpers';
-import { formatLegendValue, formatPercent, timeShiftToDash } from 'view/utils2';
+import { deepClone } from '@/common/helpers';
+import { formatLegendValue, formatPercent, timeShiftToDash } from '@/view/utils2';
+import { useThemeStore } from '../themeStore';
 
 export function normalizePlotData(
   response: SeriesResponse,
   plot: PlotParams,
-  params: QueryParams
+  timeRange: TimeRange,
+  timeShifts: number[]
 ): ProduceUpdate<PlotData> {
   const width = 2000;
-  const { timeRange, timeShifts } = params;
   return (plotData = getEmptyPlotData()) => {
     const {
       lastPlotParams: currentPrevLastPlotParams,
@@ -44,7 +45,7 @@ export function normalizePlotData(
     let series_data = [...response.series.series_data];
     const totalLineId = plot.totalLine ? series_meta.length : null;
     const totalLineLabel = 'Total';
-    const totalLineColor = '#333333';
+    const totalLineColor = useThemeStore.getState().dark ? '#999999' : '#333333';
     const prefColor = '9'; // it`s magic prefix
     const usedDashes = {};
     const usedBaseColors = {};
@@ -55,7 +56,7 @@ export function normalizePlotData(
       series_data = [];
       const colorIndex = new Map<string, number>();
       response.series.series_meta.forEach((series, indexSeries) => {
-        const indexColor = colorIndex.get(series.color);
+        const indexColor = colorIndex.get(series.color + '_' + series.time_shift);
         if (series.color && indexColor != null) {
           response.series.series_data[indexSeries].forEach((value, indexValue) => {
             if (value != null) {
@@ -65,7 +66,7 @@ export function normalizePlotData(
         } else {
           const index = series_meta.push(series) - 1;
           series_data.push([...response.series.series_data[indexSeries]]);
-          colorIndex.set(series.color, index);
+          colorIndex.set(series.color + '_' + series.time_shift, index);
         }
       });
     }
@@ -89,7 +90,7 @@ export function normalizePlotData(
     }
 
     if (plot.totalLine) {
-      const totalLineData = response.series.time.map((time, idx) =>
+      const totalLineData = response.series.time.map((_time, idx) =>
         series_data.reduce((res, d) => res + (d[idx] ?? 0), 0)
       );
       series_meta.push({
@@ -170,11 +171,9 @@ export function normalizePlotData(
       const metricName = isValue ? `${meta.name || (plot.metricName !== promQLMetric ? plot.metricName : '')}: ` : '';
       const colorKey = `${prefColor}${metricName}${oneGraph ? label : baseLabel}`;
       // client select color line
-      const baseColor = /*meta.color ?? */ baseColors[colorKey] ?? selectColor(colorKey, usedBaseColors);
+      const baseColor = meta.color ?? baseColors[colorKey] ?? selectColor(colorKey, usedBaseColors);
       baseColors[colorKey] = baseColor;
-      // if (baseColor !== currentPrevSeries[indexMeta]?.stroke) {
-      //   changeColor = true;
-      // }
+
       if (meta.max_hosts) {
         const max_hosts_l = meta.max_hosts
           .map((host) => host.length * pxPerChar * 1.25 + 65)
@@ -316,12 +315,6 @@ export function normalizePlotData(
       };
     }
 
-    // plotData.scales.x = { min: timeRange.from + timeRange.to, max: timeRange.to };
-    // if (plot.yLock.min !== 0 || plot.yLock.max !== 0) {
-    //   plotData.scales.y = { ...plot.yLock };
-    // } else {
-    //   plotData.scales.y = { min: 0, max: 0 };
-    // }
     plotData.promQL = response.promql;
     plotData.lastPlotParams = deepClone(plot);
     plotData.lastTimeRange = deepClone(timeRange);
@@ -361,58 +354,5 @@ export function normalizePlotData(
     plotData.samplingFactorSrc = response.sampling_factor_src;
     plotData.samplingFactorAgg = response.sampling_factor_agg;
     plotData.mappingFloodEvents = response.mapping_errors;
-
-    // setState((state) => {
-    //   delete state.plotsDataAbortController[index];
-    //   const noUpdateData = dequal(stacked?.response || response, state.plotsData[index]?.stacked || state.plotsData[index]?.response);
-    //   if (resp.metric != null && !dequal(state.metricsMeta[resp.metric.name], resp.metric)) {
-    //     state.metricsMeta[resp.metric.name] = resp.metric;
-    //   }
-    //   const whats = uniqueName.size === 1 ? [...uniqueWhat.keys()] : [];
-    //   state.plotsData[index] = {
-    //     nameMetric: uniqueName.size === 1 ? ([...uniqueName.keys()][0] as string) : '',
-    //     whats: dequal(whats, state.plotsData[index]?.whats) ? state.plotsData[index]?.whats : whats,
-    //     metricType,
-    //     error: usePlotHealsStore.getState().status[index]?.status ? '' : state.plotsData[index]?.error,
-    //     errorSkipCount: 0,
-    //     response: noUpdateData ? state.plotsData[index]?.response : response,
-    //     stacked: noUpdateData ? state.plotsData[index]?.stacked : stacked?.response,
-    //     bands: dequal(state.plotsData[index]?.bands, stacked?.bands) ? state.plotsData[index]?.bands : stacked?.bands,
-    //     series:
-    //       dequal(resp.series.series_meta, state.plotsData[index]?.lastQuerySeriesMeta) &&
-    //       !changeColor &&
-    //       !changeType &&
-    //       !changeView
-    //         ? state.plotsData[index]?.series
-    //         : series,
-    //     seriesTimeShift: dequal(seriesTimeShift, state.plotsData[index].seriesTimeShift)
-    //       ? state.plotsData[index].seriesTimeShift
-    //       : seriesTimeShift,
-    //     seriesShow: dequal(seriesShow, state.plotsData[index]?.seriesShow)
-    //       ? state.plotsData[index]?.seriesShow
-    //       : seriesShow,
-    //     scales: dequal(scales, state.plotsData[index]?.scales) ? state.plotsData[index]?.scales : scales,
-    //     receiveErrors: resp.receive_errors,
-    //     receiveWarnings: resp.receive_warnings,
-    //     samplingFactorSrc: resp.sampling_factor_src,
-    //     samplingFactorAgg: resp.sampling_factor_agg,
-    //     mappingFloodEvents: resp.mapping_errors,
-    //     legendValueWidth,
-    //     legendMaxDotSpaceWidth,
-    //     legendNameWidth,
-    //     legendPercentWidth,
-    //     legendMaxHostWidth,
-    //     legendMaxHostPercentWidth,
-    //     lastPlotParams,
-    //     lastQuerySeriesMeta: [...resp.series.series_meta],
-    //     lastTimeRange: getState().timeRange,
-    //     lastTimeShifts: getState().params.timeShifts,
-    //     topInfo,
-    //     maxHostLists,
-    //     promqltestfailed,
-    //     promQL: resp.promql ?? '',
-    //   };
-    // });
-    // addStatus(index.toString(), true);
   };
 }

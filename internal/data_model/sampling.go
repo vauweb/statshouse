@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -20,7 +20,6 @@ const maxFairKeyLen = 3
 
 type (
 	SamplingMultiItemPair struct {
-		Key         Key
 		Item        *MultiItem
 		WhaleWeight float64 // whale selection criteria, for now sum Counters
 		Size        int
@@ -49,10 +48,12 @@ type (
 
 	SamplerConfig struct {
 		// Options
-		ModeAgent        bool // to support "NoSampleAgent" option above
-		SampleNamespaces bool
-		SampleGroups     bool
-		SampleKeys       bool
+		ModeAgent            bool
+		SampleKeepSingle     bool
+		DisableNoSampleAgent bool // disables "noSampleAgent" option above
+		SampleNamespaces     bool
+		SampleGroups         bool
+		SampleKeys           bool
 
 		// External services
 		Meta format.MetaStorageInterface
@@ -62,20 +63,20 @@ type (
 		SampleFactorF func(int32, float64)
 
 		// Called when sampling algorithm decides to either keep or discard the item
-		KeepF    func(Key, *MultiItem, uint32)
-		DiscardF func(Key, *MultiItem, uint32)
+		KeepF    func(*MultiItem, uint32)
+		DiscardF func(*MultiItem, uint32)
 
 		// Unit tests support
 		RoundF  func(float64, *rand.Rand) float64 // rounds sample factor to an integer
 		SelectF func([]SamplingMultiItemPair, float64, *rand.Rand) int
+
+		SamplerBuffers
 	}
 
 	partitionFunc func(*sampler, samplerGroup) ([]samplerGroup, int64)
 
 	sampler struct {
 		SamplerConfig
-		items                []SamplingMultiItemPair
-		partF                []partitionFunc
 		sumSizeKeepBuiltin   ItemValue
 		sumSizeDiscard       ItemValue
 		currentGroup         samplerGroup
@@ -83,8 +84,6 @@ type (
 		currentMetricSFSum   float64
 		currentMetricSFCount float64
 		MetricCount          int
-		MetricGroups         []samplerGroup
-		SampleFactors        []tlstatshouse.SampleFactor
 
 		timeStart      time.Time
 		timePartition  time.Time
@@ -93,6 +92,13 @@ type (
 		timeSampling   time.Duration
 		timeEnd        time.Time
 	}
+
+	SamplerBuffers struct {
+		items         []SamplingMultiItemPair
+		partF         []partitionFunc
+		MetricGroups  []samplerGroup
+		SampleFactors []tlstatshouse.SampleFactor
+	}
 )
 
 var missingMetricMeta = format.MetricMetaValue{
@@ -100,35 +106,38 @@ var missingMetricMeta = format.MetricMetaValue{
 	NamespaceID: format.BuiltinNamespaceIDMissing,
 }
 
-func NewSampler(capacity int, config SamplerConfig) sampler {
-	timeStart := time.Now()
-	if config.RoundF == nil {
-		config.RoundF = roundSampleFactor
+func NewSampler(c SamplerConfig) sampler {
+	// buffer reuse
+	c.items = c.items[:0]
+	c.partF = c.partF[:0]
+	c.MetricGroups = c.MetricGroups[:0]
+	c.SampleFactors = c.SampleFactors[:0]
+	// partition functions
+	if c.SampleNamespaces {
+		c.partF = append(c.partF, partitionByNamespace)
 	}
-	if config.SelectF == nil {
-		config.SelectF = selectRandom
+	if c.SampleGroups {
+		c.partF = append(c.partF, partitionByGroup)
 	}
-	h := sampler{
-		timeStart:     timeStart,
-		SamplerConfig: config,
-		items:         make([]SamplingMultiItemPair, 0, capacity),
-		partF:         make([]partitionFunc, 0, 3),
+	c.partF = append(c.partF, partitionByMetric)
+	// unit test support
+	if c.RoundF == nil {
+		c.RoundF = roundSampleFactor
 	}
-	if config.SampleNamespaces {
-		h.partF = append(h.partF, partitionByNamespace)
+	if c.SelectF == nil {
+		c.SelectF = selectRandom
 	}
-	if config.SampleGroups {
-		h.partF = append(h.partF, partitionByGroup)
+	return sampler{
+		timeStart:     time.Now(),
+		SamplerConfig: c,
 	}
-	h.partF = append(h.partF, partitionByMetric)
-	return h
 }
 
 func (h *sampler) Add(p SamplingMultiItemPair) {
 	if p.Size < 1 {
 		p.Item.SF = math.MaxFloat32
 		if h.DiscardF != nil {
-			h.DiscardF(p.Key, p.Item, p.BucketTs)
+			h.DiscardF(p.Item, p.BucketTs)
 		}
 		h.sumSizeDiscard.AddValue(0)
 		return
@@ -142,6 +151,7 @@ func (h *sampler) Run(budget int64) {
 	}
 	h.timePartition = time.Now()
 	// query metric meta, initialize fair key
+	// TODO: do not query metric meta on agent
 	sort.Slice(h.items, func(i, j int) bool {
 		return h.items[i].MetricID < h.items[j].MetricID
 	})
@@ -161,8 +171,8 @@ func (h *sampler) Run(budget int64) {
 				n = maxFairKeyLen
 			}
 			for j := 0; j < n; j++ {
-				if x := h.items[i].metric.FairKey[j]; 0 <= x && x < len(h.items[i].Key.Tags) {
-					h.items[i].fairKey[j] = h.items[i].Key.Tags[x]
+				if x := h.items[i].metric.FairKey[j]; 0 <= x && x < len(h.items[i].Item.Key.Tags) {
+					h.items[i].fairKey[j] = h.items[i].Item.Key.Tags[x]
 				}
 			}
 			h.items[i].fairKeyLen = n
@@ -297,7 +307,7 @@ func (h *sampler) run(g samplerGroup) {
 		} else if s[i].depth == len(h.partF) && s[i].MetricID != h.currentMetricID {
 			h.setCurrentMetric(s[i].MetricID)
 		}
-		if s[i].noSampleAgent && h.ModeAgent {
+		if s[i].noSampleAgent && h.ModeAgent && !h.DisableNoSampleAgent {
 			s[i].keep(h)
 		} else if s[i].depth < len(h.partF)+s[i].items[0].fairKeyLen {
 			s[i].budget = int64(h.RoundF(float64(s[i].budget)/float64(s[i].budgetDenom), h.Rand))
@@ -318,7 +328,7 @@ func (g samplerGroup) keep(h *sampler) {
 func (p *SamplingMultiItemPair) keep(sf float64, h *sampler) {
 	p.Item.SF = sf // communicate selected factor to next step of processing
 	if h.KeepF != nil {
-		h.KeepF(p.Key, p.Item, p.BucketTs)
+		h.KeepF(p.Item, p.BucketTs)
 	}
 	h.currentGroup.SumSizeKeep.AddValue(float64(p.Size))
 }
@@ -326,7 +336,7 @@ func (p *SamplingMultiItemPair) keep(sf float64, h *sampler) {
 func (p *SamplingMultiItemPair) discard(sf float64, h *sampler) {
 	p.Item.SF = sf // communicate selected factor to next step of processing
 	if h.DiscardF != nil {
-		h.DiscardF(p.Key, p.Item, p.BucketTs)
+		h.DiscardF(p.Item, p.BucketTs)
 	}
 	h.currentGroup.SumSizeDiscard.AddValue(float64(p.Size))
 }
@@ -337,6 +347,10 @@ func (h *sampler) sample(g samplerGroup) {
 	}
 	timeStart := time.Now()
 	defer func() { h.timeSampling += time.Since(timeStart) }()
+	if h.SampleKeepSingle && len(g.items) == 1 && g.items[0].Item != nil && g.items[0].Item.isSingleValueCounter() {
+		g.items[0].keep(1, h)
+		return
+	}
 	sfNum := g.budgetDenom * g.sumSize
 	sfDenom := g.budget
 	if sfNum < 1 {
@@ -566,7 +580,7 @@ func (h *sampler) getMetricMeta(metricID int32) *format.MetricMetaValue {
 		return &missingMetricMeta
 	}
 	timeStart := time.Now()
-	if res := h.Meta.GetMetaMetricDelayed(metricID); res != nil {
+	if res := h.Meta.GetMetaMetric(metricID); res != nil {
 		h.timeMetricMeta += time.Since(timeStart)
 		return res
 	}
@@ -577,7 +591,7 @@ func (h *sampler) getMetricMeta(metricID int32) *format.MetricMetaValue {
 }
 
 func (p *SamplingMultiItemPair) getMetricWeight() int64 {
-	res := p.metric.EffectiveWeight
+	res := p.metric.EffectiveWeight * int64(p.Item.WeightMultiplier)
 	if res < 1 {
 		res = 1
 	}
@@ -653,20 +667,4 @@ func roundSampleFactor(sf float64, rnd *rand.Rand) float64 {
 		return floor + 1
 	}
 	return floor
-}
-
-// This function assumes structure of hour table with time = toStartOfHour(time)
-// This turned out bad idea, so we do not use it anywhere now
-func SampleFactorDeterministic(sampleFactors map[int32]float64, key Key, time uint32) (float64, bool) {
-	sf, ok := sampleFactors[key.Metric]
-	if !ok {
-		return 1, true
-	}
-	// Deterministic sampling - we select random set of allowed keys per hour
-	key.Metric = int32(time/3600) * 3600 // a bit of hack, we do not need metric here, so we replace it with toStartOfHour(time)
-	ha := key.Hash()
-	if float64(ha>>32)*sf < (1 << 32) { // 0.XXXX * sf < 1 condition shifted left by 32
-		return sf, true
-	}
-	return 0, false
 }

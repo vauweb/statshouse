@@ -1,13 +1,13 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { GET_PARAMS, QueryWhat, TagKey } from './enum';
-import { freeKeyPrefix, PlotParams, TimeRange } from 'url2';
-import { filterParams, formatTagValue, querySeriesMetaTag, v2Value } from 'view/api';
-import { apiGet } from 'view/utils';
+import { freeKeyPrefix, PlotParams, TimeRange } from '@/url2';
+import { filterParams, formatTagValue, querySeriesMetaTag } from '@/view/api';
+import { apiGet } from '@/view/utils';
 import { uniqueArray } from '../common/helpers';
 import { promQLMetric } from '../view/promQLMetric';
 import { fmtInputDateTime } from '../view/utils2';

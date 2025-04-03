@@ -1,11 +1,18 @@
-import 'testMock/matchMedia.mock';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import '@/testMock/matchMedia.mock';
 import { getDefaultParams } from '../getDefault';
 import { getNewMetric } from './metric';
 import { GET_PARAMS } from '../../api/enum';
 import { toTreeObj } from '../urlHelpers';
 import { orderPlotSplitter, removeValueChar } from '../constants';
 import { widgetsParamsDecode } from './widgetsParamsDecode';
-describe('urlStore widgetsParamsDecode', () => {
+
+describe('@/urlStore widgetsParamsDecode', () => {
   test('widgetsParamsDecode', () => {
     const dParams = {
       ...getDefaultParams(),

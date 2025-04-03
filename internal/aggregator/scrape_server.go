@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	"github.com/prometheus/common/model"
-	_ "github.com/prometheus/prometheus/discovery/consul"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/relabel"
 	"go.uber.org/atomic"
@@ -231,9 +230,8 @@ func (s *scrapeServer) applyScrapeConfig(cs []ScrapeConfig) {
 			}
 			if s.sh2 != nil {
 				// success, targets_ready
-				s.sh2.AddCounterHostStringBytes(
-					s.sh2.AggKey(0, format.BuiltinMetricIDAggScrapeTargetDispatch, [format.MaxTags]int32{0, 0, 1}),
-					[]byte(host), 1, 0, format.BuiltinMetricMetaAggScrapeTargetDispatch)
+				s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
+					[]int32{0, 0, 1}, []byte(host), 1)
 			}
 		}
 	}()
@@ -267,9 +265,8 @@ func (s *scrapeServer) applyScrapeConfig(cs []ScrapeConfig) {
 
 func (s *scrapeServer) reportConfigHash(nowUnix uint32) {
 	v := s.configH.Load()
-	s.sh2.AddCounterHostStringBytes(
-		s.sh2.AggKey(nowUnix, format.BuiltinMetricIDAggScrapeConfigHash, [format.MaxTags]int32{0, v}),
-		nil, 1, 0, format.BuiltinMetricMetaAggScrapeConfigHash)
+	s.sh2.AddCounter(nowUnix, format.BuiltinMetricMetaAggScrapeConfigHash,
+		[]int32{0, v}, 1)
 }
 
 func (s *scrapeServer) handleGetTargets(_ context.Context, hctx *rpc.HandlerContext) error {
@@ -329,14 +326,12 @@ func (s *scrapeServer) tryGetNewTargetsAndWriteResult(req scrapeRequest) (done b
 	if s.sh2 != nil {
 		if err != nil {
 			// failure, targets_sent
-			s.sh2.AddCounterHostStringBytes(
-				s.sh2.AggKey(0, format.BuiltinMetricIDAggScrapeTargetDispatch, [format.MaxTags]int32{0, 1, 2}),
-				[]byte(req.addr.String()), 1, 0, format.BuiltinMetricMetaAggScrapeTargetDispatch)
+			s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
+				[]int32{0, 1, 2}, []byte(req.addr.String()), 1)
 		} else {
 			// success, targets_sent
-			s.sh2.AddCounterHostStringBytes(
-				s.sh2.AggKey(0, format.BuiltinMetricIDAggScrapeTargetDispatch, [format.MaxTags]int32{0, 0, 2}),
-				[]byte(req.addr.String()), 1, 0, format.BuiltinMetricMetaAggScrapeTargetDispatch)
+			s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
+				[]int32{0, 0, 2}, []byte(req.addr.String()), 1)
 		}
 	}
 	return true, err

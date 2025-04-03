@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,10 +13,10 @@ import { ReactComponent as SVGChevronCompactDown } from 'bootstrap-icons/icons/c
 import { ReactComponent as SVGTrash } from 'bootstrap-icons/icons/trash.svg';
 import { ReactComponent as SVGPlus } from 'bootstrap-icons/icons/plus.svg';
 import cn from 'classnames';
-import { GroupKey } from 'url2';
-import { Button, TextArea, Tooltip } from 'components/UI';
+import { GroupKey } from '@/url2';
+import { Button, TextArea, Tooltip } from '@/components/UI';
 import { DashboardGroupTooltipTitle } from './DashboardGroupTooltipTitle';
-import { useStatsHouseShallow } from 'store2';
+import { useStatsHouseShallow } from '@/store2';
 
 export type DashboardGroupProps = {
   children?: React.ReactNode;
@@ -24,7 +24,7 @@ export type DashboardGroupProps = {
   className?: string;
 };
 
-export function _DashboardGroup({ children, groupKey, className }: DashboardGroupProps) {
+export const DashboardGroup = memo(function DashboardGroup({ children, groupKey, className }: DashboardGroupProps) {
   const {
     groups,
     isSingle,
@@ -37,26 +37,29 @@ export function _DashboardGroup({ children, groupKey, className }: DashboardGrou
     removeDashboardGroup,
     moveDashboardGroup,
   } = useStatsHouseShallow(
-    ({
-      params: { groups, orderGroup },
-      dashboardLayoutEdit,
-      isEmbed,
-      setDashboardGroup,
-      addDashboardGroup,
-      removeDashboardGroup,
-      moveDashboardGroup,
-    }) => ({
-      groups,
-      isSingle: orderGroup.length === 1,
-      isFirst: groupKey === orderGroup[0],
-      isLast: groupKey === orderGroup[orderGroup.length - 1],
-      dashboardLayoutEdit,
-      isEmbed,
-      setDashboardGroup,
-      addDashboardGroup,
-      removeDashboardGroup,
-      moveDashboardGroup,
-    })
+    useCallback(
+      ({
+        params: { groups, orderGroup },
+        dashboardLayoutEdit,
+        isEmbed,
+        setDashboardGroup,
+        addDashboardGroup,
+        removeDashboardGroup,
+        moveDashboardGroup,
+      }) => ({
+        groups,
+        isSingle: orderGroup.length === 1,
+        isFirst: groupKey === orderGroup[0],
+        isLast: groupKey === orderGroup[orderGroup.length - 1],
+        dashboardLayoutEdit,
+        isEmbed,
+        setDashboardGroup,
+        addDashboardGroup,
+        removeDashboardGroup,
+        moveDashboardGroup,
+      }),
+      [groupKey]
+    )
   );
   const onEditGroupName = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -246,6 +249,4 @@ export function _DashboardGroup({ children, groupKey, className }: DashboardGrou
       {children}
     </div>
   );
-}
-
-export const DashboardGroup = memo(_DashboardGroup);
+});

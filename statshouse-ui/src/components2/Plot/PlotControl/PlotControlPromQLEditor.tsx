@@ -1,19 +1,19 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { lazy, memo, Suspense, useCallback, useEffect, useState } from 'react';
-import { Button, TextArea } from 'components/UI';
-import { useStateToRef } from 'hooks';
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, TextArea } from '@/components/UI';
+import { useStateToRef } from '@/hooks';
 import cn from 'classnames';
 import { ReactComponent as SVGArrowCounterclockwise } from 'bootstrap-icons/icons/arrow-counterclockwise.svg';
 import { ReactComponent as SVGChevronCompactLeft } from 'bootstrap-icons/icons/chevron-compact-left.svg';
 import { ReactComponent as SVGChevronCompactRight } from 'bootstrap-icons/icons/chevron-compact-right.svg';
-import { getNewMetric, type PlotKey } from 'url2';
-import { useStatsHouseShallow } from 'store2';
 import { PrometheusSwitch } from './PrometheusSwitch';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
+import { setPlotData, usePlotsDataStore } from '@/store2/plotDataStore';
 
 const FallbackEditor = (props: { className?: string; value?: string; onChange?: (value: string) => void }) => (
   <div className="input-group">
@@ -22,28 +22,25 @@ const FallbackEditor = (props: { className?: string; value?: string; onChange?: 
 );
 
 const PromQLEditor = lazy(() =>
-  import('components/UI/PromQLEditor').catch(() => ({
+  import('@/components/UI/PromQLEditor').catch(() => ({
     default: FallbackEditor,
   }))
 );
 
 export type PlotControlPromQLEditorProps = {
   className?: string;
-  plotKey: PlotKey;
 };
 
-const { prometheusCompat: defaultPrometheusCompat } = getNewMetric();
+export const PlotControlPromQLEditor = memo(function PlotControlPromQLEditor({
+  className,
+}: PlotControlPromQLEditorProps) {
+  const {
+    plot: { id, promQL: promQLParam, prometheusCompat },
+    setPlot,
+  } = useWidgetPlotContext();
+  const promqlExpand = usePlotsDataStore(useCallback(({ plotsData }) => !!plotsData[id]?.promqlExpand, [id]));
 
-export function _PlotControlPromQLEditor({ className, plotKey }: PlotControlPromQLEditorProps) {
-  const { promQLParam, promqlExpand, togglePromqlExpand, setPlot, prometheusCompat } = useStatsHouseShallow(
-    ({ params: { plots }, plotsData, togglePromqlExpand, setPlot }) => ({
-      promQLParam: plots[plotKey]?.promQL ?? '',
-      promqlExpand: plotsData[plotKey]?.promqlExpand ?? false,
-      prometheusCompat: plots[plotKey]?.prometheusCompat ?? defaultPrometheusCompat,
-      togglePromqlExpand,
-      setPlot,
-    })
-  );
+  const setData = useMemo(() => setPlotData.bind(undefined, id), [id]);
 
   const [promQL, setPromQL] = useState(promQLParam);
   const promQlRef = useStateToRef(promQL);
@@ -53,14 +50,16 @@ export function _PlotControlPromQLEditor({ className, plotKey }: PlotControlProm
   }, [promQLParam]);
 
   const onTogglePromqlExpand = useCallback(() => {
-    togglePromqlExpand(plotKey);
-  }, [plotKey, togglePromqlExpand]);
+    setData((d) => {
+      d.promqlExpand = !d.promqlExpand;
+    });
+  }, [setData]);
 
   const sendPromQL = useCallback(() => {
-    setPlot(plotKey, (p) => {
+    setPlot((p) => {
       p.promQL = promQlRef.current;
     });
-  }, [plotKey, promQlRef, setPlot]);
+  }, [promQlRef, setPlot]);
 
   useEffect(() => {
     setPromQL(promQLParam);
@@ -68,11 +67,11 @@ export function _PlotControlPromQLEditor({ className, plotKey }: PlotControlProm
 
   const setPrometheusCompat = useCallback(
     (status: boolean) => {
-      setPlot(plotKey, (p) => {
+      setPlot((p) => {
         p.prometheusCompat = status;
       });
     },
-    [plotKey, setPlot]
+    [setPlot]
   );
 
   return (
@@ -99,6 +98,4 @@ export function _PlotControlPromQLEditor({ className, plotKey }: PlotControlProm
       </div>
     </div>
   );
-}
-
-export const PlotControlPromQLEditor = memo(_PlotControlPromQLEditor);
+});

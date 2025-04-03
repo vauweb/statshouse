@@ -1,7 +1,13 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { StoreSlice } from '../createStore';
-import { StatsHouseStore } from '../statsHouseStore';
-import { PlotKey } from 'url2';
-import { sumArray } from 'common/helpers';
+import { StatsHouseStore } from '@/store2';
+import { PlotKey } from '@/url2';
+import { sumArray } from '@/common/helpers';
 
 const limitHistory = 10;
 const changeStatus = (limitHistory / 2) * 0.8;
@@ -21,7 +27,7 @@ export type PlotHealsStore = {
   isPlotHeal(plotKey: PlotKey): boolean;
 };
 
-export const plotHealsStore: StoreSlice<StatsHouseStore, PlotHealsStore> = (setState, getState, store) => ({
+export const plotHealsStore: StoreSlice<StatsHouseStore, PlotHealsStore> = (setState, getState) => ({
   plotHeals: {},
   removePlotHeals(plotKey) {
     setState((state) => {
@@ -32,7 +38,7 @@ export const plotHealsStore: StoreSlice<StatsHouseStore, PlotHealsStore> = (setS
     setState((state) => {
       const heal = (state.plotHeals[plotKey] ??= getDefaultPlotHealsStatus());
       heal.response.push(status ? 1 : -1);
-      heal.response = heal.response.slice(-limitHistory);
+      heal.response = new Array(...heal.response.slice(-limitHistory));
       heal.lastTimestamp = Date.now();
       const sum = sumArray(heal.response);
 

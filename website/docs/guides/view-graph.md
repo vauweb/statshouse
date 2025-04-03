@@ -43,6 +43,11 @@ import MetricTabDelete from '../img/metric-tab-delete.png'
 import DeltaResAggr from '../img/delta-res-aggr.png'
 import ResYellow from '../img/res-yellow.png'
 import ResRed from '../img/res-red.png'
+import MarkdownMetric from '../img/markdown_metric.png'
+import MarkdownEdit from '../img/markdown_edit.png'
+import FavoriteMetrics from '../img/favorite-metrics.png'
+import FavoriteMetricsOnly from '../img/favorite-metrics-only.png'
+
 
 # View metric data
 
@@ -90,6 +95,18 @@ You cannot edit them. See [Meta-metrics](#13--meta-metrics) for details.
 If you have StatsHouse deployed in your organization, you can find a set of metrics that are common for all the 
 engines, services, microservices, proxies, etc. in the organization.
 
+### Favorite metrics
+
+Mark the frequently used metrics as favorites — click on the "star" next to the metric name:
+
+<img src={FavoriteMetrics} width="300"/>
+
+To display the list of your favorite metrics only, click on the "starred bookmark":
+
+<img src={FavoriteMetricsOnly} width="300"/>
+
+You can also [mark dashboards as favorites](./dashboards.md#mark-dashboards-as-favorites).
+
 ### "How can I find the metrics author?"
 
 There is no mechanism for checking a metrics author in StatsHouse, but sometimes authors mention how to find them 
@@ -101,13 +118,23 @@ in the metric description section. Otherwise, use your organization's internal c
 To compare metrics, [create a dashboard](dashboards.md). To find relationships 
 between the metrics or events, use [Event overlay](#11--event-overlay).
 
-## 2 — Graph name
+## 2 — Graph name and description
 
-You can edit the graph name so that the metric name remains the same.
+You can edit the graph name so that the [metric name](#1--metric-name) remains the same.
 
 <img src={RenameGraph} width="800"/>
 
 This changed graph name is saved in URL only.
+
+To add or modify a graph description, click the "pencil" icon near the graph name.
+
+Feel free to use the [standard Markdown formatting](https://commonmark.org/help/) for descriptions.
+
+<img src={MarkdownEdit} width="600"/>
+
+Please note that formatting appears only upon hovering over descriptions (in the "tooltip" descriptions).
+
+<img src={MarkdownMetric} width="600"/>
 
 ## 3 — Descriptive statistics
 

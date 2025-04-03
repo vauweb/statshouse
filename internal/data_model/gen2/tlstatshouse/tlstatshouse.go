@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -26,8 +26,12 @@ type (
 	CommonProxyHeaderBytes            = internal.StatshouseCommonProxyHeaderBytes
 	GetConfig2                        = internal.StatshouseGetConfig2
 	GetConfig2Bytes                   = internal.StatshouseGetConfig2Bytes
+	GetConfig3                        = internal.StatshouseGetConfig3
+	GetConfig3Bytes                   = internal.StatshouseGetConfig3Bytes
 	GetConfigResult                   = internal.StatshouseGetConfigResult
 	GetConfigResultBytes              = internal.StatshouseGetConfigResultBytes
+	GetConfigResult3                  = internal.StatshouseGetConfigResult3
+	GetConfigResult3Bytes             = internal.StatshouseGetConfigResult3Bytes
 	GetMetrics3                       = internal.StatshouseGetMetrics3
 	GetMetrics3Bytes                  = internal.StatshouseGetMetrics3Bytes
 	GetMetricsResult                  = internal.StatshouseGetMetricsResult
@@ -58,11 +62,19 @@ type (
 	SampleFactor                      = internal.StatshouseSampleFactor
 	SendKeepAlive2                    = internal.StatshouseSendKeepAlive2
 	SendKeepAlive2Bytes               = internal.StatshouseSendKeepAlive2Bytes
+	SendKeepAlive3                    = internal.StatshouseSendKeepAlive3
+	SendKeepAlive3Bytes               = internal.StatshouseSendKeepAlive3Bytes
 	SendSourceBucket2                 = internal.StatshouseSendSourceBucket2
 	SendSourceBucket2Bytes            = internal.StatshouseSendSourceBucket2Bytes
+	SendSourceBucket3                 = internal.StatshouseSendSourceBucket3
+	SendSourceBucket3Bytes            = internal.StatshouseSendSourceBucket3Bytes
+	SendSourceBucket3Response         = internal.StatshouseSendSourceBucket3Response
+	SendSourceBucket3ResponseBytes    = internal.StatshouseSendSourceBucket3ResponseBytes
 	ShutdownInfo                      = internal.StatshouseShutdownInfo
 	SourceBucket2                     = internal.StatshouseSourceBucket2
 	SourceBucket2Bytes                = internal.StatshouseSourceBucket2Bytes
+	SourceBucket3                     = internal.StatshouseSourceBucket3
+	SourceBucket3Bytes                = internal.StatshouseSourceBucket3Bytes
 	TestConnection2                   = internal.StatshouseTestConnection2
 	TestConnection2Bytes              = internal.StatshouseTestConnection2Bytes
 	TopElement                        = internal.StatshouseTopElement
@@ -246,6 +258,64 @@ func (c *Client) GetConfig2(ctx context.Context, args GetConfig2, extra *rpc.Inv
 	if ret != nil {
 		if _, err = args.ReadResult(resp.Body, ret); err != nil {
 			return internal.ErrorClientReadResult("statshouse.getConfig2", c.Network, c.ActorID, c.Address, err)
+		}
+	}
+	return nil
+}
+
+func (c *Client) GetConfig3Bytes(ctx context.Context, args GetConfig3Bytes, extra *rpc.InvokeReqExtra, ret *GetConfigResult3Bytes) (err error) {
+	req := c.Client.GetRequest()
+	req.ActorID = c.ActorID
+	req.FunctionName = "statshouse.getConfig3"
+	if extra != nil {
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+	}
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
+	if err != nil {
+		return internal.ErrorClientWrite("statshouse.getConfig3", err)
+	}
+	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
+	defer c.Client.PutResponse(resp)
+	if err != nil {
+		return internal.ErrorClientDo("statshouse.getConfig3", c.Network, c.ActorID, c.Address, err)
+	}
+	if ret != nil {
+		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+			return internal.ErrorClientReadResult("statshouse.getConfig3", c.Network, c.ActorID, c.Address, err)
+		}
+	}
+	return nil
+}
+
+func (c *Client) GetConfig3(ctx context.Context, args GetConfig3, extra *rpc.InvokeReqExtra, ret *GetConfigResult3) (err error) {
+	req := c.Client.GetRequest()
+	req.ActorID = c.ActorID
+	req.FunctionName = "statshouse.getConfig3"
+	if extra != nil {
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+	}
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
+	if err != nil {
+		return internal.ErrorClientWrite("statshouse.getConfig3", err)
+	}
+	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
+	defer c.Client.PutResponse(resp)
+	if err != nil {
+		return internal.ErrorClientDo("statshouse.getConfig3", c.Network, c.ActorID, c.Address, err)
+	}
+	if ret != nil {
+		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+			return internal.ErrorClientReadResult("statshouse.getConfig3", c.Network, c.ActorID, c.Address, err)
 		}
 	}
 	return nil
@@ -541,6 +611,64 @@ func (c *Client) SendKeepAlive2(ctx context.Context, args SendKeepAlive2, extra 
 	return nil
 }
 
+func (c *Client) SendKeepAlive3Bytes(ctx context.Context, args SendKeepAlive3Bytes, extra *rpc.InvokeReqExtra, ret *SendSourceBucket3ResponseBytes) (err error) {
+	req := c.Client.GetRequest()
+	req.ActorID = c.ActorID
+	req.FunctionName = "statshouse.sendKeepAlive3"
+	if extra != nil {
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+	}
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
+	if err != nil {
+		return internal.ErrorClientWrite("statshouse.sendKeepAlive3", err)
+	}
+	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
+	defer c.Client.PutResponse(resp)
+	if err != nil {
+		return internal.ErrorClientDo("statshouse.sendKeepAlive3", c.Network, c.ActorID, c.Address, err)
+	}
+	if ret != nil {
+		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+			return internal.ErrorClientReadResult("statshouse.sendKeepAlive3", c.Network, c.ActorID, c.Address, err)
+		}
+	}
+	return nil
+}
+
+func (c *Client) SendKeepAlive3(ctx context.Context, args SendKeepAlive3, extra *rpc.InvokeReqExtra, ret *SendSourceBucket3Response) (err error) {
+	req := c.Client.GetRequest()
+	req.ActorID = c.ActorID
+	req.FunctionName = "statshouse.sendKeepAlive3"
+	if extra != nil {
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+	}
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
+	if err != nil {
+		return internal.ErrorClientWrite("statshouse.sendKeepAlive3", err)
+	}
+	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
+	defer c.Client.PutResponse(resp)
+	if err != nil {
+		return internal.ErrorClientDo("statshouse.sendKeepAlive3", c.Network, c.ActorID, c.Address, err)
+	}
+	if ret != nil {
+		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+			return internal.ErrorClientReadResult("statshouse.sendKeepAlive3", c.Network, c.ActorID, c.Address, err)
+		}
+	}
+	return nil
+}
+
 func (c *Client) SendSourceBucket2Bytes(ctx context.Context, args SendSourceBucket2Bytes, extra *rpc.InvokeReqExtra, ret *[]byte) (err error) {
 	req := c.Client.GetRequest()
 	req.ActorID = c.ActorID
@@ -594,6 +722,64 @@ func (c *Client) SendSourceBucket2(ctx context.Context, args SendSourceBucket2, 
 	if ret != nil {
 		if _, err = args.ReadResult(resp.Body, ret); err != nil {
 			return internal.ErrorClientReadResult("statshouse.sendSourceBucket2", c.Network, c.ActorID, c.Address, err)
+		}
+	}
+	return nil
+}
+
+func (c *Client) SendSourceBucket3Bytes(ctx context.Context, args SendSourceBucket3Bytes, extra *rpc.InvokeReqExtra, ret *SendSourceBucket3ResponseBytes) (err error) {
+	req := c.Client.GetRequest()
+	req.ActorID = c.ActorID
+	req.FunctionName = "statshouse.sendSourceBucket3"
+	if extra != nil {
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+	}
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
+	if err != nil {
+		return internal.ErrorClientWrite("statshouse.sendSourceBucket3", err)
+	}
+	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
+	defer c.Client.PutResponse(resp)
+	if err != nil {
+		return internal.ErrorClientDo("statshouse.sendSourceBucket3", c.Network, c.ActorID, c.Address, err)
+	}
+	if ret != nil {
+		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+			return internal.ErrorClientReadResult("statshouse.sendSourceBucket3", c.Network, c.ActorID, c.Address, err)
+		}
+	}
+	return nil
+}
+
+func (c *Client) SendSourceBucket3(ctx context.Context, args SendSourceBucket3, extra *rpc.InvokeReqExtra, ret *SendSourceBucket3Response) (err error) {
+	req := c.Client.GetRequest()
+	req.ActorID = c.ActorID
+	req.FunctionName = "statshouse.sendSourceBucket3"
+	if extra != nil {
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+	}
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	req.Body, err = args.WriteBoxedGeneral(req.Body)
+	if err != nil {
+		return internal.ErrorClientWrite("statshouse.sendSourceBucket3", err)
+	}
+	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
+	defer c.Client.PutResponse(resp)
+	if err != nil {
+		return internal.ErrorClientDo("statshouse.sendSourceBucket3", c.Network, c.ActorID, c.Address, err)
+	}
+	if ret != nil {
+		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+			return internal.ErrorClientReadResult("statshouse.sendSourceBucket3", c.Network, c.ActorID, c.Address, err)
 		}
 	}
 	return nil
@@ -661,23 +847,29 @@ type Handler struct {
 	AddMetricsBatch        func(ctx context.Context, args AddMetricsBatch) (internal.True, error)                       // statshouse.addMetricsBatch
 	AutoCreate             func(ctx context.Context, args AutoCreate) (internal.True, error)                            // statshouse.autoCreate
 	GetConfig2             func(ctx context.Context, args GetConfig2) (GetConfigResult, error)                          // statshouse.getConfig2
+	GetConfig3             func(ctx context.Context, args GetConfig3) (GetConfigResult3, error)                         // statshouse.getConfig3
 	GetMetrics3            func(ctx context.Context, args GetMetrics3) (internal.MetadataGetJournalResponsenew, error)  // statshouse.getMetrics3
 	GetTagMapping2         func(ctx context.Context, args GetTagMapping2) (GetTagMappingResult, error)                  // statshouse.getTagMapping2
 	GetTagMappingBootstrap func(ctx context.Context, args GetTagMappingBootstrap) (GetTagMappingBootstrapResult, error) // statshouse.getTagMappingBootstrap
 	GetTargets2            func(ctx context.Context, args GetTargets2) (GetTargetsResult, error)                        // statshouse.getTargets2
 	SendKeepAlive2         func(ctx context.Context, args SendKeepAlive2) (string, error)                               // statshouse.sendKeepAlive2
+	SendKeepAlive3         func(ctx context.Context, args SendKeepAlive3) (SendSourceBucket3Response, error)            // statshouse.sendKeepAlive3
 	SendSourceBucket2      func(ctx context.Context, args SendSourceBucket2) (string, error)                            // statshouse.sendSourceBucket2
+	SendSourceBucket3      func(ctx context.Context, args SendSourceBucket3) (SendSourceBucket3Response, error)         // statshouse.sendSourceBucket3
 	TestConnection2        func(ctx context.Context, args TestConnection2) (string, error)                              // statshouse.testConnection2
 
 	RawAddMetricsBatch        func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.addMetricsBatch
 	RawAutoCreate             func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.autoCreate
 	RawGetConfig2             func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.getConfig2
+	RawGetConfig3             func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.getConfig3
 	RawGetMetrics3            func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.getMetrics3
 	RawGetTagMapping2         func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.getTagMapping2
 	RawGetTagMappingBootstrap func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.getTagMappingBootstrap
 	RawGetTargets2            func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.getTargets2
 	RawSendKeepAlive2         func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.sendKeepAlive2
+	RawSendKeepAlive3         func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.sendKeepAlive3
 	RawSendSourceBucket2      func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.sendSourceBucket2
+	RawSendSourceBucket3      func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.sendSourceBucket3
 	RawTestConnection2        func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouse.testConnection2
 }
 
@@ -774,6 +966,37 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			}
 			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
 				return internal.ErrorServerWriteResult("statshouse.getConfig2", err)
+			}
+			return nil
+		}
+	case 0x7d7b4991: // statshouse.getConfig3
+		hctx.RequestFunctionName = "statshouse.getConfig3"
+		if h.RawGetConfig3 != nil {
+			hctx.Request = r
+			err = h.RawGetConfig3(ctx, hctx)
+			if rpc.IsHijackedResponse(err) {
+				return err
+			}
+			if err != nil {
+				return internal.ErrorServerHandle("statshouse.getConfig3", err)
+			}
+			return nil
+		}
+		if h.GetConfig3 != nil {
+			var args GetConfig3
+			if _, err = args.Read(r); err != nil {
+				return internal.ErrorServerRead("statshouse.getConfig3", err)
+			}
+			ctx = hctx.WithContext(ctx)
+			ret, err := h.GetConfig3(ctx, args)
+			if rpc.IsHijackedResponse(err) {
+				return err
+			}
+			if err != nil {
+				return internal.ErrorServerHandle("statshouse.getConfig3", err)
+			}
+			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
+				return internal.ErrorServerWriteResult("statshouse.getConfig3", err)
 			}
 			return nil
 		}
@@ -932,6 +1155,37 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			}
 			return nil
 		}
+	case 0x4285ff54: // statshouse.sendKeepAlive3
+		hctx.RequestFunctionName = "statshouse.sendKeepAlive3"
+		if h.RawSendKeepAlive3 != nil {
+			hctx.Request = r
+			err = h.RawSendKeepAlive3(ctx, hctx)
+			if rpc.IsHijackedResponse(err) {
+				return err
+			}
+			if err != nil {
+				return internal.ErrorServerHandle("statshouse.sendKeepAlive3", err)
+			}
+			return nil
+		}
+		if h.SendKeepAlive3 != nil {
+			var args SendKeepAlive3
+			if _, err = args.Read(r); err != nil {
+				return internal.ErrorServerRead("statshouse.sendKeepAlive3", err)
+			}
+			ctx = hctx.WithContext(ctx)
+			ret, err := h.SendKeepAlive3(ctx, args)
+			if rpc.IsHijackedResponse(err) {
+				return err
+			}
+			if err != nil {
+				return internal.ErrorServerHandle("statshouse.sendKeepAlive3", err)
+			}
+			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
+				return internal.ErrorServerWriteResult("statshouse.sendKeepAlive3", err)
+			}
+			return nil
+		}
 	case 0x44575940: // statshouse.sendSourceBucket2
 		hctx.RequestFunctionName = "statshouse.sendSourceBucket2"
 		if h.RawSendSourceBucket2 != nil {
@@ -960,6 +1214,37 @@ func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err err
 			}
 			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
 				return internal.ErrorServerWriteResult("statshouse.sendSourceBucket2", err)
+			}
+			return nil
+		}
+	case 0x0d04aa3f: // statshouse.sendSourceBucket3
+		hctx.RequestFunctionName = "statshouse.sendSourceBucket3"
+		if h.RawSendSourceBucket3 != nil {
+			hctx.Request = r
+			err = h.RawSendSourceBucket3(ctx, hctx)
+			if rpc.IsHijackedResponse(err) {
+				return err
+			}
+			if err != nil {
+				return internal.ErrorServerHandle("statshouse.sendSourceBucket3", err)
+			}
+			return nil
+		}
+		if h.SendSourceBucket3 != nil {
+			var args SendSourceBucket3
+			if _, err = args.Read(r); err != nil {
+				return internal.ErrorServerRead("statshouse.sendSourceBucket3", err)
+			}
+			ctx = hctx.WithContext(ctx)
+			ret, err := h.SendSourceBucket3(ctx, args)
+			if rpc.IsHijackedResponse(err) {
+				return err
+			}
+			if err != nil {
+				return internal.ErrorServerHandle("statshouse.sendSourceBucket3", err)
+			}
+			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
+				return internal.ErrorServerWriteResult("statshouse.sendSourceBucket3", err)
 			}
 			return nil
 		}

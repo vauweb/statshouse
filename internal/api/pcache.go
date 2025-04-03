@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -31,7 +31,7 @@ type pointsCache struct {
 	now               func() time.Time
 }
 
-type pointsLoadFunc func(ctx context.Context, pq *preparedPointsQuery, lod data_model.LOD) ([]pSelectRow, error)
+type pointsLoadFunc func(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD) ([]pSelectRow, error)
 
 type timeRange struct {
 	from int64
@@ -56,7 +56,8 @@ func newPointsCache(approxMaxSize int, utcOffset int64, loader pointsLoadFunc, n
 	}
 }
 
-func (c *pointsCache) get(ctx context.Context, key string, pq *preparedPointsQuery, lod data_model.LOD, avoidCache bool) ([]pSelectRow, error) {
+func (c *pointsCache) get(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD, avoidCache bool) ([]pSelectRow, error) {
+	key := pq.getOrBuildCacheKey()
 	if !avoidCache {
 		rows, ok := c.loadCached(key, lod.FromSec, lod.ToSec)
 		if ok {
@@ -64,7 +65,7 @@ func (c *pointsCache) get(ctx context.Context, key string, pq *preparedPointsQue
 		}
 	}
 	loadedAtNano := c.now().UnixNano()
-	rows, err := c.loader(ctx, pq, lod)
+	rows, err := c.loader(ctx, h, pq, lod)
 	if err != nil {
 		return rows, err
 	}

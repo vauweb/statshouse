@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -20,9 +19,7 @@ import (
 	"time"
 
 	"github.com/mailru/easyjson/jwriter"
-
 	"github.com/vkcom/statshouse/internal/data_model"
-
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/promql"
 )
@@ -99,9 +96,9 @@ func cacheSeconds(d time.Duration) int {
 	return s
 }
 
-func exportCSV(w *HTTPRequestHandler, resp *SeriesResponse, metric string) {
-	w.endpointStat.reportServiceTime(http.StatusOK, nil)
-
+func exportCSV(r *httpRequestHandler, resp *SeriesResponse, metric string) {
+	r.endpointStat.reportServiceTime(http.StatusOK, nil)
+	w := r.Response()
 	w.Header().Set(
 		"Content-Disposition",
 		fmt.Sprintf("attachment; filename=%s-%s.csv", metric, time.Now().Format("2006-01-02")),
@@ -131,13 +128,13 @@ func exportCSV(w *HTTPRequestHandler, resp *SeriesResponse, metric string) {
 
 		label := MetaToLabel(resp.Series.SeriesMeta[li], len(uniqueWhat), 0)
 		for di, p := range *data {
-			if math.IsNaN(p) {
+			if !p.IsDefined() {
 				continue
 			}
 
 			err := writer.Write([]string{
 				time.Unix(resp.Series.Time[di], 0).Format("2006-01-02 15:04:05"),
-				strconv.FormatFloat(p, 'f', -1, 64),
+				strconv.FormatFloat(float64(p), 'f', -1, 64),
 				label,
 			})
 			if err != nil {
@@ -148,13 +145,14 @@ func exportCSV(w *HTTPRequestHandler, resp *SeriesResponse, metric string) {
 	}
 }
 
-func respondJSON(w *HTTPRequestHandler, resp interface{}, cache time.Duration, cacheStale time.Duration, err error) {
+func respondJSON(h *httpRequestHandler, resp interface{}, cache time.Duration, cacheStale time.Duration, err error) {
 	code := httpCode(err)
 	r := Response{}
-
-	w.endpointStat.reportServiceTime(code, nil)
+	w := h.Response()
+	h.endpointStat.reportServiceTime(code, nil)
 
 	if err != nil {
+		h.w.handlerErr = err
 		if code == 500 {
 			log.Println("[error]", err.Error())
 		}
@@ -166,21 +164,22 @@ func respondJSON(w *HTTPRequestHandler, resp interface{}, cache time.Duration, c
 	var jw jwriter.Writer
 	r.MarshalEasyJSON(&jw)
 	if jw.Error != nil {
-		log.Printf("[error] failed to marshal JSON response for %q: %v", w.endpointStat.user, jw.Error)
+		h.w.handlerErr = err
+		log.Printf("[error] failed to marshal JSON response for %q: %v", h.endpointStat.user, jw.Error)
 		msg := `{"error": "failed to marshal JSON response"}`
 		w.Header().Set("Content-Length", strconv.Itoa(len(msg)))
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set(ServerTimingHeaderKey, w.endpointStat.timings.String())
+		w.Header().Set(ServerTimingHeaderKey, h.endpointStat.timings.String())
 		code = http.StatusInternalServerError
 		w.WriteHeader(code)
 		_, err := w.Write([]byte(msg))
 		if err != nil {
-			log.Printf("[error] failed to write HTTP response for %q: %v", w.endpointStat.user, err)
+			log.Printf("[error] failed to write HTTP response for %q: %v", h.endpointStat.user, err)
 		}
 	} else {
 		size := jw.Size()
-		if w.verbose {
-			log.Printf("[debug] serialized %v bytes of JSON for %q in %v", size, w.endpointStat.user, time.Since(start))
+		if h.verbose {
+			log.Printf("[debug] serialized %v bytes of JSON for %q in %v", size, h.endpointStat.user, time.Since(start))
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(size))
 		w.Header().Set("Content-Type", "application/json")
@@ -194,23 +193,24 @@ func respondJSON(w *HTTPRequestHandler, resp interface{}, cache time.Duration, c
 				w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d, stale-while-revalidate=%d", cacheSeconds(cache), cacheSeconds(cacheStale)))
 			}
 		}
-		w.Header().Set(ServerTimingHeaderKey, w.endpointStat.timings.String())
+		w.Header().Set(ServerTimingHeaderKey, h.endpointStat.timings.String())
 		w.WriteHeader(code)
 		start := time.Now()
 		_, err := jw.DumpTo(w)
-		if w.verbose && err == nil {
-			log.Printf("[debug] dumped %v bytes of JSON for %q in %v", size, w.endpointStat.user, time.Since(start))
+		if h.verbose && err == nil {
+			log.Printf("[debug] dumped %v bytes of JSON for %q in %v", size, h.endpointStat.user, time.Since(start))
 		}
 		if err != nil {
-			log.Printf("[error] failed to write HTTP response for %q: %v", w.endpointStat.user, err)
+			log.Printf("[error] failed to write HTTP response for %q: %v", h.endpointStat.user, err)
 		}
 	}
 }
 
-func respondPlot(w *HTTPRequestHandler, format string, resp []byte, cache time.Duration, cacheStale time.Duration, user string) {
+func respondPlot(h *httpRequestHandler, format string, resp []byte, cache time.Duration, cacheStale time.Duration, user string) {
 	code := http.StatusOK
-	w.endpointStat.reportServiceTime(code, nil)
-	w.Header().Set(ServerTimingHeaderKey, w.endpointStat.timings.String())
+	h.endpointStat.reportServiceTime(code, nil)
+	w := h.Response()
+	w.Header().Set(ServerTimingHeaderKey, h.endpointStat.timings.String())
 
 	w.Header().Set("Content-Length", strconv.Itoa(len(resp)))
 	switch format {
@@ -233,7 +233,7 @@ func respondPlot(w *HTTPRequestHandler, format string, resp []byte, cache time.D
 
 	start := time.Now()
 	_, err := w.Write(resp)
-	if w.verbose && err == nil {
+	if h.verbose && err == nil {
 		log.Printf("[debug] dumped %v bytes of %s render for %q in %v", len(resp), format, user, time.Since(start))
 	}
 	if err != nil {
@@ -359,20 +359,6 @@ func parseTagID(tagID string) (string, error) {
 		return res, nil
 	}
 	return "", httpErr(http.StatusBadRequest, err)
-}
-
-func parseVersion(s string) (string, error) {
-	if s == "" {
-		return Version1, nil
-	}
-
-	for _, v := range []string{Version1, Version2, Version3} {
-		if s == v {
-			return v, nil
-		}
-	}
-
-	return "", httpErr(http.StatusBadRequest, fmt.Errorf("invalid version: %q", s))
 }
 
 func parseRenderWidth(s string) (int, error) {

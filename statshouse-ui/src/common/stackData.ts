@@ -1,9 +1,15 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import uPlot, { TypedArray } from 'uplot';
 
 export function stackData(data: uPlot.AlignedData): { data: uPlot.AlignedData; bands: uPlot.Band[] } {
-  let data2: ((number | null | undefined)[] | TypedArray)[] = [];
-  let d0Len = data[0].length;
-  let accum: number[] = new Array(d0Len).fill(0);
+  const data2: ((number | null | undefined)[] | TypedArray)[] = [];
+  const d0Len = data[0].length;
+  const accum: number[] = new Array(d0Len).fill(0);
   let bands: uPlot.Band[] = [];
 
   for (let i = 1; i < data.length; i++) {
@@ -18,7 +24,7 @@ export function stackData(data: uPlot.AlignedData): { data: uPlot.AlignedData; b
   }
   for (let i = 1; i < data.length; i++) {
     bands.push({
-      series: [data.findIndex((s, j) => j > i), i],
+      series: [data.findIndex((_s, j) => j > i), i],
     });
   }
   bands = bands.filter((b) => b.series[0] > -1);

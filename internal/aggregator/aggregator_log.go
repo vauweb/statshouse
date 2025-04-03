@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -57,7 +57,7 @@ func (a *Aggregator) goInternalLog() {
 
 		if len(localLog) != 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), data_model.ClickHouseTimeoutInsert)
-			status, exception, _, err := sendToClickhouse(ctx, httpClient, a.config.KHAddr, "statshouse_internal_log_buffer(time,host,type,key0,key1,key2,key3,key4,key5,message)", localLog)
+			status, exception, _, err := sendToClickhouse(ctx, httpClient, a.config.KHAddr, a.config.KHUser, a.config.KHPassword, "statshouse_internal_log_buffer(time,host,type,key0,key1,key2,key3,key4,key5,message)", localLog, "")
 			cancel()
 			if err != nil {
 				a.appendInternalLog("insert_error", "", strconv.Itoa(status), strconv.Itoa(exception), "statshouse_internal_log_buffer", "", "", err.Error()) // Hopefully will insert next time
@@ -68,24 +68,20 @@ func (a *Aggregator) goInternalLog() {
 	}
 }
 
-func (a *Aggregator) reportInsertKeys(bucketTime uint32, metric int32, historic bool, err error, status int, exception int) data_model.Key {
-	key := a.aggKey(bucketTime, metric, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorRecent, format.TagValueIDInsertTimeOK, int32(status), int32(exception)})
-	if err != nil {
-		key.Tags[5] = format.TagValueIDInsertTimeError
+func (a *Aggregator) reportInsertMetric(t uint32, metricInfo *format.MetricMetaValue, historic bool, err error, status int, exception int, v3Format bool, inflightType int32, value float64) {
+	v3FormatTag := int32(format.TagValueIDAggInsertV2)
+	if v3Format {
+		v3FormatTag = format.TagValueIDAggInsertV3
 	}
+	historicTag := int32(format.TagValueIDConveyorRecent)
 	if historic {
-		key.Tags[4] = format.TagValueIDConveyorHistoric
+		historicTag = format.TagValueIDConveyorHistoric
 	}
-	return key
-}
-
-func (a *Aggregator) reportExpInsertKeys(bucketTime uint32, metric int32, historic bool, err error, status int, exception int) data_model.Key {
-	key := a.aggKey(bucketTime, metric, [16]int32{0, 0, 0, 0, format.TagValueIDConveyorRecent, format.TagValueIDInsertTimeOK, int32(status), int32(exception), 1})
+	statusTag := int32(format.TagValueIDStatusOK)
 	if err != nil {
-		key.Tags[5] = format.TagValueIDInsertTimeError
+		statusTag = format.TagValueIDStatusError
 	}
-	if historic {
-		key.Tags[4] = format.TagValueIDConveyorHistoric
-	}
-	return key
+	a.sh2.AddValueCounter(t, metricInfo,
+		[]int32{0, 0, 0, 0, historicTag, statusTag, int32(status), int32(exception), v3FormatTag, inflightType},
+		value, 1)
 }

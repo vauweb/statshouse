@@ -1,17 +1,17 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo, useCallback, useMemo } from 'react';
-import { Select } from 'components/Select';
+import { memo, useCallback, useMemo } from 'react';
+import { Select } from '@/components/Select';
 
 import { ReactComponent as SVGCopy } from 'bootstrap-icons/icons/copy.svg';
-import { debug } from 'common/debug';
-import { Button } from 'components/UI';
-import { type PlotKey } from 'url2';
-import { useStatsHouse } from 'store2';
+import { debug } from '@/common/debug';
+import { Button } from '@/components/UI';
+import type { PlotKey } from '@/url2';
+import { useWidgetPlotDataContext } from '@/contexts/useWidgetPlotDataContext';
 
 type PlotLegendMaxHostProps = {
   value: string;
@@ -20,8 +20,18 @@ type PlotLegendMaxHostProps = {
   idx: number;
 };
 
-function _PlotLegendMaxHost({ value, placeholder, plotKey, idx }: PlotLegendMaxHostProps) {
-  const maxHostLists = useStatsHouse((s) => s.plotsData[plotKey]?.maxHostLists ?? []);
+function copyItem(value?: string | string[]) {
+  if (typeof value === 'string') {
+    window.navigator.clipboard.writeText(value).then(() => {
+      debug.log(`clipboard ${value}`);
+    });
+  }
+}
+
+export const PlotLegendMaxHost = memo(function PlotLegendMaxHost({ value, placeholder, idx }: PlotLegendMaxHostProps) {
+  const {
+    plotData: { maxHostLists },
+  } = useWidgetPlotDataContext();
   const onCopyList = useCallback(() => {
     const list: string = maxHostLists[idx - 1]?.map(({ name }) => name).join('\r\n') ?? '';
     window.navigator.clipboard.writeText(list).then(() => {
@@ -38,8 +48,10 @@ function _PlotLegendMaxHost({ value, placeholder, plotKey, idx }: PlotLegendMaxH
         value={value}
         placeholder={placeholder}
         options={options}
+        onChange={copyItem}
         listOnlyOpen
         showCountItems
+        valueToInput
       />
       <Button
         onClick={onCopyList}
@@ -51,6 +63,4 @@ function _PlotLegendMaxHost({ value, placeholder, plotKey, idx }: PlotLegendMaxH
       </Button>
     </div>
   );
-}
-
-export const PlotLegendMaxHost = memo(_PlotLegendMaxHost);
+});

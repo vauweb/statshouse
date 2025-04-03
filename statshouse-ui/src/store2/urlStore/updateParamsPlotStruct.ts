@@ -1,9 +1,24 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { produce } from 'immer';
 import type { ProduceUpdate } from '../helpers';
-import { getNewMetric, GroupInfo, GroupKey, PlotKey, PlotParams, QueryParams, VariableKey, VariableParams } from 'url2';
+import {
+  getNewMetric,
+  GroupInfo,
+  GroupKey,
+  PlotKey,
+  PlotParams,
+  QueryParams,
+  VariableKey,
+  VariableParams,
+} from '@/url2';
 import type { StatsHouseStore } from '../statsHouseStore';
-import type { TagKey } from 'api/enum';
-import { isNotNil, toNumberM } from 'common/helpers';
+import type { TagKey } from '@/api/enum';
+import { isNotNil, toNumberM } from '@/common/helpers';
 import { clonePlot } from '../../url2/clonePlot';
 import { cloneGroup } from '../../url2/cloneGroup';
 import { cloneVariable } from '../../url2/cloneVariable';

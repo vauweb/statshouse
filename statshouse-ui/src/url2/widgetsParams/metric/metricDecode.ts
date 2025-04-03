@@ -1,3 +1,9 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { PlotKey, PlotParams } from '../../queryParams';
 import {
   freeKeyPrefix,
@@ -33,9 +39,11 @@ export function metricDecode(
   const rawMaxHost = searchParams?.[GET_PARAMS.metricMaxHost]?.[treeParamsObjectValueSymbol]?.[0];
   const rawTotalLine = searchParams?.[GET_PARAMS.viewTotalLine]?.[treeParamsObjectValueSymbol]?.[0];
   const rawFilledGraph = searchParams?.[GET_PARAMS.viewFilledGraph]?.[treeParamsObjectValueSymbol]?.[0];
+  const rawLogScale = searchParams?.[GET_PARAMS.viewLogScale]?.[treeParamsObjectValueSymbol]?.[0];
   const rawPrometheusCompat = searchParams?.[GET_PARAMS.prometheusCompat]?.[treeParamsObjectValueSymbol]?.[0];
   const metricName = searchParams?.[GET_PARAMS.metricName]?.[treeParamsObjectValueSymbol]?.[0];
   const promQL = searchParams?.[GET_PARAMS.metricPromQL]?.[treeParamsObjectValueSymbol]?.[0];
+
   return {
     id: plotKey,
     type,
@@ -83,6 +91,7 @@ export function metricDecode(
     ),
     totalLine: rawTotalLine != null ? rawTotalLine === '1' : defaultPlot.totalLine,
     filledGraph: rawFilledGraph != null ? rawFilledGraph !== '0' : defaultPlot.filledGraph,
+    logScale: rawLogScale != null ? rawLogScale === '1' : defaultPlot.logScale,
     prometheusCompat: rawPrometheusCompat != null ? rawPrometheusCompat === '1' : defaultPlot.prometheusCompat,
     timeShifts:
       searchParams?.[GET_PARAMS.metricLocalTimeShifts]?.[treeParamsObjectValueSymbol]

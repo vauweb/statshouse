@@ -1,7 +1,13 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { RefObject, useEffect, useState } from 'react';
 
 export function buildThresholdList(step: number = 0.5) {
-  let thresholds = [];
+  const thresholds = [];
   for (let i = 0; i <= 1; i += step) {
     thresholds.push(i);
   }
@@ -21,7 +27,7 @@ export function useIntersectionObserver(
       return;
     }
     const upd = (entries: IntersectionObserverEntry[]) => {
-      setVisible(entries.reduce((res, e) => e.intersectionRatio, 0));
+      setVisible(entries.reduce((_res, e) => e.intersectionRatio, 0));
     };
     const o = new IntersectionObserver(upd, { threshold });
     o.observe(target);

@@ -1,12 +1,19 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { Portal } from './Portal';
 import css from './style.module.css';
 import React, { memo, ReactNode, RefObject, useEffect, useMemo, useState } from 'react';
-import { buildThresholdList, useIntersectionObserver, useRectObserver } from 'hooks';
+import { buildThresholdList, useIntersectionObserver, useRectObserver } from '@/hooks';
 import cn from 'classnames';
-import { useWindowSize, WindowSize } from 'hooks/useWindowSize';
+import { useWindowSize, WindowSize } from '@/hooks/useWindowSize';
 
 const popperId = 'popper-group';
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const POPPER_VERTICAL = {
   top: 'top',
   bottom: 'bottom',
@@ -17,6 +24,7 @@ export const POPPER_VERTICAL = {
 
 export type PopperVertical = (typeof POPPER_VERTICAL)[keyof typeof POPPER_VERTICAL];
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const POPPER_HORIZONTAL = {
   left: 'left',
   right: 'right',
@@ -98,7 +106,7 @@ function checkVertical(
 
 const threshold = buildThresholdList(1);
 
-export function _Popper({
+export const Popper = memo(function Popper({
   children,
   className,
   classNameInner,
@@ -143,18 +151,6 @@ export function _Popper({
       )
     );
   }, [targetRect, verticalClass, windowRect]);
-
-  // useEffect(() => {
-  //   console.log({
-  //     targetRef: targetRef?.current,
-  //     targetRect: { ...targetRect.toJSON() },
-  //     windowRect: { ...windowRect },
-  //   });
-  //   console.log({
-  //     topHeight: targetRect.y - windowRect.scrollY,
-  //     bottomHeight: windowRect.scrollY + windowRect.height - targetRect.y - targetRect.height,
-  //   });
-  // }, [targetRect, targetRef, windowRect]);
 
   useEffect(() => {
     if ((innerVisible >= 1 && !always) || !show) {
@@ -267,6 +263,4 @@ export function _Popper({
       )}
     </Portal>
   );
-}
-
-export const Popper = memo(_Popper);
+});

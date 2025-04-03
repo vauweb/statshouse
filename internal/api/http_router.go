@@ -6,73 +6,99 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/vkcom/statshouse/internal/format"
+	"github.com/vkcom/statshouse/internal/promql"
 )
 
-type Router struct {
+type httpRouter struct {
 	*Handler
 	*mux.Router
 }
 
-type Route struct {
+type httpRoute struct {
 	*Handler
 	*mux.Route
 	endpoint    string
-	handlerFunc func(*HTTPRequestHandler, *http.Request)
+	handlerFunc func(*httpRequestHandler)
 }
 
-type HTTPRequestHandler struct {
+type requestHandler struct {
 	*Handler
-	responseWriter http.ResponseWriter
-	accessInfo     accessInfo
-	endpointStat   endpointStat
+	accessInfo   accessInfo
+	endpointStat endpointStat
+	trace        []string
+	traceMu      sync.Mutex
+	debug        bool
+	version      string
+	query        promql.Query
+}
+
+type httpRequestHandler struct {
+	requestHandler
+	*http.Request
+	w httpResponseWriter
+}
+
+type httpResponseWriter struct {
+	http.ResponseWriter
+	handlerErr     error
 	statusCode     int
 	statusCodeSent bool
 }
 
 type error500 struct {
-	time  time.Time
-	what  any
-	stack []byte
+	time       time.Time
+	requestURI string
+	what       any
+	stack      []byte
+	trace      []string
 }
 
-func (r Router) Path(tpl string) *Route {
-	return &Route{
+func NewHTTPRouter(h *Handler) httpRouter {
+	return httpRouter{
+		Handler: h,
+		Router:  mux.NewRouter(),
+	}
+}
+
+func (r httpRouter) Path(tpl string) *httpRoute {
+	return &httpRoute{
 		Handler:  r.Handler,
 		Route:    r.Router.Path(tpl),
 		endpoint: tpl[strings.LastIndex(tpl, "/")+1:],
 	}
 }
 
-func (r Router) PathPrefix(tpl string) *Route {
-	return &Route{
+func (r httpRouter) PathPrefix(tpl string) *httpRoute {
+	return &httpRoute{
 		Handler: r.Handler,
 		Route:   r.Router.PathPrefix(tpl),
 	}
 }
 
-func (r *Route) Subrouter() Router {
-	return Router{
+func (r *httpRoute) Subrouter() httpRouter {
+	return httpRouter{
 		Handler: r.Handler,
 		Router:  r.Route.Subrouter(),
 	}
 }
 
-func (r *Route) Methods(methods ...string) *Route {
+func (r *httpRoute) Methods(methods ...string) *httpRoute {
 	r.Route = r.Route.Methods(methods...)
 	return r
 }
 
-func (r *Route) HandlerFunc(f func(*HTTPRequestHandler, *http.Request)) *Route {
+func (r *httpRoute) HandlerFunc(f func(*httpRequestHandler)) *httpRoute {
 	r.handlerFunc = f
 	r.Route.HandlerFunc(r.handle)
 	return r
 }
 
-func (r *Route) handle(http http.ResponseWriter, req *http.Request) {
+func (r *httpRoute) handle(w http.ResponseWriter, req *http.Request) {
 	timeNow := time.Now()
 	var metric string
 	if v := req.FormValue(ParamMetric); v != "" {
@@ -86,73 +112,162 @@ func (r *Route) handle(http http.ResponseWriter, req *http.Request) {
 	} else {
 		dataFormat = "json"
 	}
-	w := &HTTPRequestHandler{
-		Handler:        r.Handler,
-		responseWriter: http,
-		endpointStat: endpointStat{
-			timestamp:  timeNow,
-			endpoint:   r.endpoint,
-			protocol:   format.TagValueIDHTTP,
-			method:     req.Method,
-			dataFormat: dataFormat,
-			metric:     metric,
-			priority:   req.FormValue(paramPriority),
-			timings: ServerTimingHeader{
-				Timings: make(map[string][]time.Duration),
-				started: timeNow,
+	h := &httpRequestHandler{
+		requestHandler: requestHandler{
+			Handler: r.Handler,
+			endpointStat: endpointStat{
+				timestamp:  timeNow,
+				endpoint:   r.endpoint,
+				protocol:   format.TagValueIDHTTP,
+				method:     req.Method,
+				dataFormat: dataFormat,
+				metric:     metric,
+				priority:   req.FormValue(paramPriority),
+				timings: ServerTimingHeader{
+					Timings: make(map[string][]time.Duration),
+					started: timeNow,
+				},
 			},
+			debug: true,
 		},
+		Request: req,
+		w:       httpResponseWriter{ResponseWriter: w},
 	}
-	defer r.reportStatistics(w)
-	r.handlerFunc(w, req)
-}
-
-func (r *Route) reportStatistics(w *HTTPRequestHandler) {
-	if err := recover(); err != nil {
-		if !w.statusCodeSent {
-			http.Error(w, fmt.Sprint(err), http.StatusInternalServerError)
+	defer func() {
+		if err := recover(); err != nil {
+			if !h.w.statusCodeSent {
+				http.Error(&h.w, fmt.Sprint(err), http.StatusInternalServerError)
+			}
+			h.savePanic(req.RequestURI, err, debug.Stack())
 		}
-		v := error500{time.Now(), err, debug.Stack()}
-		w.errorsMu.Lock()
-		w.errors[w.errorX] = v
-		w.errorX = (w.errorX + 1) % len(w.errors)
-		w.errorsMu.Unlock()
+		h.endpointStat.report(h.w.statusCode, format.BuiltinMetricMetaAPIResponseTime.Name)
+	}()
+	err := h.init()
+	if err != nil {
+		respondJSON(h, nil, 0, 0, err)
+	} else {
+		r.handlerFunc(h)
 	}
-	w.endpointStat.report(w.statusCode, format.BuiltinMetricNameAPIResponseTime)
+	if req.Context().Err() == nil && 500 <= h.w.statusCode && h.w.statusCode < 600 {
+		if err == nil {
+			if h.w.handlerErr != nil {
+				err = h.w.handlerErr
+			} else {
+				err = fmt.Errorf("status code %d", h.w.statusCode)
+			}
+		}
+		h.savePanic(req.RequestURI, err, nil)
+	}
 }
 
-func DumpInternalServerErrors(w *HTTPRequestHandler, r *http.Request) {
-	if err := w.parseAccessToken(r); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		return
-	}
-	if ok := w.accessInfo.insecureMode || w.accessInfo.bitAdmin; !ok {
+func DumpInternalServerErrors(r *httpRequestHandler) {
+	w := r.Response()
+	if ok := r.accessInfo.insecureMode || r.accessInfo.bitAdmin; !ok {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.errorsMu.RLock()
-	defer w.errorsMu.RUnlock()
-	for i := 0; i < len(w.errors) && w.errors[i].what != nil; i++ {
+	r.errorsMu.RLock()
+	defer r.errorsMu.RUnlock()
+	for i := 0; i < len(r.errors) && r.errors[i].what != nil; i++ {
 		w.Write([]byte("# \n"))
-		w.Write([]byte(fmt.Sprintf("# %s \n", w.errors[i].what)))
-		w.Write([]byte("# " + w.errors[i].time.Format(time.RFC3339) + " \n"))
-		w.Write([]byte("# \n"))
-		w.Write(w.errors[i].stack)
+		w.Write([]byte("# " + r.errors[i].requestURI + " \n"))
+		w.Write([]byte(fmt.Sprintf("# %s \n", r.errors[i].what)))
+		w.Write([]byte("# " + r.errors[i].time.Format(time.RFC3339) + " \n"))
+		w.Write([]byte("# debug trace\n"))
+		for _, v := range r.errors[i].trace {
+			w.Write([]byte(v))
+			w.Write([]byte("\n"))
+		}
+		w.Write([]byte("# stack trace\n"))
+		w.Write(r.errors[i].stack)
 		w.Write([]byte("\n"))
 	}
 }
 
-func (h *HTTPRequestHandler) Header() http.Header {
-	return h.responseWriter.Header()
+func DumpQueryTopMemUsage(r *httpRequestHandler) {
+	w := r.Response()
+	if ok := r.accessInfo.insecureMode || r.accessInfo.bitAdmin; !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	var s []queryTopMemUsage
+	r.queryTopMemUsageMu.Lock()
+	if r.FormValue("reset") != "" {
+		r.queryTopMemUsage, s = s, r.queryTopMemUsage
+	} else {
+		s = make([]queryTopMemUsage, 0, len(r.queryTopMemUsage))
+		s = append(s, r.queryTopMemUsage...)
+	}
+	r.queryTopMemUsageMu.Unlock()
+	for _, v := range s {
+		var protocol string
+		switch v.protocol {
+		case format.TagValueIDRPC:
+			protocol = "RPC"
+		case format.TagValueIDHTTP:
+			protocol = "HTTP"
+		default:
+			protocol = strconv.Itoa(v.protocol)
+		}
+		w.Write([]byte(v.expr))
+		w.Write([]byte(fmt.Sprintf(
+			"\n# size=%d rows=%d cols=%d from=%d to=%d range=%d token=%s proto=%s\n\n",
+			v.memUsage, v.rowCount, v.colCount, v.start, v.end, v.end-v.start, v.user, protocol)))
+	}
 }
 
-func (h *HTTPRequestHandler) Write(s []byte) (int, error) {
-	return h.responseWriter.Write(s)
+func DumpQueryTopDuration(r *httpRequestHandler) {
+	w := r.Response()
+	if ok := r.accessInfo.insecureMode || r.accessInfo.bitAdmin; !ok {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	var s []queryTopDuration
+	r.queryTopDurationMu.Lock()
+	if r.FormValue("reset") != "" {
+		r.queryTopDuration, s = s, r.queryTopDuration
+	} else {
+		s = make([]queryTopDuration, 0, len(r.queryTopDuration))
+		s = append(s, r.queryTopDuration...)
+	}
+	r.queryTopDurationMu.Unlock()
+	for _, v := range s {
+		var protocol string
+		switch v.protocol {
+		case format.TagValueIDRPC:
+			protocol = "RPC"
+		case format.TagValueIDHTTP:
+			protocol = "HTTP"
+		default:
+			protocol = strconv.Itoa(v.protocol)
+		}
+		w.Write([]byte("# PromQL\n"))
+		w.Write([]byte(v.expr))
+		w.Write([]byte("\n# SQL\n"))
+		w.Write([]byte(v.query))
+		w.Write([]byte(fmt.Sprintf(
+			"\n# duration=%v from=%d to=%d range=%d token=%s proto=%s\n\n",
+			v.duration, v.start, v.end, v.end-v.start, v.user, protocol)))
+	}
 }
 
-func (h *HTTPRequestHandler) WriteHeader(statusCode int) {
+func (r *httpRequestHandler) Response() http.ResponseWriter {
+	return &r.w
+}
+
+func (h *httpResponseWriter) Header() http.Header {
+	return h.ResponseWriter.Header()
+}
+
+func (h *httpResponseWriter) Write(s []byte) (int, error) {
+	return h.ResponseWriter.Write(s)
+}
+
+func (h *httpResponseWriter) WriteHeader(statusCode int) {
 	h.statusCode = statusCode
-	h.responseWriter.WriteHeader(statusCode)
+	h.ResponseWriter.WriteHeader(statusCode)
 	h.statusCodeSent = true
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -45,11 +45,11 @@ const (
 	AgentPercentileCompression      = 40 // TODO - will typically have 20-30 centroids for compression 40
 	AggregatorPercentileCompression = 80 // TODO - clickhouse has compression of 256 by default
 
-	// time between calendar second is finished and sending to aggregators starts
-	// so clients have this time after finishing second to send events to agent
+	// time between calendar second start and sending to aggregators
+	// so clients have this time even after finishing second to send events to agent
 	// if they succeed, there is no sampling penalty.
-	// set to >300ms only after all libraries which send at 0.5 calendar second are updated
-	AgentWindow = 300 * time.Millisecond // must be < 1 seconds.
+	// set to >1300ms only after all libraries which send at 0.5 calendar second are updated
+	AgentWindow = 1300 * time.Millisecond // must be 1..2 seconds.
 
 	MaxShortWindow    = 5        // Must be >= 2, 5 seconds to send recent data, if too late - send as historic
 	FutureWindow      = 4        // Allow a couple of seconds clocks difference on clients. Plus rounding to multiple of 3
@@ -64,6 +64,8 @@ const (
 	InsertBudgetFixed = 300000
 	// fixed budget for BuiltinMetricIDAggKeepAlive and potentially other metrics which can be added with 0 contributors
 	// Also helps when # of contributors is very small
+
+	MaxSendMoreData = 10 * 1024 * 1024 // some limit
 
 	AgentAggregatorDelay = 5  // Typical max
 	InsertDelay          = 10 // Typical max
@@ -84,15 +86,15 @@ const (
 	ClickHouseTimeoutInsert   = 5 * time.Minute  // reduces chance of duplicates
 	ClickHouseTimeoutShutdown = 30 * time.Second // we do not delay aggregator shutdown by more than this time
 
-	KeepAliveMaxBackoff          = 30 * time.Second // for cases when aggregators quickly return error
-	JournalDDOSProtectionTimeout = 50 * time.Millisecond
+	KeepAliveMaxBackoff               = 30 * time.Second      // for cases when aggregators quickly return error
+	JournalDDOSProtectionTimeout      = 50 * time.Millisecond // protects the metadata engine from overload
+	JournalDDOSProtectionAgentTimeout = 1 * time.Second       // protects CPU usage of agent
 
 	InternalLogInsertInterval = 5 * time.Second
 
 	RPCErrorMissedRecentConveyor = -5001 // just send again through historic
 	RPCErrorInsert               = -5002 // just send again through historic (for recent), or send again after delay (for historic)
 	RPCErrorNoAutoCreate         = -5004 // just live with it, this is normal
-	RPCErrorTerminateLongpoll    = -5005 // we terminate long polls because rpc.Server does not inform us about hctx disconnects. TODO - remove as soon as Server is updated
 	RPCErrorScrapeAgentIP        = -5006 // scrape agent must have IP address
 
 	JournalDiskNamespace        = "metric_journal_v5:"
@@ -101,18 +103,12 @@ const (
 	BootstrapDiskNamespace      = "bootstrap:"  // stored in aggregator only
 	AutoconfigDiskNamespace     = "autoconfig:" // stored in agents only
 
-	MappingMaxMetricsInQueue = 1000
+	MappingMaxMetricsInQueue = 4000
 	MappingMaxMemCacheSize   = 1_000_000
 	MappingMaxDiskCacheSize  = 10_000_000
 	MappingCacheTTLMinimum   = 7 * 24 * time.Hour
 	MappingNegativeCacheTTL  = 5 * time.Second
 	MappingMinInterval       = 1 * time.Millisecond
-
-	SimulatorMetricPrefix = "simulator_metric_"
-
-	StatshouseAgentRemoteConfigMetric      = "statshouse_agent_remote_config"
-	StatshouseAggregatorRemoteConfigMetric = "statshouse_aggregator_remote_config"
-	APIRemoteConfig                        = "statshouse_api_remote_config"
 )
 
 var ErrEntityNotExists = &rpc.Error{
@@ -153,7 +149,7 @@ func SilentRPCError(err error) bool {
 	}
 	switch rpcError.Code {
 	case RPCErrorMissedRecentConveyor, RPCErrorInsert,
-		RPCErrorNoAutoCreate, RPCErrorTerminateLongpoll:
+		RPCErrorNoAutoCreate:
 		return true
 	default:
 		return false
@@ -168,13 +164,4 @@ func SetProxyHeaderStagingLevel(header *tlstatshouse.CommonProxyHeader, fieldsMa
 func SetProxyHeaderBytesStagingLevel(header *tlstatshouse.CommonProxyHeaderBytes, fieldsMask *uint32, stagingLevel int) {
 	header.SetAgentEnvStaging0(stagingLevel&1 == 1, fieldsMask)
 	header.SetAgentEnvStaging1(stagingLevel&2 == 2, fieldsMask)
-}
-
-func RemoteConfigMetric(name string) bool {
-	switch name {
-	case StatshouseAgentRemoteConfigMetric, StatshouseAggregatorRemoteConfigMetric:
-		return true
-	default:
-		return false
-	}
 }

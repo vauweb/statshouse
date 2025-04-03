@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,15 +7,16 @@
 package metajournal
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"strings"
 	"sync"
 
-	"github.com/prometheus/prometheus/model/labels"
+	"github.com/mailru/easyjson"
+	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/pcache"
 )
 
 type GroupWithMetricsList struct {
@@ -25,32 +26,19 @@ type GroupWithMetricsList struct {
 
 type ApplyPromConfig func(configID int32, configString string)
 
-type SnapshotMeta struct {
-	MetricsByIDSnapshot   map[int32]*format.MetricMetaValue
-	MetricsByNameSnapshot map[string]*format.MetricMetaValue
-}
-
-type metaSnapshot struct {
-	mu                    sync.RWMutex
-	metricsByIDSnapshot   map[int32]*format.MetricMetaValue
-	metricsByNameSnapshot map[string]*format.MetricMetaValue
-}
-
 type MetricsStorage struct {
 	mu            sync.RWMutex
-	metaSnapshot  *metaSnapshot
+	metricUpdMu   sync.Mutex // allows consistency through metric update functions without taking mu.Lock
 	metricsByID   map[int32]*format.MetricMetaValue
 	metricsByName map[string]*format.MetricMetaValue
 
 	dashboardByID map[int32]*format.DashboardMeta
 
-	builtInGroup map[int32]*format.MetricsGroup
 	groupsByID   map[int32]*format.MetricsGroup
 	groupsByName map[string]*format.MetricsGroup
 
-	builtInNamespace map[int32]*format.NamespaceMeta
-	namespaceByID    map[int32]*format.NamespaceMeta
-	namespaceByName  map[string]*format.NamespaceMeta
+	namespaceByID   map[int32]*format.NamespaceMeta
+	namespaceByName map[string]*format.NamespaceMeta
 
 	promConfig          tlmetadata.Event
 	promConfigGenerated tlmetadata.Event
@@ -58,88 +46,32 @@ type MetricsStorage struct {
 
 	applyPromConfig ApplyPromConfig
 
-	journal *Journal // can be easily moved out, if desired
+	versionClientMu sync.Mutex
+	lastVersion     int64
+	versionClients  []versionClient
 }
 
-func MakeMetricsStorage(namespaceSuffix string, dc *pcache.DiskCache, applyPromConfig ApplyPromConfig, applyEvents ...ApplyEvent) *MetricsStorage {
+func MakeMetricsStorage(applyPromConfig ApplyPromConfig) *MetricsStorage {
 	result := &MetricsStorage{
-		metaSnapshot: &metaSnapshot{
-			metricsByNameSnapshot: map[string]*format.MetricMetaValue{},
-			metricsByIDSnapshot:   map[int32]*format.MetricMetaValue{},
-		},
-		metricsByID:      map[int32]*format.MetricMetaValue{},
-		metricsByName:    map[string]*format.MetricMetaValue{},
-		dashboardByID:    map[int32]*format.DashboardMeta{},
-		builtInGroup:     map[int32]*format.MetricsGroup{},
-		groupsByID:       map[int32]*format.MetricsGroup{},
-		builtInNamespace: map[int32]*format.NamespaceMeta{},
-		namespaceByID:    map[int32]*format.NamespaceMeta{},
-		namespaceByName:  map[string]*format.NamespaceMeta{},
-		applyPromConfig:  applyPromConfig,
+		metricsByID:     map[int32]*format.MetricMetaValue{},
+		metricsByName:   map[string]*format.MetricMetaValue{},
+		dashboardByID:   map[int32]*format.DashboardMeta{},
+		groupsByID:      map[int32]*format.MetricsGroup{},
+		groupsByName:    map[string]*format.MetricsGroup{},
+		namespaceByID:   map[int32]*format.NamespaceMeta{},
+		namespaceByName: map[string]*format.NamespaceMeta{},
+		applyPromConfig: applyPromConfig,
 	}
 	for id, g := range format.BuiltInGroupDefault {
-		result.builtInGroup[id] = g
+		result.groupsByID[id] = g
+		result.groupsByName[g.Name] = g
 	}
 	for id, g := range format.BuiltInNamespaceDefault {
-		result.builtInNamespace[id] = g
+		result.namespaceByID[id] = g
+		result.namespaceByName[g.Name] = g
 	}
-	result.journal = MakeJournal(namespaceSuffix, dc, append([]ApplyEvent{result.ApplyEvent}, applyEvents...))
 	return result
 }
-
-func (snapshot *metaSnapshot) GetMetaMetric(metricID int32) *format.MetricMetaValue {
-	snapshot.mu.RLock()
-	defer snapshot.mu.RUnlock()
-	return snapshot.metricsByIDSnapshot[metricID]
-}
-
-func (snapshot *metaSnapshot) GetMetaMetricByName(metricName string) *format.MetricMetaValue {
-	snapshot.mu.RLock()
-	defer snapshot.mu.RUnlock()
-	return snapshot.metricsByNameSnapshot[metricName]
-}
-
-func (snapshot *metaSnapshot) GetMetaMetricByNameBytes(metric []byte) *format.MetricMetaValue {
-	snapshot.mu.RLock()
-	defer snapshot.mu.RUnlock()
-	return snapshot.metricsByNameSnapshot[string(metric)]
-}
-
-func (snapshot SnapshotMeta) GetMetaMetric(metricID int32) *format.MetricMetaValue {
-	return snapshot.MetricsByIDSnapshot[metricID]
-}
-
-func (snapshot SnapshotMeta) GetMetaMetricByName(metricName string) *format.MetricMetaValue {
-	return snapshot.MetricsByNameSnapshot[metricName]
-}
-
-func (snapshot SnapshotMeta) GetMetaMetricByNameBytes(metric []byte) *format.MetricMetaValue {
-	return snapshot.MetricsByNameSnapshot[string(metric)]
-}
-
-func (snapshot *metaSnapshot) updateSnapshotUnlocked(
-	metricsByIDSnapshot map[int32]*format.MetricMetaValue,
-	metricsByNameSnapshot map[string]*format.MetricMetaValue) {
-	snapshot.mu.Lock()
-	defer snapshot.mu.Unlock()
-	snapshot.metricsByIDSnapshot = metricsByIDSnapshot
-	snapshot.metricsByNameSnapshot = metricsByNameSnapshot
-}
-
-func (snapshot *metaSnapshot) getCopyUnlocked() SnapshotMeta {
-	snapshot.mu.RLock()
-	defer snapshot.mu.RUnlock()
-	return SnapshotMeta{
-		MetricsByIDSnapshot:   snapshot.metricsByIDSnapshot,
-		MetricsByNameSnapshot: snapshot.metricsByNameSnapshot,
-	}
-}
-
-// satisfy format.MetaStorageInterface
-func (ms *MetricsStorage) Version() int64    { return ms.journal.Version() }
-func (ms *MetricsStorage) StateHash() string { return ms.journal.StateHash() }
-
-func (ms *MetricsStorage) Journal() *Journal { return ms.journal }
 
 func (ms *MetricsStorage) PromConfig() tlmetadata.Event {
 	ms.mu.RLock()
@@ -159,18 +91,6 @@ func (ms *MetricsStorage) KnownTags() tlmetadata.Event {
 	return ms.knownTags
 }
 
-func (ms *MetricsStorage) GetSnapshotMeta() SnapshotMeta {
-	return ms.metaSnapshot.getCopyUnlocked()
-}
-
-func (ms *MetricsStorage) GetMetaMetricDelayed(metricID int32) *format.MetricMetaValue {
-	return ms.metaSnapshot.GetMetaMetric(metricID)
-}
-
-func (ms *MetricsStorage) GetMetaMetricByNameDelayed(metric string) *format.MetricMetaValue {
-	return ms.metaSnapshot.GetMetaMetricByName(metric)
-}
-
 func (ms *MetricsStorage) GetMetaMetric(metricID int32) *format.MetricMetaValue {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
@@ -180,42 +100,19 @@ func (ms *MetricsStorage) GetMetaMetric(metricID int32) *format.MetricMetaValue 
 func (ms *MetricsStorage) GetMetaMetricByName(metricName string) *format.MetricMetaValue {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	return ms.getMetaMetricByNameLocked(metricName)
-
+	return ms.metricsByName[metricName]
 }
 
 func (ms *MetricsStorage) GetNamespaceByName(name string) *format.NamespaceMeta {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	ns, ok := ms.namespaceByName[name]
-	if ok {
-		return ns
-	}
-	for _, ns := range ms.builtInNamespace {
-		if ns.Name == name {
-			return ns
-		}
-	}
-	return nil
+	return ms.namespaceByName[name]
 }
 
 func (ms *MetricsStorage) GetGroupByName(name string) *format.MetricsGroup {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	g, ok := ms.groupsByName[name]
-	if ok {
-		return g
-	}
-	for _, g := range ms.builtInGroup {
-		if g.Name == name {
-			return g
-		}
-	}
-	return nil
-}
-
-func (ms *MetricsStorage) getMetaMetricByNameLocked(metricName string) *format.MetricMetaValue {
-	return ms.metricsByName[metricName]
+	return ms.groupsByName[name]
 }
 
 // TODO some fixes to avoid allocation
@@ -225,16 +122,12 @@ func (ms *MetricsStorage) GetMetaMetricByNameBytes(metric []byte) *format.Metric
 	return ms.metricsByName[string(metric)]
 }
 
-func (ms *MetricsStorage) GetMetaMetricByNameBytesDelayed(metric []byte) *format.MetricMetaValue {
-	return ms.metaSnapshot.GetMetaMetricByNameBytes(metric)
-}
-
-func (ms *MetricsStorage) GetMetaMetricList(includeInvisible bool) []*format.MetricMetaValue {
+func (ms *MetricsStorage) GetMetaMetricList(includeDisabled bool) []*format.MetricMetaValue {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 	li := make([]*format.MetricMetaValue, 0, len(ms.metricsByName))
 	for _, v := range ms.metricsByName {
-		if !includeInvisible && !v.Visible {
+		if !includeDisabled && v.Disable {
 			continue
 		}
 		li = append(li, v)
@@ -242,54 +135,13 @@ func (ms *MetricsStorage) GetMetaMetricList(includeInvisible bool) []*format.Met
 	return li
 }
 
-func (ms *MetricsStorage) MatchMetrics(matcher *labels.Matcher, namespace string, includeInvisible bool, s []*format.MetricMetaValue) []*format.MetricMetaValue {
-	if namespace == "" || namespace == "__default" {
-		s = ms.matchMetrics(format.BuiltinMetricByName, matcher, namespace, includeInvisible, s)
+func (ms *MetricsStorage) MatchMetrics(f *data_model.QueryFilter) {
+	if f.Namespace == "" || f.Namespace == "__default" {
+		f.MatchMetrics(format.BuiltinMetricByName)
 	}
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	s = ms.matchMetrics(ms.metricsByName, matcher, namespace, includeInvisible, s)
-	return s
-}
-
-func (ms *MetricsStorage) matchMetrics(mertics map[string]*format.MetricMetaValue, matcher *labels.Matcher, namespace string, includeInvisible bool, s []*format.MetricMetaValue) []*format.MetricMetaValue {
-	if matcher.Type == labels.MatchEqual {
-		name := matcher.Value
-		if namespace != "" && !strings.Contains(name, format.NamespaceSeparator) {
-			name = namespace + format.NamespaceSeparator + name
-		}
-		if v := mertics[name]; v != nil {
-			s = append(s, v)
-		}
-		return s
-	}
-	for name, v := range mertics {
-		if namespace != "" && !strings.Contains(name, format.NamespaceSeparator) {
-			name = namespace + format.NamespaceSeparator + name
-		}
-		if matcher.Matches(name) {
-			s = append(s, v)
-		}
-	}
-	return s
-}
-
-func (ms *MetricsStorage) GetGroupBy(metric *format.MetricMetaValue) *format.MetricsGroup {
-	if metric.MetricID >= 0 {
-		return metric.Group
-	}
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-	return metric.Group
-}
-
-func (ms *MetricsStorage) GetNamespaceBy(metric *format.MetricMetaValue) *format.NamespaceMeta {
-	if metric.MetricID >= 0 {
-		return metric.Namespace
-	}
-	ms.mu.RLock()
-	defer ms.mu.RUnlock()
-	return metric.Namespace
+	f.MatchMetrics(ms.metricsByName)
 }
 
 func (ms *MetricsStorage) GetDashboardMeta(dashboardID int32) *format.DashboardMeta {
@@ -314,11 +166,7 @@ func (ms *MetricsStorage) GetDashboardList(showInvisible bool) []*format.Dashboa
 func (ms *MetricsStorage) GetGroup(id int32) *format.MetricsGroup {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	g, ok := ms.groupsByID[id]
-	if ok {
-		return g
-	}
-	return ms.builtInGroup[id]
+	return ms.groupsByID[id]
 }
 
 func (ms *MetricsStorage) GetGroupWithMetricsList(id int32) (GroupWithMetricsList, bool) {
@@ -337,15 +185,8 @@ func (ms *MetricsStorage) GetGroupWithMetricsList(id int32) (GroupWithMetricsLis
 		}
 	}
 	var ok bool
-	if id >= 0 {
-		if group, ok = ms.groupsByID[id]; !ok {
-			return GroupWithMetricsList{}, false
-		}
-	} else {
-		if group, ok = ms.builtInGroup[id]; !ok {
-			return GroupWithMetricsList{}, false
-		}
-
+	if group, ok = ms.groupsByID[id]; !ok {
+		return GroupWithMetricsList{}, false
 	}
 	return GroupWithMetricsList{Group: group, Metrics: metricNames}, true
 
@@ -361,23 +202,13 @@ func (ms *MetricsStorage) GetGroupsList(showInvisible bool) []*format.MetricsGro
 		}
 		groups = append(groups, v)
 	}
-	for _, v := range ms.builtInGroup {
-		if v.Disable && !showInvisible {
-			continue
-		}
-		groups = append(groups, v)
-	}
 	return groups
 }
 
 func (ms *MetricsStorage) GetNamespace(id int32) *format.NamespaceMeta {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
-	m, ok := ms.namespaceByID[id]
-	if ok {
-		return m
-	}
-	return ms.builtInNamespace[id]
+	return ms.namespaceByID[id]
 }
 
 func (ms *MetricsStorage) GetNamespaceList() []*format.NamespaceMeta {
@@ -385,9 +216,6 @@ func (ms *MetricsStorage) GetNamespaceList() []*format.NamespaceMeta {
 	defer ms.mu.RUnlock()
 	var namespaces []*format.NamespaceMeta
 	for _, namespace := range ms.namespaceByID {
-		namespaces = append(namespaces, namespace)
-	}
-	for _, namespace := range ms.builtInNamespace {
 		namespaces = append(namespaces, namespace)
 	}
 	return namespaces
@@ -401,31 +229,34 @@ func (ms *MetricsStorage) ApplyEvent(newEntries []tlmetadata.Event) {
 	promConfigGeneratedData := ""
 	knownTagsSet := false
 	knownTagsData := ""
+	type groupWithMeta struct {
+		old *format.MetricsGroup
+		new *format.MetricsGroup
+	}
+	var changedGroups []groupWithMeta
 
 	for _, e := range newEntries {
 		switch e.EventType {
 		case format.MetricEvent:
-			value := &format.MetricMetaValue{}
-			err := json.Unmarshal([]byte(e.Data), value)
+			value, err := MetricMetaFromEvent(e)
 			if err != nil {
-				log.Printf("Cannot marshal metric %s: %v", value.Name, err)
+				log.Printf("Cannot marshal metric: %v", err)
 				continue
 			}
-			value.NamespaceID = int32(e.NamespaceId)
-			value.Version = e.Version
-			value.Name = e.Name
-			value.MetricID = int32(e.Id) // TODO - beware!
-			value.UpdateTime = e.UpdateTime
-			_ = value.RestoreCachedInfo()
+			ms.metricUpdMu.Lock()
 			ms.mu.Lock()
-			valueOld, ok := ms.metricsByID[value.MetricID]
-			if ok && valueOld.Name != value.Name {
+			valueOld, idExists := ms.metricsByID[value.MetricID]
+			if idExists && valueOld.Name != value.Name {
 				delete(ms.metricsByName, valueOld.Name)
 			}
+			if idExists && valueOld.Name == value.Name {
+				value.GroupID = valueOld.GroupID
+			} else {
+				ms.calcGroupForMetricLocked(value)
+			}
 			ms.updateMetric(value)
-			ms.calcGroupForMetricLocked(value)
-			ms.calcNamespaceForMetricLocked(value)
 			ms.mu.Unlock()
+			ms.metricUpdMu.Unlock()
 		case format.DashboardEvent:
 			m := map[string]interface{}{}
 			err := json.Unmarshal([]byte(e.Data), &m)
@@ -446,7 +277,7 @@ func (ms *MetricsStorage) ApplyEvent(newEntries []tlmetadata.Event) {
 			ms.mu.Unlock()
 		case format.MetricsGroupEvent:
 			value := &format.MetricsGroup{}
-			err := json.Unmarshal([]byte(e.Data), value)
+			err := easyjson.Unmarshal([]byte(e.Data), value)
 			if err != nil {
 				log.Printf("Cannot marshal metric group %s: %v", value.Name, err)
 				continue
@@ -458,18 +289,22 @@ func (ms *MetricsStorage) ApplyEvent(newEntries []tlmetadata.Event) {
 			value.UpdateTime = e.UpdateTime
 			_ = value.RestoreCachedInfo(value.ID < 0)
 			ms.mu.Lock()
-			var old *format.MetricsGroup
-			if value.ID >= 0 {
-				old = ms.groupsByID[value.ID]
-				ms.groupsByID[value.ID] = value
-				ms.calcNamespaceForGroupLocked(value)
-			} else {
-				old = ms.builtInGroup[value.ID]
-				ms.builtInGroup[value.ID] = value
-
+			valueOld, idExists := ms.groupsByID[value.ID]
+			ms.groupsByID[value.ID] = value
+			if idExists && valueOld.Name != value.Name {
+				delete(ms.groupsByName, valueOld.Name)
 			}
-			ms.calcGroupForMetricsLocked(old, value)
-			ms.calcGroupNamesMapLocked()
+			ms.groupsByName[value.Name] = value
+			// cases when group might change for metrics:
+			// 1. added new
+			// 2. name changed
+			// 3. enabled/disabled
+			if !idExists || valueOld.Name != value.Name || valueOld.Disable != value.Disable {
+				changedGroups = append(changedGroups, groupWithMeta{
+					old: valueOld,
+					new: value,
+				})
+			}
 			ms.mu.Unlock()
 		case format.PromConfigEvent:
 			ms.mu.Lock()
@@ -490,7 +325,7 @@ func (ms *MetricsStorage) ApplyEvent(newEntries []tlmetadata.Event) {
 			ms.mu.Unlock()
 		case format.NamespaceEvent:
 			value := &format.NamespaceMeta{}
-			err := json.Unmarshal([]byte(e.Data), value)
+			err := easyjson.Unmarshal([]byte(e.Data), value)
 			if err != nil {
 				log.Printf("Cannot marshal metric group %s: %v", value.Name, err)
 				continue
@@ -502,22 +337,55 @@ func (ms *MetricsStorage) ApplyEvent(newEntries []tlmetadata.Event) {
 			_ = value.RestoreCachedInfo(value.ID < 0)
 
 			ms.mu.Lock()
-			if value.ID >= 0 {
-				if oldNamespace, ok := ms.namespaceByID[value.ID]; ok && oldNamespace.Name != value.Name {
-					delete(ms.namespaceByName, oldNamespace.Name)
-				}
-
-				ms.namespaceByID[value.ID] = value
-				ms.namespaceByName[value.Name] = value
-			} else {
-				ms.builtInNamespace[value.ID] = value
+			if oldNamespace, idExists := ms.namespaceByID[value.ID]; idExists && oldNamespace.Name != value.Name {
+				delete(ms.namespaceByName, oldNamespace.Name)
 			}
-			ms.calcNamespaceForMetricsAndGroupsLocked(value)
-			ms.calcGroupNamesMapLocked()
+
+			ms.namespaceByID[value.ID] = value
+			ms.namespaceByName[value.Name] = value
 			ms.mu.Unlock()
 		}
 	}
-	ms.copyToSnapshotUnlocked()
+	if len(changedGroups) > 0 {
+		// we need separate lock in order to upgrade mu from read to write
+		ms.metricUpdMu.Lock()
+		ms.mu.RLock()
+		metricsByID := make(map[int32]*format.MetricMetaValue, len(ms.metricsByID))
+		metricsByName := make(map[string]*format.MetricMetaValue, len(ms.metricsByName))
+		// O(metrics * changed_groups)
+		// doesn't slow down read requests
+		// can be optimized by storing metricsByName in trie or by adding metricsByGroupID
+		metricsChanged := false
+		for id, m := range ms.metricsByID {
+			um := m // updated metric
+			for _, g := range changedGroups {
+				if g.old != nil && g.old.MetricIn(um) && g.old.Name != g.new.Name {
+					um = um.WithGroupID(format.BuiltinGroupIDDefault)
+				}
+				if g.new.MetricIn(um) {
+					if g.new.Disable {
+						um = um.WithGroupID(format.BuiltinGroupIDDefault)
+					} else {
+						um = um.WithGroupID(g.new.ID)
+					}
+				}
+			}
+			if um != m {
+				metricsChanged = true
+			}
+			metricsByID[id] = um
+			metricsByName[um.Name] = um
+		}
+		ms.mu.RUnlock()
+
+		if metricsChanged {
+			ms.mu.Lock()
+			ms.metricsByID = metricsByID
+			ms.metricsByName = metricsByName
+			ms.mu.Unlock()
+		}
+		ms.metricUpdMu.Unlock()
+	}
 	if ms.applyPromConfig != nil {
 		// outside of lock, once
 		if promConfigSet {
@@ -530,125 +398,17 @@ func (ms *MetricsStorage) ApplyEvent(newEntries []tlmetadata.Event) {
 			ms.applyPromConfig(format.KnownTagsConfigID, knownTagsData)
 		}
 	}
-}
-
-func (ms *MetricsStorage) copyToSnapshotUnlocked() {
-	metricsByIDSnapshot := map[int32]*format.MetricMetaValue{}
-	metricsByNameSnapshot := map[string]*format.MetricMetaValue{}
-	ms.mu.Lock()
-	for k, v := range ms.metricsByName {
-		metricsByNameSnapshot[k] = v
-		metricsByIDSnapshot[v.MetricID] = v
-	}
-	ms.mu.Unlock()
-	ms.metaSnapshot.updateSnapshotUnlocked(metricsByIDSnapshot, metricsByNameSnapshot)
-}
-
-// call when namespace is added or changed O(number of metrics + numb of groups)
-func (ms *MetricsStorage) calcNamespaceForMetricsAndGroupsLocked(new *format.NamespaceMeta) {
-	for _, m := range ms.metricsByID {
-		if m.NamespaceID == new.ID {
-			mCopy := *m
-			mCopy.Namespace = new
-			ms.metricsByID[m.MetricID] = &mCopy
-			ms.metricsByName[m.Name] = &mCopy
-		}
-	}
-
-	for _, group := range ms.groupsByID {
-		if group.NamespaceID == new.ID {
-			groupCopy := *group
-			groupCopy.Namespace = new
-			ms.groupsByID[groupCopy.ID] = &groupCopy
-		}
-	}
-	for _, m := range format.BuiltinMetrics {
-		if m.NamespaceID == new.ID {
-			m.Namespace = new
-		}
-	}
-
-	for _, group := range ms.builtInGroup {
-		if group.NamespaceID == new.ID {
-			group.Namespace = new
-		}
-	}
-}
-
-// call when metric is added or changed O(1)
-func (ms *MetricsStorage) calcNamespaceForMetricLocked(new *format.MetricMetaValue) {
-	if new.NamespaceID > 0 {
-		if n, ok := ms.namespaceByID[new.NamespaceID]; ok {
-			new.Namespace = n
-		}
-	} else {
-		if new.NamespaceID == 0 || new.NamespaceID == format.BuiltinNamespaceIDDefault {
-			new.Namespace = ms.builtInNamespace[format.BuiltinNamespaceIDDefault]
-		}
-	}
-}
-
-// call when metric is added or changed O(1)
-func (ms *MetricsStorage) calcNamespaceForGroupLocked(new *format.MetricsGroup) {
-	if new.NamespaceID != 0 {
-		if n, ok := ms.namespaceByID[new.NamespaceID]; ok {
-			new.Namespace = n
-		}
-	} else {
-		if new.NamespaceID == 0 || new.NamespaceID == format.BuiltinNamespaceIDDefault {
-			new.Namespace = ms.namespaceByID[format.BuiltinNamespaceIDDefault]
-		}
-	}
-}
-
-// call when group is added or changed O(number of metrics)
-func (ms *MetricsStorage) calcGroupForMetricsLocked(old, new *format.MetricsGroup) {
-	if new.ID >= 0 {
-		if (old != nil && old.Name != new.Name) || new.Disable {
-			for _, m := range ms.metricsByID {
-				if m.GroupID == new.ID {
-					mCopy := *m
-					mCopy.GroupID = format.BuiltinGroupIDDefault
-					mCopy.Group = ms.builtInGroup[format.BuiltinGroupIDDefault]
-					ms.updateMetric(&mCopy)
-				}
-			}
-		}
-
-		for _, m := range ms.metricsByID {
-			if new.MetricIn(m) {
-				mCopy := *m
-				mCopy.GroupID = new.ID
-				mCopy.Group = new
-				ms.updateMetric(&mCopy)
-			}
-		}
-	} else {
-		for _, m := range ms.metricsByID {
-			if new.ID == format.BuiltinGroupIDDefault && (m.GroupID == 0 || m.GroupID == format.BuiltinGroupIDDefault) {
-				mCopy := *m
-				mCopy.GroupID = new.ID
-				mCopy.Group = new
-				ms.updateMetric(&mCopy)
-			}
-		}
-	}
-
-	for _, m := range format.BuiltinMetrics {
-		if m.GroupID == new.ID {
-			m.Group = new
-		}
+	if ll := len(newEntries); ll != 0 {
+		ms.broadcastJournalVersionClient(newEntries[ll-1].Version)
 	}
 }
 
 // call when metric is added or changed O(number of groups)
 func (ms *MetricsStorage) calcGroupForMetricLocked(new *format.MetricMetaValue) {
 	new.GroupID = format.BuiltinGroupIDDefault
-	new.Group = ms.builtInGroup[format.BuiltinGroupIDDefault]
 	for _, g := range ms.groupsByID {
 		if g.MetricIn(new) {
 			new.GroupID = g.ID
-			new.Group = g
 			return
 		}
 	}
@@ -677,10 +437,43 @@ func (ms *MetricsStorage) canAddOrChangeGroupLocked(name string, id int32) bool 
 	return true
 }
 
-func (ms *MetricsStorage) calcGroupNamesMapLocked() {
-	newM := make(map[string]*format.MetricsGroup, len(ms.groupsByID))
-	for _, g := range ms.groupsByID {
-		newM[g.Name] = g
+func (ms *MetricsStorage) WaitVersion(ctx context.Context, version int64) error {
+	select {
+	case <-ms.waitVersion(version):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	ms.groupsByName = newM
+}
+
+func (ms *MetricsStorage) waitVersion(version int64) chan struct{} {
+	ms.versionClientMu.Lock()
+	defer ms.versionClientMu.Unlock()
+	ch := make(chan struct{})
+	if ms.lastVersion >= version {
+		close(ch)
+		return ch
+	}
+
+	ms.versionClients = append(ms.versionClients, versionClient{
+		expectedVersion: version,
+		ch:              ch,
+	})
+	return ch
+}
+
+func (ms *MetricsStorage) broadcastJournalVersionClient(currentVersion int64) {
+	ms.versionClientMu.Lock()
+	defer ms.versionClientMu.Unlock()
+	ms.lastVersion = currentVersion
+	keepPos := 0
+	for _, client := range ms.versionClients {
+		if client.expectedVersion <= currentVersion {
+			close(client.ch)
+		} else {
+			ms.versionClients[keepPos] = client
+			keepPos++
+		}
+	}
+	ms.versionClients = ms.versionClients[:keepPos]
 }

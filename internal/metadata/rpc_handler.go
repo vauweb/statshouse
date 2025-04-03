@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -133,7 +133,7 @@ func (h *Handler) initStats() {
 		h.getJournalMx.Lock()
 		qLength := len(h.getJournalClients)
 		h.getJournalMx.Unlock()
-		client.Value(format.BuiltinMetricNameMetaClientWaits, statshouse.Tags{1: h.host}, float64(qLength))
+		client.Value(format.BuiltinMetricMetaMetaClientWaits.Name, statshouse.Tags{1: h.host}, float64(qLength))
 	})
 }
 
@@ -203,6 +203,9 @@ func (h *Handler) RawEditEntity(ctx context.Context, hctx *rpc.HandlerContext) (
 	event, err := h.db.SaveEntity(ctx, args.Event.Name, args.Event.Id, args.Event.Version, args.Event.Data, args.IsSetCreate(), args.IsSetDelete(), args.Event.EventType, args.Event.Metadata)
 	if errors.Is(err, errInvalidMetricVersion) {
 		return "", data_model.ErrEntityInvalidVersion
+	}
+	if errors.Is(err, errMetricIsExist) {
+		return "", data_model.ErrEntityExists
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to create event: %w", err)

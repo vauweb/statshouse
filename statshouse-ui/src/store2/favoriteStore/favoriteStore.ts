@@ -1,7 +1,13 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
-import { isNotNil, isObject } from 'common/helpers';
+import { isNotNil, isObject } from '@/common/helpers';
 
 export const favoriteStateStorage: StateStorage = {
   getItem(name) {

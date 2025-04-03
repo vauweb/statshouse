@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -23,8 +23,8 @@ type StatshouseShutdownInfo struct {
 	StopPreprocessor   int64
 	StopInserters      int64
 	StopRPCServer      int64
-	A                  int64
-	B                  int64
+	SaveMappings       int64
+	SaveJournal        int64
 	C                  int64
 	D                  int64
 	E                  int64
@@ -52,8 +52,8 @@ func (item *StatshouseShutdownInfo) Reset() {
 	item.StopPreprocessor = 0
 	item.StopInserters = 0
 	item.StopRPCServer = 0
-	item.A = 0
-	item.B = 0
+	item.SaveMappings = 0
+	item.SaveJournal = 0
 	item.C = 0
 	item.D = 0
 	item.E = 0
@@ -96,10 +96,10 @@ func (item *StatshouseShutdownInfo) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.LongRead(w, &item.StopRPCServer); err != nil {
 		return w, err
 	}
-	if w, err = basictl.LongRead(w, &item.A); err != nil {
+	if w, err = basictl.LongRead(w, &item.SaveMappings); err != nil {
 		return w, err
 	}
-	if w, err = basictl.LongRead(w, &item.B); err != nil {
+	if w, err = basictl.LongRead(w, &item.SaveJournal); err != nil {
 		return w, err
 	}
 	if w, err = basictl.LongRead(w, &item.C); err != nil {
@@ -153,8 +153,8 @@ func (item *StatshouseShutdownInfo) Write(w []byte) []byte {
 	w = basictl.LongWrite(w, item.StopPreprocessor)
 	w = basictl.LongWrite(w, item.StopInserters)
 	w = basictl.LongWrite(w, item.StopRPCServer)
-	w = basictl.LongWrite(w, item.A)
-	w = basictl.LongWrite(w, item.B)
+	w = basictl.LongWrite(w, item.SaveMappings)
+	w = basictl.LongWrite(w, item.SaveJournal)
 	w = basictl.LongWrite(w, item.C)
 	w = basictl.LongWrite(w, item.D)
 	w = basictl.LongWrite(w, item.E)
@@ -201,8 +201,8 @@ func (item *StatshouseShutdownInfo) ReadJSON(legacyTypeNames bool, in *basictl.J
 	var propStopPreprocessorPresented bool
 	var propStopInsertersPresented bool
 	var propStopRPCServerPresented bool
-	var propAPresented bool
-	var propBPresented bool
+	var propSaveMappingsPresented bool
+	var propSaveJournalPresented bool
 	var propCPresented bool
 	var propDPresented bool
 	var propEPresented bool
@@ -297,22 +297,22 @@ func (item *StatshouseShutdownInfo) ReadJSON(legacyTypeNames bool, in *basictl.J
 					return err
 				}
 				propStopRPCServerPresented = true
-			case "a":
-				if propAPresented {
-					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.shutdownInfo", "a")
+			case "saveMappings":
+				if propSaveMappingsPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.shutdownInfo", "saveMappings")
 				}
-				if err := Json2ReadInt64(in, &item.A); err != nil {
+				if err := Json2ReadInt64(in, &item.SaveMappings); err != nil {
 					return err
 				}
-				propAPresented = true
-			case "b":
-				if propBPresented {
-					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.shutdownInfo", "b")
+				propSaveMappingsPresented = true
+			case "saveJournal":
+				if propSaveJournalPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.shutdownInfo", "saveJournal")
 				}
-				if err := Json2ReadInt64(in, &item.B); err != nil {
+				if err := Json2ReadInt64(in, &item.SaveJournal); err != nil {
 					return err
 				}
-				propBPresented = true
+				propSaveJournalPresented = true
 			case "c":
 				if propCPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.shutdownInfo", "c")
@@ -446,11 +446,11 @@ func (item *StatshouseShutdownInfo) ReadJSON(legacyTypeNames bool, in *basictl.J
 	if !propStopRPCServerPresented {
 		item.StopRPCServer = 0
 	}
-	if !propAPresented {
-		item.A = 0
+	if !propSaveMappingsPresented {
+		item.SaveMappings = 0
 	}
-	if !propBPresented {
-		item.B = 0
+	if !propSaveJournalPresented {
+		item.SaveJournal = 0
 	}
 	if !propCPresented {
 		item.C = 0
@@ -564,19 +564,19 @@ func (item *StatshouseShutdownInfo) WriteJSONOpt(newTypeNames bool, short bool, 
 	if (item.StopRPCServer != 0) == false {
 		w = w[:backupIndexStopRPCServer]
 	}
-	backupIndexA := len(w)
+	backupIndexSaveMappings := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
-	w = append(w, `"a":`...)
-	w = basictl.JSONWriteInt64(w, item.A)
-	if (item.A != 0) == false {
-		w = w[:backupIndexA]
+	w = append(w, `"saveMappings":`...)
+	w = basictl.JSONWriteInt64(w, item.SaveMappings)
+	if (item.SaveMappings != 0) == false {
+		w = w[:backupIndexSaveMappings]
 	}
-	backupIndexB := len(w)
+	backupIndexSaveJournal := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
-	w = append(w, `"b":`...)
-	w = basictl.JSONWriteInt64(w, item.B)
-	if (item.B != 0) == false {
-		w = w[:backupIndexB]
+	w = append(w, `"saveJournal":`...)
+	w = basictl.JSONWriteInt64(w, item.SaveJournal)
+	if (item.SaveJournal != 0) == false {
+		w = w[:backupIndexSaveJournal]
 	}
 	backupIndexC := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)

@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,23 +7,20 @@ import React, { useMemo } from 'react';
 
 import cn from 'classnames';
 
-import { Tooltip } from 'components/UI';
-import { getNewMetric, type PlotKey } from 'url2';
-import { useStatsHouseShallow } from 'store2';
-import { METRIC_VALUE_BACKEND_VERSION, toTagKey } from 'api/enum';
-import { formatTagValue } from 'view/api';
-import { getMetricMeta } from 'store2/helpers';
+import { Tooltip } from '@/components/UI';
+import { METRIC_VALUE_BACKEND_VERSION, toTagKey } from '@/api/enum';
+import { formatTagValue } from '@/view/api';
 import { PlotHeaderBadgeResolution } from './PlotHeaderBadgeResolution';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
+import { useMetricMeta } from '@/hooks/useMetricMeta';
+import { useMetricName } from '@/hooks/useMetricName';
 
-const emptyPlot = getNewMetric();
+export type PlotHeaderBadgesProps = { compact?: boolean; dashboard?: boolean; className?: string };
 
-export type PlotHeaderBadgesProps = { plotKey: PlotKey; compact?: boolean; dashboard?: boolean; className?: string };
+export function PlotHeaderBadges({ compact, className }: PlotHeaderBadgesProps) {
+  const { plot } = useWidgetPlotContext();
+  const meta = useMetricMeta(useMetricName(true));
 
-export function PlotHeaderBadges({ plotKey, compact, className }: PlotHeaderBadgesProps) {
-  const { meta, plot } = useStatsHouseShallow(({ params: { plots }, plotsData, metricMeta }) => ({
-    plot: plots[plotKey] ?? emptyPlot,
-    meta: getMetricMeta(metricMeta, plots[plotKey], plotsData[plotKey]),
-  }));
   const filters = useMemo(
     () =>
       (meta?.tags || [])

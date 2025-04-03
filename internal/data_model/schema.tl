@@ -29,30 +29,37 @@ statshouse.multi_value#0c803e06 {fields_mask:#}
     uniques: fields_mask.5?string // serialized HLL
 
     centroids: fields_mask.6?(vector statshouse.centroidFloat)
+    implicit_centroid: fields_mask.18?true // centroid should be restored from the single simple value
 
     // we need hosts to pass through agent sending on behalf of aggregator. Or from clients using _h tag
     max_host_tag: fields_mask.7?int
     // optimization for single values: if max_host_tag is set and *_host_tag below is not set, it is equal to max_host_tag
     min_host_tag: fields_mask.8?int
     max_counter_host_tag: fields_mask.9?int
+    // field mask bits 10 - 12 are used in statshouse.multi_item
+    max_host_stag: fields_mask.14?string
+    min_host_stag: fields_mask.15?string
+    max_counter_host_stag: fields_mask.16?string
     = statshouse.MultiValue fields_mask;
 
-statshouse.top_element key:string fields_mask:# value:(statshouse.multi_value fields_mask) = statshouse.TopElement;
+statshouse.top_element#9ffdea42 stag:string fields_mask:# tag:fields_mask.10?int value:(statshouse.multi_value fields_mask) = statshouse.TopElement;
 
 statshouse.multi_item#0c803e07
-    fields_mask: # // contains shard num in top 8 bits
+    fields_mask: # // conveyor V2 agents send shard num in top 8 bits here
     metric: int
     keys: (vector int)
     skeys: fields_mask.12?(vector string)
+    weightMultiplier: fields_mask.17?true // agents increased metric weight by num shards, expect the same from aggregators
 
     t: fields_mask.10?# // timestamp, should be rare
 
     tail: (statshouse.multi_value fields_mask) // no fields_mask, because anyway uses 0 bytes if counter with 0.0 or 1.0
+    // won't be set in a v3 pipeline
     top: fields_mask.11?(vector (statshouse.top_element)) // most items are without string keys, so we save 4 bytes using fields_mask
     = statshouse.MultiItem;
 
 statshouse.sourceBucket2#3af6e822
-      metrics: (vector (statshouse.multi_item)) // must be sorted by shard
+      metrics: (vector (statshouse.multi_item)) // must be sorted by metric (but for now order is not used)
 
       sample_factors: (vector statshouse.sample_factor) // We need as compact representation as possible.
       ingestion_status_ok: (vector statshouse.sample_factor) // legacy, never sent by 1.0 agents. TODO - rename to unused
@@ -65,6 +72,14 @@ statshouse.sourceBucket2#3af6e822
 
   = statshouse.SourceBucket2;
 
+statshouse.sourceBucket3#16c4dd7b
+    fields_mask: #
+    // TODO: check how it is used and maybe change to a new version
+    metrics: (vector (statshouse.multi_item)) // must be sorted by metric (but for now order is not used)
+    sample_factors: (vector statshouse.sample_factor) // We need as compact representation as possible.
+    ingestion_status_ok2: (vector statshouse.ingestion_status2) // We need as compact representation as possible.
+  = statshouse.SourceBucket3;
+
 // TODO - remove ttl_nanosec
 statshouse.getTagMappingResult#1a7d91fd value:int ttl_nanosec:long = statshouse.GetTagMappingResult;
 
@@ -76,12 +91,20 @@ statshouse.putTagMappingBootstrapResult#486affde
 // metrics are row in JSON format, version is opaque string interpreted by aggregator
 statshouse.getMetricsResult#0c803d05 version: string metrics: (vector string) = statshouse.GetMetricsResult;
 
+// Deprecated, not used by new conveyor agents
 statshouse.getConfigResult#0c803d07 {fields_mask:#}
     addresses: (vector string)
     max_addresses_count: int // when reducing # of shards, will return full list of addresses, limit by this number. Important for proxy
     previous_addresses: int // currently unused, but can be helpful for proxy in the future
     ts: fields_mask.0?long // aggregator timestamp, for detecting clock discrepancy
 = statshouse.GetConfigResult fields_mask;
+
+statshouse.getConfigResult3#f13698cb
+    addresses: (vector string) // 3 replicas for each shard
+    shard_by_metric_count: # // should be <= len(addresses), so that we can add 17'th shard without breaking all metrics which are spread automatically between first 16.
+    unused: 12*[int] // arbitrary space for extensions, so we can avoid using fields masks and complications with them
+    unused_s: 4*[string] // arbitrary space for extensions, so we can avoid using fields masks and complications with them
+= statshouse.GetConfigResult3;
 
 // proxy uses and fills data in this header for all requests
 statshouse.commonProxyHeader#6c803d07 {fields_mask:#}
@@ -96,6 +119,7 @@ statshouse.commonProxyHeader#6c803d07 {fields_mask:#}
     host_name:string
     component_tag:int // was agent_env before release version. Checks for legacy in aggregator are no more needed after release
     build_arch:int // comparison of x64 and arm64 nodes will be interesting for some time
+    owner:fields_mask.28?string
 = statshouse.CommonProxyHeader fields_mask;
 
 statshouse.promTarget#ac5296df {fields_mask_arg:#}
@@ -133,18 +157,35 @@ statshouse.shutdownInfo#4124cf9c
     stopPreprocessor:long
     stopInserters:long // for aggregator
     stopRPCServer:long // for aggregator
+    saveMappings:long
+    saveJournal:long
     // we might want more timeouts later without changing format, so we reserve some space
-    a:long b:long c:long d:long e:long f:long g:long h:long i:long j:long k:long l:long m:long n:long
+    c:long d:long e:long f:long g:long h:long i:long j:long k:long l:long m:long n:long
 = statshouse.ShutdownInfo;
+
+statshouse.sendSourceBucket3Response#0e177acc
+    field_mask: #
+    discard: field_mask.0?true // agent should discard bucket, either they were inserted successfully or they can never be inserted
+    warning: string // if !empty, aggregator wants this in client log
+    mappings: (vector statshouse.mapping)
+= statshouse.SendSourceBucket3Response;
 
 ---functions---
 
+// Deprecated, not used by new conveyor agents
 @readwrite statshouse.getConfig2#4285ff57
     fields_mask:#
     header: (statshouse.commonProxyHeader fields_mask) // the only request not passed through proxy. But we make it with common header anyway.
     cluster:string // prevent wrong configuration
     ts: fields_mask.0?true
      = statshouse.GetConfigResult fields_mask;
+
+@readwrite statshouse.getConfig3#7d7b4991
+    fields_mask:#
+    header: (statshouse.commonProxyHeader fields_mask) // the only request not passed through proxy. But we make it with common header anyway.
+    cluster:string // prevent wrong configuration
+    previousConfig: fields_mask.0?statshouse.getConfigResult3 // if sent, will long poll on it
+     = statshouse.GetConfigResult3;
 
 // For ingress proxy, we pass shard_replica/shard_total immediately after fields mask
 // TODO - remove shard_replica, shard_replica_total fields from the wrong place
@@ -160,8 +201,8 @@ statshouse.shutdownInfo#4124cf9c
     historic:fields_mask.0?true
     spare:fields_mask.1?true
     build_commit:string
-    build_commit_date:int // 20220218 for 2022-02-18T22:58:12+0000, so we can easily use raw key and have human-readability
-    build_commit_ts:int
+    build_commit_date:int // deprecated, not sent by agents, not used by aggregators
+    build_commit_ts:#
     queue_size_disk:int
     queue_size_memory:int
     queue_size_disk_sum:fields_mask.2?int   // for all shard-replicas. Helps detect situation where only subset of aggregators is accessible.
@@ -173,10 +214,30 @@ statshouse.shutdownInfo#4124cf9c
     sharding:fields_mask.5?int // deprecated because sharding is now configured for each metric separately
     = String;
 
+@readwrite statshouse.sendSourceBucket3#0d04aa3f
+    fields_mask:#
+    header: (statshouse.commonProxyHeader fields_mask)
+    time:#
+    historic:fields_mask.0?true
+    spare:fields_mask.1?true
+    // build stats
+    build_commit:string
+    build_commit_ts:#
+    // data
+    original_size:#
+    compressed_data:string
+    send_more_bytes:string // send dummy zeroes to test network, according to send-more-data agent config value
+    = statshouse.SendSourceBucket3Response;
+
 @readwrite statshouse.sendKeepAlive2#4285ff53
     fields_mask:#
     header: (statshouse.commonProxyHeader fields_mask)
      = String;
+
+@readwrite statshouse.sendKeepAlive3#4285ff54
+    fields_mask:#
+    header: (statshouse.commonProxyHeader fields_mask)
+     = statshouse.SendSourceBucket3Response;
 
 // This function is long poll. Will receive answer only when version changes
 @readwrite statshouse.getMetrics3#42855554
@@ -186,6 +247,8 @@ statshouse.shutdownInfo#4124cf9c
     from: long // строго больше
     limit: long
     return_if_empty: field_mask.3?true
+    new_journal: field_mask.15?true    // will return from new journal. We will deprecate this flag quickly, hence 15
+    compact_journal: field_mask.4?true // will return from new compact journal (only fields for agents)
      = metadata.GetJournalResponsenew fields_mask;
 
 @readwrite statshouse.getTagMapping2#4285ff56

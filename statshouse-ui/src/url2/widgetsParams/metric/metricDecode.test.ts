@@ -1,6 +1,11 @@
-import 'testMock/matchMedia.mock';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import '@/testMock/matchMedia.mock';
 import { getNewMetric } from './getNewMetric';
-import { metricFilterDecode } from './metricFilterDecode';
 import {
   GET_PARAMS,
   METRIC_TYPE,
@@ -10,10 +15,10 @@ import {
   QUERY_WHAT,
 } from '../../../api/enum';
 import { toTreeObj, treeParamsObjectValueSymbol } from '../../urlHelpers';
-import { filterInSep, filterNotInSep, promQLMetric, removeValueChar } from '../../constants';
+import { promQLMetric, removeValueChar } from '../../constants';
 import { metricDecode } from './metricDecode';
 
-describe('urlStore widgetsParams/metric/metricDecode.ts', () => {
+describe('@/urlStore widgetsParams/metric/metricDecode.ts', () => {
   test('metricDecode', () => {
     const dParams = {
       ...getNewMetric(),

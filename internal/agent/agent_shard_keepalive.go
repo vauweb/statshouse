@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -42,7 +42,7 @@ func (s *ShardReplica) recordSendResult(success bool) {
 	if len(s.lastSendSuccessful) == s.config.LivenessResponsesWindowLength && succ < s.config.LivenessResponsesWindowSuccesses {
 		s.alive.Store(false)
 		s.lastSendSuccessful = s.lastSendSuccessful[:0]
-		s.client.Client.Logf("Aggregator Dead: # of successful recent sends dropped below %d out of %d for shard %d", s.config.LivenessResponsesWindowSuccesses, s.config.LivenessResponsesWindowLength, s.ShardReplicaNum)
+		s.agent.logF("Aggregator Dead: # of successful recent sends dropped below %d out of %d for shard %d replica %d", s.config.LivenessResponsesWindowSuccesses, s.config.LivenessResponsesWindowLength, s.ShardKey, s.ReplicaKey)
 	}
 }
 
@@ -53,7 +53,7 @@ func (s *ShardReplica) recordKeepLiveResult(err error, dur time.Duration) {
 
 	succ := s.appendlastSendSuccessfulLocked(success)
 	if succ == s.config.LivenessResponsesWindowLength {
-		s.client.Client.Logf("Aggregator Alive: # of successful keepalive sends reached %d out of %d for shard %d", s.config.LivenessResponsesWindowLength, s.config.LivenessResponsesWindowLength, s.ShardReplicaNum)
+		s.agent.logF("Aggregator Alive: # of successful keepalive sends reached %d out of %d for shard %d replica %d", s.config.LivenessResponsesWindowLength, s.config.LivenessResponsesWindowLength, s.ShardKey, s.ReplicaKey)
 		s.alive.Store(true)
 	}
 }
@@ -63,12 +63,14 @@ func (s *ShardReplica) sendKeepLive() error {
 	ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second*60)) // Relatively large timeout here
 	defer cancel()
 
-	args := tlstatshouse.SendKeepAlive2Bytes{}
-	s.fillProxyHeaderBytes(&args.FieldsMask, &args.Header)
+	args := tlstatshouse.SendKeepAlive2{}
+	s.fillProxyHeader(&args.FieldsMask, &args.Header)
 	// It is important that keep alive will not be successful when shards are not configured correctly
-
-	var ret []byte
-	err := s.client.SendKeepAlive2Bytes(ctx, args, nil, &ret)
+	// We do not use FailIfNoConnect:true, because we want exponential backoff to connection attempts in rpc Client.
+	// We do not want to implement yet another exponential backoff here.
+	var ret string
+	client := s.client()
+	err := client.SendKeepAlive2(ctx, args, nil, &ret)
 	dur := time.Since(now)
 	s.recordKeepLiveResult(err, dur)
 	return err
@@ -80,7 +82,7 @@ func (s *ShardReplica) goLiveChecker() {
 	// very long time, and it is convenient if it blocks there
 	now := time.Now()
 	backoffTimeout := time.Duration(0)
-	for { // TODO - quit
+	for {
 		tick := time.After(data_model.TillStartOfNextSecond(now))
 		now = <-tick // We synchronize with calendar second boundary
 		if s.alive.Load() {

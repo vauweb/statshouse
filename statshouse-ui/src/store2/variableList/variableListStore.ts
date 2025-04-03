@@ -1,10 +1,10 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { apiMetricTagValuesFetch, type MetricTagValueInfo } from '../../api/metricTagValues';
+import { apiMetricTagValuesFetch, type MetricTagValueInfo } from '@/api/metricTagValues';
 import {
   GET_PARAMS,
   isTagKey,
@@ -12,22 +12,27 @@ import {
   QUERY_WHAT,
   type QueryWhat,
   type TagKey,
-} from '../../api/enum';
-import { globalSettings } from '../../common/settings';
-import { filterParamsArr } from '../../view/api';
-import { deepClone, isNotNil, toNumber } from '../../common/helpers';
-import { type MetricMetaTag } from '../../api/metric';
+} from '@/api/enum';
+import { globalSettings } from '@/common/settings';
+import { filterParamsArr } from '@/view/api';
+import { deepClone, isNotNil, toNumber } from '@/common/helpers';
+import { getMetricMeta, loadMetricMeta, MetricMetaTag } from '@/api/metric';
 import { createStore } from '../createStore';
 
 import { produce } from 'immer';
-import { useErrorStore } from 'store/errors';
+import { useErrorStore } from '@/store2/errors';
 import { replaceVariable } from './replaceVariable';
-import { getNewVariable, type PlotKey, promQLMetric, type VariableParams, type VariableParamsSource } from '../../url2';
-import { type StatsHouseStore, useStatsHouse } from '../statsHouseStore';
-
-// export function getEmptyVariable(): VariableItem {
-//   return { list: [], updated: false, loaded: false, more: false, tagMeta: undefined, keyLastRequest: '' };
-// }
+import {
+  getNewVariable,
+  type PlotKey,
+  PlotParams,
+  promQLMetric,
+  VariableKey,
+  type VariableParams,
+  type VariableParamsSource,
+} from '@/url2';
+import { type StatsHouseStore, useStatsHouse } from '@/store2';
+import { ExtendedError } from '@/api/api';
 
 export type VariableItem = {
   list: MetricTagValueInfo[];
@@ -44,14 +49,11 @@ export type VariableListStore = {
   source: Partial<Record<string, Record<TagKey, VariableItem>>>;
 };
 
-export const useVariableListStore = createStore<VariableListStore>(
-  () => ({
-    variables: {},
-    tags: {},
-    source: {},
-  }),
-  'VariableListStore'
-);
+export const useVariableListStore = createStore<VariableListStore>(() => ({
+  variables: {},
+  tags: {},
+  source: {},
+}));
 
 useStatsHouse.subscribe((state, prevState) => {
   if (prevState.params.dashboardId !== state.params.dashboardId) {
@@ -66,37 +68,42 @@ useStatsHouse.subscribe((state, prevState) => {
       }
     });
   }
-  if (prevState.params !== state.params) {
+  if (
+    prevState.params.variables !== state.params.variables ||
+    prevState.params.orderVariables !== state.params.orderVariables
+  ) {
     updateVariables(state);
+  }
+  if (prevState.params !== state.params) {
     updateTags(state);
   }
-  if (prevState.metricMeta !== state.metricMeta) {
-    const variableItems = useVariableListStore.getState().variables;
-    const { orderVariables, variables, plots } = state.params;
-    orderVariables.forEach((variableKey) => {
-      const variable = variables[variableKey];
-      if (variable && !variableItems[variable.name]?.tagMeta) {
-        variable.link.forEach(([plotKey, tagKey]) => {
-          // const indexPlot = toNumber(plotKey);
-          // const indexTag = toIndexTag(tagKey);
-          // if (indexPlot != null && indexTag != null) {
-          const plot = plots[plotKey];
-          if (plot) {
-            const meta = state.metricMeta[plot.metricName];
-            useVariableListStore.setState(
-              produce((variableState) => {
-                if (variableState.variables[variable.name]) {
-                  variableState.variables[variable.name].tagMeta = meta?.tags?.[toNumber(tagKey, -1)];
-                }
-              })
-            );
-          }
-          // }
-        });
-      }
-    });
-  }
 });
+
+export function updateVariablesMetaInfo(
+  orderVariables: VariableKey[],
+  variables: Partial<Record<VariableKey, VariableParams>>,
+  plots: Partial<Record<PlotKey, PlotParams>>
+) {
+  const variableItems = useVariableListStore.getState().variables;
+  orderVariables.forEach((variableKey) => {
+    const variable = variables[variableKey];
+    if (variable && !variableItems[variable.name]?.tagMeta) {
+      variable.link.forEach(([plotKey, tagKey]) => {
+        const plot = plots[plotKey];
+        if (plot) {
+          const meta = getMetricMeta(plot.metricName);
+          useVariableListStore.setState(
+            produce((variableState) => {
+              if (variableState.variables[variable.name]) {
+                variableState.variables[variable.name].tagMeta = meta?.tags?.[toNumber(tagKey, -1)];
+              }
+            })
+          );
+        }
+      });
+    }
+  });
+}
 
 export function updateTags(state: StatsHouseStore) {
   const plotKey = state.params.tabNum;
@@ -326,14 +333,14 @@ export async function loadTagList(plotKey: PlotKey, tagKey: TagKey, limit = 2500
   const otherFilterNotIn = { ...plot.filterNotIn };
   delete otherFilterNotIn[tagKey];
   const requestKey = `variable_${plotKey}-${plot.metricName}`;
-  const meta = await store.loadMetricMeta(plot.metricName);
+  const meta = await loadMetricMeta(plot.metricName);
   const tagMeta = meta?.tags?.[toNumber(tagKey, -1)];
   const params = {
     [GET_PARAMS.metricName]: plot.metricName,
     [GET_PARAMS.metricTagID]: tagKey,
     [GET_PARAMS.version]: plot.backendVersion,
     [GET_PARAMS.numResults]: limit.toString(),
-    [GET_PARAMS.fromTime]: store.params.timeRange.from.toString(),
+    [GET_PARAMS.fromTime]: (store.params.timeRange.from - 1).toString(),
     [GET_PARAMS.toTime]: (store.params.timeRange.to + 1).toString(),
     [GET_PARAMS.metricFilter]: filterParamsArr(otherFilterIn, otherFilterNotIn),
     [GET_PARAMS.metricWhat]: plot.what.slice() as QueryWhat[],
@@ -361,7 +368,7 @@ export async function loadTagList(plotKey: PlotKey, tagKey: TagKey, limit = 2500
       tagMeta,
     };
   }
-  if (error) {
+  if (error && error.status !== ExtendedError.ERROR_STATUS_ABORT) {
     useErrorStore.getState().addError(error);
   }
   return undefined;
@@ -381,8 +388,6 @@ export async function loadSourceList(variableParamSource: VariableParamsSource, 
   const useV2 = store.params.orderPlot.every(
     (pK) => store.params.plots[pK]?.backendVersion === METRIC_VALUE_BACKEND_VERSION.v2
   );
-  // const tagKey = variableParamSource.tag;
-  // const indexTag = toIndexTag(variableParamSource.tag);
 
   if (!variableParamSource.metric || !variableParamSource.tag || !useV2) {
     return undefined;
@@ -399,14 +404,14 @@ export async function loadSourceList(variableParamSource: VariableParamsSource, 
     [GET_PARAMS.version]:
       globalSettings.disabled_v1 || useV2 ? METRIC_VALUE_BACKEND_VERSION.v2 : METRIC_VALUE_BACKEND_VERSION.v1,
     [GET_PARAMS.numResults]: limit.toString(),
-    [GET_PARAMS.fromTime]: store.params.timeRange.from.toString(),
+    [GET_PARAMS.fromTime]: (store.params.timeRange.from - 1).toString(),
     [GET_PARAMS.toTime]: (store.params.timeRange.to + 1).toString(),
     [GET_PARAMS.metricFilter]: filterParamsArr(otherFilterIn, otherFilterNotIn),
     [GET_PARAMS.metricWhat]: [QUERY_WHAT.count], //plot.what.slice() as QueryWhat[],
   };
   const keyLastRequest = JSON.stringify(params);
   const lastTag = useVariableListStore.getState().source[variableParamSource.metric]?.[variableParamSource.tag];
-  const tagMeta = await store.loadMetricMeta(variableParamSource.metric);
+  const tagMeta = await loadMetricMeta(variableParamSource.metric);
   if (lastTag && lastTag.keyLastRequest === keyLastRequest) {
     return {
       metricName: variableParamSource.metric,
@@ -428,7 +433,7 @@ export async function loadSourceList(variableParamSource: VariableParamsSource, 
       tagMeta,
     };
   }
-  if (error) {
+  if (error && error.status !== ExtendedError.ERROR_STATUS_ABORT) {
     useErrorStore.getState().addError(error);
   }
   return undefined;

@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -18,7 +18,7 @@ export type SwitchBoxProps = {
   title?: string;
 };
 
-export function _SwitchBox({
+export const SwitchBox = memo(function SwitchBox({
   children,
   className,
   defaultChecked,
@@ -57,6 +57,4 @@ export function _SwitchBox({
       )}
     </Tooltip>
   );
-}
-
-export const SwitchBox = memo(_SwitchBox);
+});

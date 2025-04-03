@@ -1,4 +1,10 @@
-import 'testMock/matchMedia.mock';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import '@/testMock/matchMedia.mock';
 import { QueryParams } from '../queryParams';
 import { getNewMetric } from './metric';
 import { widgetsParamsEncode } from './widgetsParamsEncode';
@@ -7,8 +13,8 @@ import { getDefaultParams } from '../getDefault';
 
 const params: QueryParams = getDefaultParams();
 
-describe('urlStore widgetsParamsEncode', () => {
-  test('urlEncodePlots', () => {
+describe('@/urlStore widgetsParamsEncode', () => {
+  test('@/urlEncodePlots', () => {
     const params2: QueryParams = {
       ...params,
       plots: {

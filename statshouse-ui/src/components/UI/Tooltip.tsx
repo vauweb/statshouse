@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Popper, POPPER_HORIZONTAL, POPPER_VERTICAL, PopperHorizontal, PopperVertical } from './Popper';
-import { type JSX } from 'react/jsx-runtime';
+import type { JSX } from 'react/jsx-runtime';
 import { TooltipTitleContent } from './TooltipTitleContent';
-import { useOnClickOutside } from '../../hooks';
+import { useOnClickOutside } from '@/hooks';
 
 import cn from 'classnames';
 import css from './style.module.css';
@@ -29,9 +29,9 @@ export type TooltipProps<T extends keyof JSX.IntrinsicElements> = {
   onClickOuter?: () => void;
 } & Omit<JSX.IntrinsicElements[T], 'title'>;
 
-declare function TooltipFn<T extends keyof JSX.IntrinsicElements>(props: TooltipProps<T>): JSX.Element;
+declare function _TooltipFn<T extends keyof JSX.IntrinsicElements>(props: TooltipProps<T>): JSX.Element;
 
-export const Tooltip = React.forwardRef<Element, TooltipProps<any>>(function Tooltip(
+export const Tooltip = React.forwardRef<Element, TooltipProps<'div'>>(function Tooltip(
   {
     as: Tag = 'div',
     title,
@@ -48,6 +48,10 @@ export const Tooltip = React.forwardRef<Element, TooltipProps<any>>(function Too
     delay = 200,
     delayClose = 50,
     onClickOuter,
+    onMouseOver,
+    onMouseOut,
+    onMouseMove,
+    onClick,
     ...props
   },
   ref
@@ -81,8 +85,8 @@ export const Tooltip = React.forwardRef<Element, TooltipProps<any>>(function Too
     }
   }, [outerOpen]);
 
-  const onMouseOver = useCallback(
-    (e: any) => {
+  const handlerMouseOver = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
       if (timeoutDelayRef.current) {
         clearTimeout(timeoutDelayRef.current);
         timeoutDelayRef.current = null;
@@ -93,13 +97,13 @@ export const Tooltip = React.forwardRef<Element, TooltipProps<any>>(function Too
           setOpen(true);
         }, delay);
       }
-      props.onMouseOver?.(e);
+      onMouseOver?.(e);
     },
-    [delay, outerOpen, props]
+    [delay, onMouseOver, outerOpen]
   );
 
-  const onMouseOut = useCallback(
-    (e: any) => {
+  const handlerMouseOut = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
       if (timeoutDelayRef.current) {
         clearTimeout(timeoutDelayRef.current);
         timeoutDelayRef.current = null;
@@ -109,12 +113,12 @@ export const Tooltip = React.forwardRef<Element, TooltipProps<any>>(function Too
           setOpen(false);
         }, delayClose);
       }
-      props.onMouseOut?.(e);
+      onMouseOut?.(e);
     },
-    [delayClose, outerOpen, props]
+    [delayClose, onMouseOut, outerOpen]
   );
-  const onMouseMove = useCallback(
-    (e: any) => {
+  const handlerMouseMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
       if (timeoutDelayRef.current) {
         clearTimeout(timeoutDelayRef.current);
         timeoutDelayRef.current = null;
@@ -125,29 +129,29 @@ export const Tooltip = React.forwardRef<Element, TooltipProps<any>>(function Too
           setOpen(true);
         }, delay);
       }
-      props.onMouseMove?.(e);
+      onMouseMove?.(e);
     },
-    [delay, outerOpen, props]
+    [delay, onMouseMove, outerOpen]
   );
 
-  const onClick = useCallback(
-    (e: any) => {
+  const handlerClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
       if (outerOpen == null) {
         setOpen(false);
       }
-      props.onClick?.(e);
+      onClick?.(e);
     },
-    [outerOpen, props]
+    [onClick, outerOpen]
   );
 
   return (
     <Tag
       {...props}
       ref={setLocalRef}
-      onMouseOver={onMouseOver}
-      onMouseOut={onMouseOut}
-      onMouseMove={onMouseMove}
-      onClick={onClick}
+      onMouseOver={handlerMouseOver}
+      onMouseOut={handlerMouseOut}
+      onMouseMove={handlerMouseMove}
+      onClick={handlerClick}
     >
       {children}
       {!!title && (
@@ -168,4 +172,4 @@ export const Tooltip = React.forwardRef<Element, TooltipProps<any>>(function Too
       )}
     </Tag>
   );
-}) as typeof TooltipFn;
+}) as typeof _TooltipFn;

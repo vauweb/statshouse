@@ -1,4 +1,10 @@
-import 'testMock/matchMedia.mock';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import '@/testMock/matchMedia.mock';
 import {
   urlEncode,
   urlEncodeGlobalParam,
@@ -9,27 +15,17 @@ import {
   urlEncodeVariables,
   urlEncodeVariableSource,
 } from './urlEncode';
-import { GroupInfo, PlotParams, QueryParams, VariableParams } from './queryParams';
-import {
-  GET_PARAMS,
-  METRIC_TYPE,
-  METRIC_VALUE_BACKEND_VERSION,
-  PLOT_TYPE,
-  QUERY_WHAT,
-  TIME_RANGE_KEYS_TO,
-} from 'api/enum';
-import { THEMES } from 'store/theme';
+import { GroupInfo, QueryParams, VariableParams } from './queryParams';
+import { GET_PARAMS, TIME_RANGE_KEYS_TO } from '@/api/enum';
 import { getDefaultParams, getNewGroup, getNewVariable, getNewVariableSource } from './getDefault';
-import { promQLMetric, removeValueChar } from './constants';
-import { getNewMetric, metricEncode, metricFilterEncode } from './widgetsParams/metric';
-import { widgetsParamsEncode } from './widgetsParams';
+import { removeValueChar } from './constants';
 
 jest.useFakeTimers().setSystemTime(new Date('2020-01-01 00:00:00'));
 
 const params: QueryParams = getDefaultParams();
 
-describe('urlStore urlEncode', () => {
-  test('urlEncodeVariableSource', () => {
+describe('@/urlStore urlEncode', () => {
+  test('@/urlEncodeVariableSource', () => {
     const dParam = {
       ...getNewVariableSource(),
       id: '0',
@@ -52,7 +48,7 @@ describe('urlStore urlEncode', () => {
       [prefix + GET_PARAMS.variableSourceFilter, '1~ns2'],
     ]);
   });
-  test('urlEncodeVariable', () => {
+  test('@/urlEncodeVariable', () => {
     const dParam: VariableParams = {
       ...getNewVariable(),
       id: '0',
@@ -128,7 +124,7 @@ describe('urlStore urlEncode', () => {
       [GET_PARAMS.variableValuePrefix + '.' + dParam2.name + '.' + GET_PARAMS.variableNegative, '0'],
     ]);
   });
-  test('urlEncodeVariables', () => {
+  test('@/urlEncodeVariables', () => {
     const params2: QueryParams = {
       ...params,
       variables: {
@@ -210,7 +206,7 @@ describe('urlStore urlEncode', () => {
       ['ov', '1'],
     ]);
   });
-  test('urlEncodeGroup', () => {
+  test('@/urlEncodeGroup', () => {
     const dParam: GroupInfo = {
       ...getNewGroup(),
       id: '0',
@@ -228,7 +224,7 @@ describe('urlStore urlEncode', () => {
     ]);
     expect(urlEncodeGroup({ ...dParam, show: true }, { ...dParam, show: false })).toEqual([['g0.v', '1']]);
   });
-  test('urlEncodeGroups', () => {
+  test('@/urlEncodeGroups', () => {
     const params2: QueryParams = {
       ...params,
       groups: {
@@ -262,7 +258,7 @@ describe('urlStore urlEncode', () => {
     ]);
   });
 
-  test('urlEncodeTimeRange', () => {
+  test('@/urlEncodeTimeRange', () => {
     expect(urlEncodeTimeRange(params)).toEqual([]);
     expect(urlEncodeTimeRange(params, params)).toEqual([]);
     expect(
@@ -282,7 +278,7 @@ describe('urlStore urlEncode', () => {
       ['f', '-1000'],
     ]);
   });
-  test('urlEncodeGlobalParam', () => {
+  test('@/urlEncodeGlobalParam', () => {
     expect(urlEncodeGlobalParam(params)).toEqual([]);
     expect(urlEncodeGlobalParam(params, params)).toEqual([]);
     expect(
@@ -293,10 +289,11 @@ describe('urlStore urlEncode', () => {
           dashboardName: 'dn',
           dashboardDescription: 'dd',
           dashboardVersion: 123,
+          dashboardCurrentVersion: 12345,
           eventFrom: 2000,
           live: true,
           tabNum: '5',
-          theme: THEMES.Light,
+          theme: 'light',
           timeShifts: [2000, 4000],
         },
         { ...params }
@@ -317,6 +314,16 @@ describe('urlStore urlEncode', () => {
       urlEncodeGlobalParam(
         {
           ...params,
+          dashboardVersion: 123,
+          dashboardCurrentVersion: 123,
+        },
+        { ...params }
+      )
+    ).toEqual([]);
+    expect(
+      urlEncodeGlobalParam(
+        {
+          ...params,
           live: false,
         },
         { ...params, live: true }
@@ -324,7 +331,7 @@ describe('urlStore urlEncode', () => {
     ).toEqual([['live', '0']]);
   });
 
-  test('urlEncode', () => {
+  test('@/urlEncode', () => {
     expect(urlEncode(params)).toEqual([]);
   });
 });

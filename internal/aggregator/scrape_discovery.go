@@ -1,3 +1,9 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 package aggregator
 
 import (
@@ -13,7 +19,6 @@ import (
 	"github.com/prometheus/prometheus/discovery"
 	"github.com/prometheus/prometheus/discovery/consul"
 	"github.com/prometheus/prometheus/discovery/targetgroup"
-
 	"github.com/vkcom/statshouse/internal/agent"
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/metajournal"
@@ -143,9 +148,8 @@ func (s *scrapeDiscovery) applyTargets(targets map[string][]*targetgroup.Group) 
 						continue
 					}
 					if addr, ok := ls[model.AddressLabel]; ok {
-						s.sh2.AddCounterHostStringBytes(
-							s.sh2.AggKey(0, format.BuiltinMetricIDAggScrapeTargetDiscovery, [format.MaxTags]int32{}),
-							[]byte(addr), 1, 0, format.BuiltinMetricMetaAggScrapeTargetDiscovery)
+						s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDiscovery,
+							[]int32{}, []byte(addr), 1)
 					}
 				}
 			}

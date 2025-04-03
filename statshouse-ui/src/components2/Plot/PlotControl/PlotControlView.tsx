@@ -1,54 +1,61 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo, useCallback, useRef, useState } from 'react';
-import { POPPER_HORIZONTAL, POPPER_VERTICAL, SwitchBox, Tooltip } from 'components/UI';
+import { memo, useCallback, useRef, useState } from 'react';
+import { POPPER_HORIZONTAL, POPPER_VERTICAL, SwitchBox, Tooltip } from '@/components/UI';
 import { ReactComponent as SVGGear } from 'bootstrap-icons/icons/gear.svg';
-import { useOnClickOutside } from 'hooks';
+import { useOnClickOutside } from '@/hooks';
 import cn from 'classnames';
-import { useStatsHouseShallow } from 'store2';
-import { getNewMetric, PlotKey } from 'url2';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
 
 export type PlotControlViewProps = {
-  plotKey: PlotKey;
   className?: string;
 };
 
-const { filledGraph: defaultFilledGraph, totalLine: defaultTotalLine } = getNewMetric();
+export const PlotControlView = memo(function PlotControlView({ className }: PlotControlViewProps) {
+  const {
+    plot: { filledGraph, totalLine, logScale },
+    setPlot,
+  } = useWidgetPlotContext();
 
-export function _PlotControlView({ plotKey, className }: PlotControlViewProps) {
-  const { filledGraph, totalLine, setPlot } = useStatsHouseShallow((s) => ({
-    filledGraph: s.params.plots[plotKey]?.filledGraph ?? defaultFilledGraph,
-    totalLine: s.params.plots[plotKey]?.totalLine ?? defaultTotalLine,
-    setPlot: s.setPlot,
-  }));
   const [dropdown, setDropdown] = useState(false);
   const refDropButton = useRef<HTMLButtonElement>(null);
   useOnClickOutside(refDropButton, () => {
     setDropdown(false);
   });
+
   const onShow = useCallback(() => {
     setDropdown((s) => !s);
   }, []);
 
   const setFilledGraph = useCallback(
     (status: boolean) => {
-      setPlot(plotKey, (p) => {
+      setPlot((p) => {
         p.filledGraph = status;
       });
     },
-    [plotKey, setPlot]
+    [setPlot]
   );
+
   const setTotalLine = useCallback(
     (status: boolean) => {
-      setPlot(plotKey, (p) => {
+      setPlot((p) => {
         p.totalLine = status;
       });
     },
-    [plotKey, setPlot]
+    [setPlot]
+  );
+
+  const setLogScale = useCallback(
+    (status: boolean) => {
+      setPlot((p) => {
+        p.logScale = status;
+      });
+    },
+    [setPlot]
   );
 
   return (
@@ -73,6 +80,11 @@ export function _PlotControlView({ plotKey, className }: PlotControlViewProps) {
               Filled graph
             </SwitchBox>
           </div>
+          <div>
+            <SwitchBox className="text-nowrap my-1 mx-2 user-select-none" checked={logScale} onChange={setLogScale}>
+              Logarithmic scale
+            </SwitchBox>
+          </div>
         </div>
       }
       open={dropdown}
@@ -86,6 +98,4 @@ export function _PlotControlView({ plotKey, className }: PlotControlViewProps) {
       </Tooltip>
     </Tooltip>
   );
-}
-
-export const PlotControlView = memo(_PlotControlView);
+});

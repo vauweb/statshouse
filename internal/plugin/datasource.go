@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -21,6 +21,7 @@ import (
 	"github.com/mailru/easyjson"
 
 	"github.com/vkcom/statshouse/internal/api"
+	"github.com/vkcom/statshouse/internal/format"
 )
 
 //go:generate easyjson -no_std_marshalers datasource.go
@@ -45,7 +46,7 @@ type pluginProperties struct {
 }
 
 // NewDatasource creates a new datasource instance.
-func NewDatasource(settings backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
+func NewDatasource(_ context.Context, settings backend.DataSourceInstanceSettings) (instancemgmt.Instance, error) {
 	props := &pluginProperties{}
 	err := easyjson.Unmarshal(settings.JSONData, props)
 	if err != nil {
@@ -141,7 +142,7 @@ func (d *Datasource) query(_ context.Context, _ backend.PluginContext, query bac
 			params.Set(api.ParamNumResults, "5")
 		}
 		if params.Get(api.ParamQueryWhat) == "" {
-			params.Set(api.ParamQueryWhat, api.ParamQueryFnCountNorm)
+			params.Set(api.ParamQueryWhat, format.ParamQueryFnCountNorm)
 		}
 	default:
 		aq := Query{

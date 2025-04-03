@@ -1,5 +1,11 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { GroupInfo, QueryParams, VariableParams, VariableParamsSource } from './queryParams';
-import { GET_PARAMS } from 'api/enum';
+import { GET_PARAMS } from '@/api/enum';
 import { dequal } from 'dequal/lite';
 
 import { getDefaultParams, getNewGroup, getNewVariable, getNewVariableSource } from './getDefault';
@@ -35,9 +41,13 @@ export function urlEncodeGlobalParam(
     paramArr.push([GET_PARAMS.metricTabNum, params.tabNum]);
   }
   if (!dequal(defaultParams.timeShifts, params.timeShifts)) {
-    params.timeShifts.forEach((shift) => {
-      paramArr.push([GET_PARAMS.metricTimeShifts, shift.toString()]);
-    });
+    if (params.timeShifts.length === 0 && defaultParams.timeShifts.length > 0) {
+      paramArr.push([GET_PARAMS.metricTimeShifts, removeValueChar]);
+    } else {
+      params.timeShifts.forEach((shift) => {
+        paramArr.push([GET_PARAMS.metricTimeShifts, shift.toString()]);
+      });
+    }
   }
   if (defaultParams.eventFrom !== params.eventFrom) {
     paramArr.push([GET_PARAMS.metricEventFrom, params.eventFrom.toString()]);
@@ -51,9 +61,15 @@ export function urlEncodeGlobalParam(
   if (defaultParams.dashboardDescription !== params.dashboardDescription) {
     paramArr.push([GET_PARAMS.dashboardDescription, params.dashboardDescription]);
   }
-  if (defaultParams.dashboardVersion !== params.dashboardVersion && params.dashboardVersion) {
+
+  if (
+    params.dashboardVersion &&
+    params.dashboardCurrentVersion &&
+    params.dashboardVersion !== params.dashboardCurrentVersion
+  ) {
     paramArr.push([GET_PARAMS.dashboardVersion, params.dashboardVersion.toString()]);
   }
+
   return paramArr;
 }
 
@@ -95,6 +111,7 @@ export function urlEncodeGroups(
   if (!dequal(defaultParams.orderGroup, params.orderGroup)) {
     paramArr.push([GET_PARAMS.orderGroup, params.orderGroup.join(orderGroupSplitter)]);
   }
+
   return paramArr;
 }
 

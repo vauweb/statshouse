@@ -1,41 +1,37 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo } from 'react';
-import { PlotKey } from 'url2';
+import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import cn from 'classnames';
-import { useStatsHouseShallow } from 'store2';
-import { formatSI } from 'common/formatByMetricType';
-import { useLinkCSV2 } from 'hooks/useLinkCSV2';
-import { isPromQL } from 'store2/helpers';
+import { formatSI } from '@/common/formatByMetricType';
+import { useLinkCSV2 } from '@/hooks/useLinkCSV2';
+import { useMetricBadges } from '@/hooks/useMetricBadges';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
+import { useMetricName } from '@/hooks/useMetricName';
+import { StatsHouseStore, useStatsHouseShallow } from '@/store2';
 
 export type PlotSubMenuProps = {
   className?: string;
-  plotKey: PlotKey;
 };
-export function _PlotSubMenu({ className, plotKey }: PlotSubMenuProps) {
-  const {
-    metricName,
-    receiveErrors,
-    receiveWarnings,
-    samplingFactorSrc,
-    samplingFactorAgg,
-    mappingFloodEvents,
-    timeRange,
-  } = useStatsHouseShallow(({ plotsData, params: { plots, timeRange } }) => ({
-    metricName: plotsData[plotKey]?.metricName ?? (isPromQL(plots[plotKey]) ? '' : plots[plotKey]?.metricName) ?? '',
-    receiveErrors: plotsData[plotKey]?.receiveErrors ?? 0,
-    receiveWarnings: plotsData[plotKey]?.receiveWarnings ?? 0,
-    samplingFactorSrc: plotsData[plotKey]?.samplingFactorSrc ?? 1,
-    samplingFactorAgg: plotsData[plotKey]?.samplingFactorAgg ?? 1,
-    mappingFloodEvents: plotsData[plotKey]?.mappingFloodEvents ?? 0,
-    timeRange,
-  }));
-  const linkCSV = useLinkCSV2(plotKey);
+
+const selectorStore = ({ params: { timeRange, timeShifts, variables } }: StatsHouseStore) => ({
+  timeRange,
+  timeShifts,
+  variables,
+});
+
+export const PlotSubMenu = memo(function PlotSubMenu({ className }: PlotSubMenuProps) {
+  const { plot } = useWidgetPlotContext();
+  const { timeRange, timeShifts, variables } = useStatsHouseShallow(selectorStore);
+  const metricName = useMetricName(true);
+  const { receiveErrors, receiveWarnings, samplingFactorSrc, samplingFactorAgg, mappingFloodEvents, isLoading } =
+    useMetricBadges(plot, timeRange, timeShifts, variables);
+
+  const linkCSV = useLinkCSV2(plot.id);
   return (
     <ul className={cn('nav', className)}>
       <li className="nav-item">
@@ -61,7 +57,9 @@ export function _PlotSubMenu({ className, plotKey }: PlotSubMenuProps) {
               search: `?s=__src_ingestion_status&f=${timeRange.from}&t=${timeRange.urlTo}&qf=key1-${metricName}&qb=key2`,
             }}
           >
-            <small>Receive status</small>
+            <small>
+              Receive status {isLoading && <span className="spinner-border spinner-border-sm-09" role="status"></span>}
+            </small>
           </Link>
         )}
       </li>
@@ -80,7 +78,9 @@ export function _PlotSubMenu({ className, plotKey }: PlotSubMenuProps) {
             ) : samplingFactorSrc > 1.02 ? (
               <span className="badge bg-warning text-dark">source</span>
             ) : (
-              <span>source</span>
+              <span>
+                source {isLoading && <span className="spinner-border spinner-border-sm-09" role="status"></span>}
+              </span>
             )}
           </Link>{' '}
           /{' '}
@@ -96,7 +96,9 @@ export function _PlotSubMenu({ className, plotKey }: PlotSubMenuProps) {
             ) : samplingFactorAgg > 1.02 ? (
               <span className="badge bg-warning text-dark">aggregator</span>
             ) : (
-              <span>aggregator</span>
+              <span>
+                aggregator {isLoading && <span className="spinner-border spinner-border-sm-09" role="status"></span>}
+              </span>
             )}
           </Link>
         </small>
@@ -147,5 +149,4 @@ export function _PlotSubMenu({ className, plotKey }: PlotSubMenuProps) {
       </li>
     </ul>
   );
-}
-export const PlotSubMenu = memo(_PlotSubMenu);
+});

@@ -1,3 +1,9 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import {
   GroupInfo,
   GroupKey,
@@ -7,8 +13,8 @@ import {
   VariableParamsSource,
   VariableSourceKey,
 } from './queryParams';
-import { isNotNil, toNumber, toNumberM, uniqueArray } from 'common/helpers';
-import { GET_PARAMS, toTagKey } from 'api/enum';
+import { isNotNil, toNumber, toNumberM, uniqueArray } from '@/common/helpers';
+import { GET_PARAMS, toTagKey } from '@/api/enum';
 import { getDefaultParams, getNewGroup, getNewVariable, getNewVariableSource } from './getDefault';
 import { orderGroupSplitter, orderVariableSplitter, removeValueChar } from './constants';
 import { isKeyId, isNotNilVariableLink, TreeParamsObject, treeParamsObjectValueSymbol } from './urlHelpers';
@@ -41,6 +47,7 @@ export function urlDecode(
       plotKeys.push('0');
     }
   });
+
   const global = urlDecodeGlobalParam(searchParams, defaultParams);
   const timeRange = urlDecodeTimeRange(searchParams, defaultParams);
   const plots = widgetsParamsDecode(
@@ -48,14 +55,16 @@ export function urlDecode(
     uniqueArray([...plotKeys, ...defaultParams.orderPlot]),
     defaultParams
   );
+
   const groups = urlDecodeGroups(searchParams, uniqueArray([...groupKeys, ...defaultParams.orderGroup]), defaultParams);
   const variables = urlDecodeVariables(
     searchParams,
     uniqueArray([...variableKeys, ...defaultParams.orderVariables]),
     defaultParams
   );
-  if (groups.orderGroup.length === 1 && groups.groups[0]?.count !== plots.orderPlot.length) {
-    groups.groups[0]!.count = plots.orderPlot.length;
+  //fix lose plot
+  if (groups.orderGroup.length === 1 && groups.groups[groups.orderGroup[0]]?.count !== plots.orderPlot.length) {
+    groups.groups[groups.orderGroup[0]]!.count = plots.orderPlot.length;
   }
   return {
     ...global,
@@ -80,6 +89,7 @@ export function urlDecodeGlobalParam(
   | 'dashboardName'
   | 'dashboardDescription'
   | 'dashboardVersion'
+  | 'dashboardCurrentVersion'
 > {
   const rawLive = searchParams[GET_PARAMS.metricLive]?.[treeParamsObjectValueSymbol]?.[0];
   const rawTheme = searchParams[GET_PARAMS.theme]?.[treeParamsObjectValueSymbol]?.[0];
@@ -103,6 +113,7 @@ export function urlDecodeGlobalParam(
     dashboardName: rawDashboardName ?? defaultParams.dashboardName,
     dashboardDescription: rawDashboardDescription ?? defaultParams.dashboardDescription,
     dashboardVersion: rawDashboardVersion ?? defaultParams.dashboardVersion,
+    dashboardCurrentVersion: defaultParams.dashboardCurrentVersion,
   };
 }
 
@@ -262,7 +273,7 @@ export function urlDecodeVariable(
     link,
     source,
     sourceOrder,
-    values: values?.[0] === removeValueChar ? [] : values ?? defaultVariable.values,
+    values: values?.[0] === removeValueChar ? [] : (values ?? defaultVariable.values),
     groupBy: groupBy != null ? groupBy === '1' : defaultVariable.groupBy,
     negative: negative != null ? negative === '1' : defaultVariable.negative,
   };

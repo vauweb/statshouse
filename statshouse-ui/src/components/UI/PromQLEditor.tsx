@@ -1,11 +1,17 @@
-import React, { useEffect, useMemo, useRef } from 'react';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import { useEffect, useMemo, useRef } from 'react';
 import { dropCursor, EditorView, keymap } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { bracketMatching, HighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { tags } from '@lezer/highlight';
-import { PromQLExtension } from '../../lib/codeMirror';
+import { PromQLExtension } from '@/lib/codeMirror';
 
 const promQl = new PromQLExtension();
 
@@ -71,7 +77,7 @@ export function PromQLEditor({ value = '', onChange, className }: PromQLEditorPr
     [value]
   );
   const refEditor = useRef(null);
-  const editor = useRef<EditorView>();
+  const editor = useRef<EditorView | undefined>(undefined);
   useEffect(() => {
     if (refEditor.current) {
       editor.current = new EditorView({
@@ -89,7 +95,7 @@ export function PromQLEditor({ value = '', onChange, className }: PromQLEditorPr
   }, [onChange]);
 
   useEffect(() => {
-    if (editor.current?.state.doc.toString() !== state.doc.toString()) {
+    if (editor.current?.state.doc.toString() !== state.doc.toString() || state.doc.toString() === '') {
       editor.current?.setState(state);
     }
   }, [state, value]);

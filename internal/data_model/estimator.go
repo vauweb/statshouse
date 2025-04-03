@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,9 +9,8 @@ package data_model
 import (
 	"sync"
 
-	"pgregory.net/rand"
-
 	"github.com/vkcom/statshouse/internal/format"
+	"pgregory.net/rand"
 )
 
 // Algorithm idea
@@ -21,6 +20,11 @@ import (
 // time-> ..    .   .   ...   *
 // Cur            [ .   ...   *         ]
 // Next                     [ *         ]
+
+type EstimatorMetricHash struct {
+	Metric int32
+	Hash   uint64
+}
 
 type Estimator struct {
 	mu sync.Mutex
@@ -32,13 +36,13 @@ type Estimator struct {
 	maxCardinality float64
 }
 
-func updateEstimate(e map[int32]*ChUnique, metric int32, hash uint64) {
-	u, ok := e[metric]
+func updateEstimate(e map[int32]*ChUnique, mh EstimatorMetricHash) {
+	u, ok := e[mh.Metric]
 	if !ok {
 		u = &ChUnique{}
-		e[metric] = u
+		e[mh.Metric] = u
 	}
-	u.Insert(hash)
+	u.Insert(mh.Hash)
 }
 
 // Will cause divide by 0 if forgotten
@@ -49,14 +53,13 @@ func (e *Estimator) Init(window int, maxCardinality int) {
 	e.halfHour = map[uint32]map[int32]*ChUnique{}
 }
 
-func (e *Estimator) UpdateWithKeys(time uint32, keys []Key) {
+func (e *Estimator) UpdateWithKeys(time uint32, mhs []EstimatorMetricHash) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ah, bh := e.createEstimatorsLocked(time)
-	for _, key := range keys {
-		hash := key.Hash()
-		updateEstimate(ah, key.Metric, hash)
-		updateEstimate(bh, key.Metric, hash)
+	for _, mh := range mhs {
+		updateEstimate(ah, mh)
+		updateEstimate(bh, mh)
 	}
 }
 
@@ -76,7 +79,7 @@ func (e *Estimator) createEstimatorsLocked(time uint32) (map[int32]*ChUnique, ma
 	return ah, bh
 }
 
-func (e *Estimator) ReportHourCardinality(rng *rand.Rand, time uint32, usedMetrics map[int32]struct{}, builtInStat *map[Key]*MultiItem, aggregatorHost int32, shardKey int32, replicaKey int32, numShards int) {
+func (e *Estimator) ReportHourCardinality(rng *rand.Rand, time uint32, miMap *MultiItemMap, usedMetrics map[int32]struct{}, aggregatorHost int32, shardKey int32, replicaKey int32, numShards int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -110,7 +113,8 @@ func (e *Estimator) ReportHourCardinality(rng *rand.Rand, time uint32, usedMetri
 		// we cannot implement this, so we multiply by # of shards, expecting uniform load (which is wrong if skip shards option is given to agents)
 		// so avg() of this metric shows full estimate
 		key := AggKey((time/60)*60, format.BuiltinMetricIDAggHourCardinality, [format.MaxTags]int32{0, 0, 0, 0, k}, aggregatorHost, shardKey, replicaKey)
-		MapKeyItemMultiItem(builtInStat, key, AggregatorStringTopCapacity, nil, nil).Tail.AddValueCounterHost(rng, cardinality, 1, aggregatorHost)
+		item, _ := miMap.GetOrCreateMultiItem(key, nil, 1, nil)
+		item.Tail.AddValueCounterHost(rng, cardinality, 1, TagUnionBytes{I: aggregatorHost})
 	}
 }
 

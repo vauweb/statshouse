@@ -1,10 +1,16 @@
-import { VariableKey } from 'url2';
-import { useStatsHouseShallow } from 'store2';
-import { useVariableListStore } from 'store2/variableList';
-import { emptyArray } from 'common/helpers';
-import React from 'react';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import { VariableKey } from '@/url2';
+import { useStatsHouseShallow } from '@/store2';
+import { useVariableListStore } from '@/store2/variableList';
+import { emptyArray } from '@/common/helpers';
+import { useCallback } from 'react';
 import { DashboardVariablesBadge } from './DashboardVariablesBadge';
-import { Tooltip } from 'components/UI';
+import { Tooltip } from '@/components/UI';
 import cn from 'classnames';
 
 export type DashboardVariablesBadgeByKeyProps = {
@@ -13,9 +19,14 @@ export type DashboardVariablesBadgeByKeyProps = {
 };
 
 export function DashboardVariablesBadgeByKey({ className, variableKey }: DashboardVariablesBadgeByKeyProps) {
-  const { variable } = useStatsHouseShallow(({ params }) => ({
-    variable: params.variables[variableKey],
-  }));
+  const { variable } = useStatsHouseShallow(
+    useCallback(
+      ({ params }) => ({
+        variable: params.variables[variableKey],
+      }),
+      [variableKey]
+    )
+  );
   const variableItem = useVariableListStore((s) => s.variables[variable?.name ?? '']);
 
   return variable?.values.length ? (

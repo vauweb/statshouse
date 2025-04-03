@@ -1,6 +1,12 @@
-import { PlotKey, PlotParams, VariableParams } from 'url2';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import { PlotKey, PlotParams, VariableParams } from '@/url2';
 import { produce } from 'immer';
-import { isNotNil } from 'common/helpers';
+import { isNotNil } from '@/common/helpers';
 
 /**
  * replace filter value by variable

@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -20,15 +20,15 @@ import {
   VariableParams,
   VariableParamsSource,
   VariableSourceKey,
-} from 'url2';
-import { TagKey } from 'api/enum';
-import { Button, ToggleButton } from 'components/UI';
-import { ProduceUpdate } from 'store2/helpers';
-import { useStatsHouseShallow } from 'store2';
+} from '@/url2';
+import { TagKey } from '@/api/enum';
+import { Button, ToggleButton } from '@/components/UI';
+import { ProduceUpdate } from '@/store2/helpers';
+import { useStatsHouseShallow } from '@/store2';
 import { VariableSource } from './VariableSource';
-import { isNil, isNotNil } from 'common/helpers';
-import { getNextVariableSourceKey } from 'store2/urlStore/updateParamsPlotStruct';
-import { isValidVariableName } from '../../../view/utils2';
+import { isNil, isNotNil } from '@/common/helpers';
+import { getNextVariableSourceKey } from '@/store2/urlStore/updateParamsPlotStruct';
+import { isValidVariableName } from '@/view/utils2';
 
 export type VariableCardProps = {
   variableKey: VariableKey;

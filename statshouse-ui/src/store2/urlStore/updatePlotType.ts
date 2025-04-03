@@ -1,15 +1,16 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import { StatsHouseStore } from '../statsHouseStore';
-import { type PlotKey } from 'url2';
-import { PLOT_TYPE, type PlotType, QUERY_WHAT, TAG_KEY } from 'api/enum';
+import type { PlotKey } from '@/url2';
+import { PLOT_TYPE, type PlotType, QUERY_WHAT, TAG_KEY } from '@/api/enum';
 import { ProduceUpdate } from '../helpers';
 import { dequal } from 'dequal/lite';
-import { getTimeShifts, timeShiftAbbrevExpand } from 'view/utils2';
+import { getTimeShifts, timeShiftAbbrevExpand } from '@/view/utils2';
+import { getMetricMeta } from '@/api/metric';
 
 export function updatePlotType(plotKey: PlotKey, nextType: PlotType): ProduceUpdate<StatsHouseStore> {
   return (store) => {
@@ -24,11 +25,11 @@ export function updatePlotType(plotKey: PlotKey, nextType: PlotType): ProduceUpd
           plot.what = [QUERY_WHAT.countNorm];
           plot.numSeries = 5;
           break;
-        case PLOT_TYPE.Event:
+        case PLOT_TYPE.Event: {
           plot.what = [QUERY_WHAT.count];
           plot.numSeries = 0;
           plot.customAgg = -1;
-          const meta = store.metricMeta[plot.metricName];
+          const meta = getMetricMeta(plot.metricName);
           if (meta) {
             plot.eventsBy = [
               ...meta.tagsOrder.filter((tagKey) => !(meta.tagsObject[tagKey]?.description === '-')),
@@ -36,6 +37,7 @@ export function updatePlotType(plotKey: PlotKey, nextType: PlotType): ProduceUpd
             ];
           }
           break;
+        }
       }
 
       if (plot.type === PLOT_TYPE.Metric) {

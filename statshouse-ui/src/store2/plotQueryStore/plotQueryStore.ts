@@ -1,5 +1,12 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { createStore } from '../createStore';
-import type { PlotKey } from 'url2';
+import type { PlotKey } from '@/url2';
+import { useCallback } from 'react';
 
 export type PlotQueryStore = {
   globalQuery: number;
@@ -53,7 +60,7 @@ export function getGlobalLoader() {
 }
 
 export function usePlotLoader(plotKey: PlotKey) {
-  return usePlotQueryStore((s) => (s.plotQuery[plotKey] ?? 0) > 0);
+  return usePlotQueryStore(useCallback((s) => (s.plotQuery[plotKey] ?? 0) > 0, [plotKey]));
 }
 
 export function useGlobalLoader() {

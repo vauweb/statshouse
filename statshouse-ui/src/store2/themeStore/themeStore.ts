@@ -1,6 +1,12 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { produce } from 'immer';
 import { createStore } from '../createStore';
-import { useStatsHouse } from '../statsHouseStore';
+import { useStatsHouse } from '@/store2';
 
 export const THEMES = {
   Dark: 'dark',
@@ -68,7 +74,7 @@ export type ThemeStore = {
   theme: Theme;
 };
 
-export const useThemeStore = createStore<ThemeStore>((setState, getState, store) => {
+export const useThemeStore = createStore<ThemeStore>((_setState, _getState, store) => {
   window.addEventListener('DOMContentLoaded', updateTheme, false);
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme, false);
   store.subscribe((state, prevState) => {
@@ -80,7 +86,7 @@ export const useThemeStore = createStore<ThemeStore>((setState, getState, store)
     dark: false, //getDark(),
     theme: THEMES.Light, //getStorageTheme(),
   };
-}, 'ThemeStore');
+});
 
 export function updateTheme() {
   useThemeStore.setState((state) => {

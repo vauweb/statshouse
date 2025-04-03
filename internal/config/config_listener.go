@@ -1,17 +1,17 @@
 package config
 
 import (
+	"flag"
 	"log"
 	"strings"
 	"sync"
 
-	"github.com/spf13/pflag"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/format"
 )
 
 type Config interface {
-	Bind(_ *pflag.FlagSet, default_ Config)
+	Bind(_ *flag.FlagSet, default_ Config)
 	ValidateConfig() error
 	Copy() Config
 }
@@ -30,11 +30,14 @@ func NewConfigListener[a Config](configMetric string, config a) *ConfigListener 
 	}
 }
 
-func (l *ConfigListener) parseConfig(cfg string) error {
+func (l *ConfigListener) ValidateConfig(cfg string) error {
+	return l.parseConfig(cfg, true)
+}
+func (l *ConfigListener) parseConfig(cfg string, dryRun bool) error {
 	l.mx.Lock()
 	defer l.mx.Unlock()
-	var f pflag.FlagSet
-	f.Init("", pflag.ContinueOnError)
+	var f flag.FlagSet
+	f.Init("", flag.ContinueOnError)
 	c := l.config.Copy()
 	c.Bind(&f, l.config)
 	s := strings.Split(cfg, "\n")
@@ -55,10 +58,11 @@ func (l *ConfigListener) parseConfig(cfg string) error {
 	if err != nil {
 		return err
 	}
-	l.config = c
-	for _, f := range l.changeCB {
-		f(c)
-
+	if !dryRun {
+		l.config = c
+		for _, f := range l.changeCB {
+			f(c)
+		}
 	}
 	return nil
 }
@@ -77,7 +81,7 @@ func (l *ConfigListener) ApplyEventCB(newEntries []tlmetadata.Event) {
 			if err != nil {
 				return
 			}
-			err = l.parseConfig(metric.Description)
+			err = l.parseConfig(metric.Description, false)
 			if err != nil {
 				log.Println("failed to parse remote config:", err.Error())
 			}

@@ -1,6 +1,12 @@
-import { toNumber, toString } from 'common/helpers';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import { toNumber, toString } from '@/common/helpers';
 import type { PlotKey, VariableParamsLink } from './queryParams';
-import { GET_PARAMS, toTagKey } from 'api/enum';
+import { GET_PARAMS, toTagKey } from '@/api/enum';
 
 export function freeKeyPrefix(str: string): string {
   return str.replace('skey', '_s').replace('key', '');
@@ -57,7 +63,7 @@ export type TreeParamsObject = Partial<{
 
 export function toTreeObj(obj: Partial<Record<string, string[]>>): TreeParamsObject {
   const res = {};
-  for (let key in obj) {
+  for (const key in obj) {
     const keys = key.split('.');
     let target: TreeParamsObject = res;
     keys.forEach((keyName) => {

@@ -1,17 +1,15 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { GET_PARAMS, TAG_KEY } from '../api/enum';
+import { GET_PARAMS } from '@/api/enum';
 import { metricTagValueInfo } from './api';
-import { type UseEventTagColumnReturn } from '../hooks/useEventTagColumns';
-import { MetricMetaValue } from '../api/metric';
-import { PlotStore } from '../store';
+import { MetricMetaValue } from '@/api/metric';
 import { produce } from 'immer';
-import { isNotNil, toNumber, uniqueArray } from '../common/helpers';
-import { getEmptyVariableParams } from '../common/getEmptyVariableParams';
+import { isNotNil, toNumber, uniqueArray } from '@/common/helpers';
+import { getEmptyVariableParams } from '@/common/getEmptyVariableParams';
 import {
   isNotNilVariableLink,
   PlotKey,
@@ -22,10 +20,9 @@ import {
   toTagKey,
   VariableParams,
   VariableParamsLink,
-} from '../url/queryParams';
-import { globalSettings } from '../common/settings';
+} from '@/url/queryParams';
+import { globalSettings } from '@/common/settings';
 import { promQLMetric } from './promQLMetric';
-import { whatToWhatDesc } from './whatToWhatDesc';
 import { getTagDescription, isValidVariableName } from './utils2';
 
 export const goldenRatio = 1.61803398875;
@@ -145,7 +142,7 @@ export function readJSONLD<T>(type: string): T | null {
       if (json['@type'] === type) {
         return json as T;
       }
-    } catch (e) {}
+    } catch (_) {}
   }
   return null;
 }
@@ -188,64 +185,8 @@ export function normalizeTagValues(values: readonly metricTagValueInfo[], sortBy
   return copy.map((v) => ({ value: v.value, count: v.count / totalCount }));
 }
 
-export function sortByKey(key: string, a: Record<string, any>, b: Record<string, any>) {
+export function sortByKey<T = unknown>(key: string, a: Record<string, T>, b: Record<string, T>) {
   return a[key] > b[key] ? 1 : a[key] < b[key] ? -1 : 0;
-}
-
-export function getMetricName(plot: PlotParams, plotData: PlotStore) {
-  return plot.metricName !== promQLMetric ? plot.metricName : plotData.nameMetric;
-}
-
-export function getMetricWhat(plot: PlotParams, plotData: PlotStore) {
-  return plot.metricName === promQLMetric
-    ? plotData.whats.map((qw) => whatToWhatDesc(qw)).join(', ')
-    : plot.what.map((qw) => whatToWhatDesc(qw)).join(', ');
-}
-
-export function getMetricFullName(plot: PlotParams, plotData: PlotStore) {
-  if (plot.customName) {
-    return plot.customName;
-  }
-  const metricName = getMetricName(plot, plotData);
-  const metricWhat = getMetricWhat(plot, plotData);
-  return metricName ? `${metricName}${!!metricWhat ? ': ' + metricWhat : ''}` : '';
-}
-
-export function getEventTagColumns(plot: PlotParams, meta?: MetricMetaValue, selectedOnly: boolean = false) {
-  const columns: UseEventTagColumnReturn[] = (meta?.tags ?? [])
-    .map((tag, indexTag) => {
-      const tagKey = toTagKey(indexTag.toString());
-      if (tagKey) {
-        const disabled = plot.groupBy.indexOf(tagKey) > -1;
-        const selected = disabled || plot.eventsBy.indexOf(tagKey) > -1;
-        const hide = !selected || plot.eventsHide.indexOf(tagKey) > -1;
-        if ((!selectedOnly || (selected && !hide)) && tag.description !== '-') {
-          return {
-            keyTag: tagKey,
-            name: getTagDescription(meta, indexTag),
-            selected,
-            disabled,
-            hide,
-          };
-        }
-      }
-      return null;
-    })
-    .filter(Boolean) as UseEventTagColumnReturn[];
-  const disabled_s = plot.groupBy.indexOf(TAG_KEY._s) > -1;
-  const selected_s = disabled_s || plot.eventsBy.indexOf(TAG_KEY._s) > -1;
-  const hide_s = !selected_s || plot.eventsHide.indexOf(TAG_KEY._s) > -1;
-  if ((!selectedOnly || (selected_s && !hide_s)) && (meta?.string_top_name || meta?.string_top_description)) {
-    columns.push({
-      keyTag: TAG_KEY._s,
-      fullKeyTag: 'skey',
-      name: getTagDescription(meta, TAG_KEY._s),
-      selected: selected_s,
-      disabled: disabled_s,
-      hide: hide_s,
-    });
-  }
-  return columns;
 }
 
 /**

@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,32 +6,25 @@
 
 import React, { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button } from 'components/UI';
-import { useStatsHouseShallow } from 'store2';
-import { useGlobalLoader } from 'store2/plotQueryStore';
+import { Button, TextArea } from '@/components/UI';
+import { useStatsHouseShallow } from '@/store2';
+import { useGlobalLoader } from '@/store2/plotQueryStore';
 
 export type DashboardInfoProps = {
   className?: string;
 };
 
-export function DashboardInfo({ className }: DashboardInfoProps) {
+export function DashboardInfo() {
   const globalLoader = useGlobalLoader();
-  const { dashboardName, dashboardDescription, isDashboard, removeDashboard, setDashboardLayoutEdit, setParams } =
-    useStatsHouseShallow(
-      ({
-        params: { dashboardId, dashboardName, dashboardDescription },
-        removeDashboard,
-        setDashboardLayoutEdit,
-        setParams,
-      }) => ({
-        dashboardName,
-        dashboardDescription,
-        isDashboard: dashboardId != null,
-        removeDashboard,
-        setDashboardLayoutEdit,
-        setParams,
-      })
-    );
+  const { dashboardName, dashboardDescription, isDashboard, removeDashboard, setParams } = useStatsHouseShallow(
+    ({ params: { dashboardId, dashboardName, dashboardDescription }, removeDashboard, setParams }) => ({
+      dashboardName,
+      dashboardDescription,
+      isDashboard: dashboardId != null,
+      removeDashboard,
+      setParams,
+    })
+  );
 
   const navigate = useNavigate();
 
@@ -44,24 +37,17 @@ export function DashboardInfo({ className }: DashboardInfoProps) {
     },
     [setParams]
   );
-  const inputDescription = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      const value = e.target.value;
-      setParams((params) => {
-        params.dashboardDescription = value;
-      });
-    },
-    [setParams]
-  );
+
+  const inputDescription = (value: string) => {
+    setParams((params) => {
+      params.dashboardDescription = value;
+    });
+  };
 
   const onRemoveDashboard = useCallback(
     (event: React.MouseEvent) => {
       if (isDashboard && window.confirm(`Remove dashboard ${dashboardName}?`)) {
         removeDashboard().then(() => {
-          // setDashboardLayoutEdit(false);
-          // setParams((params) => {
-          //   params.dashboardId = undefined;
-          // }, true);
           navigate('/dash-list');
         });
       }
@@ -95,13 +81,11 @@ export function DashboardInfo({ className }: DashboardInfoProps) {
               Description
             </label>
             <div className="col-sm-10">
-              <input
-                id="dashboard-input-description"
-                type="text"
-                className="form-control"
-                aria-label="Name"
-                defaultValue={dashboardDescription ?? ''}
+              <TextArea
+                className="form-control-sm"
+                value={dashboardDescription || ''}
                 onInput={inputDescription}
+                autoHeight
               />
             </div>
           </div>

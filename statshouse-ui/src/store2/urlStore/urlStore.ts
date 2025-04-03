@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,13 +13,14 @@ import {
   type PlotKey,
   type PlotParams,
   type QueryParams,
-} from 'url2';
-import { type StoreSlice } from '../createStore';
-import { appHistory } from 'common/appHistory';
+} from '@/url2';
+import type { StoreSlice } from '../createStore';
+import { appHistory } from '@/common/appHistory';
 import { getAbbrev, getUrl, isEmbedPath, isValidPath, type ProduceUpdate } from '../helpers';
 import { getUrlState } from './getUrlState';
-import { type StatsHouseStore } from '../statsHouseStore';
-import { type PlotType, type TimeRangeKeysTo } from 'api/enum';
+import type { StatsHouseStore } from '@/store2';
+import { defaultBaseRange } from '@/store2';
+import type { PlotType, TimeRangeKeysTo } from '@/api/enum';
 import { updatePlot } from './updatePlot';
 import { updateTimeRange } from './updateTimeRange';
 import { updateParams } from './updateParams';
@@ -35,17 +36,17 @@ import { updatePlotYLock } from './updatePlotYLock';
 import { toggleGroupShow } from './toggleGroupShow';
 import { updateParamsPlotStruct, VariableLinks } from './updateParamsPlotStruct';
 import { getAutoSearchVariable } from './getAutoSearchVariable';
-import { defaultBaseRange } from '../constants';
-import { useErrorStore } from 'store/errors';
-import { debug } from '../../common/debug';
-import { saveDashboard } from './saveDashboard';
+import { useErrorStore } from '@/store2/errors';
+import { debug } from '@/common/debug';
 import { readDataDashboard } from './readDataDashboard';
 import { mergeParams } from './mergeParams';
 import { setLiveMode } from '../liveModeStore';
 import { filterVariableByPlot } from '../helpers/filterVariableByPlot';
-import { fixMessageTrouble } from 'url/fixMessageTrouble';
-import { isNotNil } from '../../common/helpers';
-import { getUrlObject } from '../../common/getUrlObject';
+import { fixMessageTrouble } from '@/url/fixMessageTrouble';
+import { isNotNil } from '@/common/helpers';
+import { getUrlObject } from '@/common/getUrlObject';
+import { ApiDashboard, apiDashboardSave } from '@/api/dashboard';
+import { ExtendedError } from '@/api/api';
 
 export type UrlStore = {
   params: QueryParams;
@@ -71,10 +72,9 @@ export type UrlStore = {
   addDashboardGroup(groupKey: GroupKey): void;
   removeDashboardGroup(groupKey: GroupKey): void;
   setDashboardGroup(groupKey: GroupKey, next: ProduceUpdate<GroupInfo>): void;
-  // moveDashboardPlot(index: PlotKey | null, indexTarget: PlotKey | null, indexGroup: GroupKey | null): void;
   setNextDashboardSchemePlot(nextScheme: { groupKey: GroupKey; plots: PlotKey[] }[]): void;
   autoSearchVariable(): Promise<Pick<QueryParams, 'variables' | 'orderVariables'>>;
-  saveDashboard(): Promise<void>;
+  saveDashboard(copy?: boolean): Promise<void | ApiDashboard>;
   removeDashboard(): Promise<void>;
   removeVariableLinkByPlotKey(plotKey: PlotKey): void;
 };
@@ -83,10 +83,9 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
   let prevLocation = appHistory.location;
   let prevSearch = prevLocation.search;
   async function updateUrlState() {
-    return getUrlState(getState().saveParams, prevLocation).then((res) => {
+    return getUrlState(prevLocation).then((res) => {
       setState((s) => {
         s.isEmbed = isEmbedPath(prevLocation);
-
         s.params = mergeParams(s.params, {
           ...res.params,
           timeRange:
@@ -96,10 +95,10 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
               : s.params.timeRange,
         });
         s.saveParams = res.saveParams;
-        if (res.error != null) {
+        if (res.error != null && res.error.status !== ExtendedError.ERROR_STATUS_ABORT) {
           useErrorStore.getState().addError(res.error);
         }
-        if (s.params.tabNum === '-2') {
+        if (s.params.tabNum === '-2' || s.params.tabNum === '-3') {
           s.dashboardLayoutEdit = true;
         }
       });
@@ -112,7 +111,6 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
           true
         );
       }
-      getState().updatePlotsData();
     });
   }
 
@@ -162,26 +160,21 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
     dashboardLayoutEdit: false,
     setParams(next: ProduceUpdate<QueryParams>, replace) {
       setUrlStore(updateParams(next), replace);
-      getState().updatePlotsData();
     },
     setTimeRange({ from, to }, replace) {
       setUrlStore(updateTimeRange(from, to), replace);
-      getState().updatePlotsData();
     },
     setPlot(plotKey, next, replace) {
       setUrlStore(updatePlot(plotKey, next), replace);
-      getState().loadPlotData(plotKey);
     },
     setPlotType(plotKey, nextType, replace) {
       setUrlStore(updatePlotType(plotKey, nextType), replace);
-      getState().loadPlotData(plotKey);
     },
-    setPlotYLock(plotKey, status, yLock?: { min: number; max: number }) {
+    setPlotYLock(plotKey, status, yLock: { min: number; max: number }) {
       setUrlStore(updatePlotYLock(plotKey, status, yLock));
     },
     resetZoom(plotKey: PlotKey) {
       setUrlStore(updateResetZoom(plotKey));
-      getState().updatePlotsData();
     },
     removePlot(plotKey: PlotKey) {
       setUrlStore(
@@ -203,24 +196,20 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
     timeRangePanLeft() {
       setLiveMode(false);
       setUrlStore(timeRangePanLeft());
-      getState().updatePlotsData();
     },
     timeRangePanRight() {
       if (getState().params.timeRange.absolute) {
         setLiveMode(false);
       }
       setUrlStore(timeRangePanRight());
-      getState().updatePlotsData();
     },
     timeRangeZoomIn() {
       setLiveMode(false);
       setUrlStore(timeRangeZoomIn());
-      getState().updatePlotsData();
     },
     timeRangeZoomOut() {
       setLiveMode(false);
       setUrlStore(timeRangeZoomOut());
-      getState().updatePlotsData();
     },
     toggleGroupShow(groupKey) {
       setUrlStore(toggleGroupShow(groupKey));
@@ -230,8 +219,8 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
         s.dashboardLayoutEdit = status;
       });
       if (!status) {
-        setUrlStore((s) => {
-          if (s.params.tabNum === '-2') {
+        setState((s) => {
+          if (s.params.tabNum === '-2' || s.params.tabNum === '-3') {
             s.params.tabNum = '-1';
           }
         });
@@ -276,42 +265,6 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
     setDashboardGroup(groupKey, next) {
       setUrlStore(updateGroup(groupKey, next));
     },
-    // moveDashboardPlot(plotKey, plotKeyTarget, groupKey) {
-    //   if (plotKey != null && groupKey != null) {
-    //     setUrlStore(
-    //       updateParamsPlotStruct((plotStruct) => {
-    //         const sourceGroupKey = plotStruct.mapPlotToGroup[plotKey] ?? '';
-    //         const sourceGroupIndex = plotStruct.mapGroupIndex[sourceGroupKey];
-    //         const sourcePlotIndex = plotStruct.mapPlotIndex[plotKey];
-    //         const targetGroupIndex = plotStruct.mapGroupIndex[groupKey ?? sourceGroupKey];
-    //         let targetPlotIndex = plotStruct.mapPlotIndex[plotKeyTarget ?? plotKey];
-    //         if (sourceGroupIndex != null && sourcePlotIndex != null) {
-    //           const sourcePlots = plotStruct.groups[sourceGroupIndex].plots.splice(sourcePlotIndex, 1);
-    //           if (targetGroupIndex == null) {
-    //             plotStruct.groups.push({
-    //               plots: [...sourcePlots],
-    //               groupInfo: {
-    //                 ...getNewGroup(),
-    //                 id: groupKey,
-    //               },
-    //             });
-    //           } else {
-    //             if (targetPlotIndex) {
-    //               if (sourceGroupIndex === targetGroupIndex) {
-    //                 targetPlotIndex = plotStruct.groups[targetGroupIndex].plots.findIndex(
-    //                   ({ plotInfo }) => plotInfo.id === plotKeyTarget
-    //                 );
-    //               }
-    //               plotStruct.groups[targetGroupIndex].plots.splice(targetPlotIndex, 0, ...sourcePlots);
-    //             } else {
-    //               plotStruct.groups[targetGroupIndex].plots.push(...sourcePlots);
-    //             }
-    //           }
-    //         }
-    //       })
-    //     );
-    //   }
-    // },
     setNextDashboardSchemePlot(nextScheme) {
       setUrlStore(
         updateParamsPlotStruct((plotStruct) => {
@@ -348,22 +301,26 @@ export const urlStore: StoreSlice<StatsHouseStore, UrlStore> = (setState, getSta
     async autoSearchVariable() {
       return getAutoSearchVariable(getState);
     },
-    async saveDashboard() {
-      const { response, error } = await saveDashboard(getState().params);
-      if (error) {
+    async saveDashboard(copy?: boolean) {
+      const { response, error } = await apiDashboardSave(getState().params, false, copy);
+      if (error && error.status !== ExtendedError.ERROR_STATUS_ABORT) {
         useErrorStore.getState().addError(error);
       }
       if (response) {
         const saveParams = readDataDashboard(response.data);
+
         setUrlStore((store) => {
           store.saveParams = saveParams;
           store.params.dashboardVersion = saveParams.dashboardVersion;
+          store.params.dashboardId = saveParams.dashboardId;
         });
+
+        return response;
       }
     },
     async removeDashboard() {
-      const { response, error } = await saveDashboard(getState().params, true);
-      if (error) {
+      const { response, error } = await apiDashboardSave(getState().params, true);
+      if (error && error.status !== ExtendedError.ERROR_STATUS_ABORT) {
         useErrorStore.getState().addError(error);
       }
       if (response) {

@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -121,7 +121,9 @@ const (
 	StatshouseCentroidFloat                      = 0x73fd01e0 // statshouse.centroidFloat
 	StatshouseCommonProxyHeader                  = 0x6c803d07 // statshouse.commonProxyHeader
 	StatshouseGetConfig2                         = 0x4285ff57 // statshouse.getConfig2
+	StatshouseGetConfig3                         = 0x7d7b4991 // statshouse.getConfig3
 	StatshouseGetConfigResult                    = 0x0c803d07 // statshouse.getConfigResult
+	StatshouseGetConfigResult3                   = 0xf13698cb // statshouse.getConfigResult3
 	StatshouseGetMetrics3                        = 0x42855554 // statshouse.getMetrics3
 	StatshouseGetMetricsResult                   = 0x0c803d05 // statshouse.getMetricsResult
 	StatshouseGetTagMapping2                     = 0x4285ff56 // statshouse.getTagMapping2
@@ -139,9 +141,13 @@ const (
 	StatshousePutTagMappingBootstrapResult       = 0x486affde // statshouse.putTagMappingBootstrapResult
 	StatshouseSampleFactor                       = 0x4f7b7822 // statshouse.sample_factor
 	StatshouseSendKeepAlive2                     = 0x4285ff53 // statshouse.sendKeepAlive2
+	StatshouseSendKeepAlive3                     = 0x4285ff54 // statshouse.sendKeepAlive3
 	StatshouseSendSourceBucket2                  = 0x44575940 // statshouse.sendSourceBucket2
+	StatshouseSendSourceBucket3                  = 0x0d04aa3f // statshouse.sendSourceBucket3
+	StatshouseSendSourceBucket3Response          = 0x0e177acc // statshouse.sendSourceBucket3Response
 	StatshouseShutdownInfo                       = 0x4124cf9c // statshouse.shutdownInfo
 	StatshouseSourceBucket2                      = 0x3af6e822 // statshouse.sourceBucket2
+	StatshouseSourceBucket3                      = 0x16c4dd7b // statshouse.sourceBucket3
 	StatshouseTestConnection2                    = 0x4285ff58 // statshouse.testConnection2
 	StatshouseTopElement                         = 0x9ffdea42 // statshouse.top_element
 	StatshouseApiChunkResponse                   = 0x63928b42 // statshouseApi.chunkResponse

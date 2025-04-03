@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -50,7 +50,8 @@ func (r *RPCReceiver) RawAddMetricsBatch(ctx context.Context, hctx *rpc.HandlerC
 		setValueSize(r.packetSizeRPCErr, packetLen)
 		return fmt.Errorf("failed to deserialize statshouse.addMetricsBatch request: %w", err)
 	}
-	firstError := r.handleAndWaitMetrics(r.Handler, args)
+	firstError := r.handleAndWaitMetrics(r.Handler, args, &hctx.Response)
+	hctx.Response = hctx.Response[:0]
 	if firstError != nil {
 		r.statBatchesTotalErr.Inc()
 		setValueSize(r.batchSizeRPCErr, packetLen)

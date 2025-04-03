@@ -11,7 +11,6 @@
             "program": "${workspaceFolder}/cmd/statshouse-api/",
             "buildFlags": "-ldflags '-X github.com/vkcom/statshouse/internal/vkgo/build.trustedSubnetGroups=0.0.0.0/0'",
             "args": [
-                "--verbose",
                 "--local-mode",
                 "--insecure-mode",
                 "--access-log",
@@ -134,7 +133,55 @@
                 "--ingress-addr-ipv6=[::1]:13327",
                 "--ingress-external-addr-ipv6=[::1]:13327",
                 "--ingress-pwd-dir=${workspaceFolder}/localdebug/ingress_keys",
+                "--metadata-addr=localhost:2442",
             ],
         },
+        {
+            "name": "proxy rpc test",
+            "type": "go",
+            "request": "launch",
+            "mode": "auto",
+            "cwd": "${workspaceFolder}",
+            "program": "${workspaceFolder}/cmd/statshouse/",
+            "buildFlags": "-ldflags '-X github.com/vkcom/statshouse/internal/vkgo/build.trustedSubnetGroups=0.0.0.0/0'",
+            "args": [
+                "ingress_proxy",
+                "--cluster=local_test_cluster",
+                "--hostname=ingress",
+                "--ingress-addr=127.0.0.1:13327",
+                "--agg-addr=127.0.0.1:13336,127.0.0.1:13336,127.0.0.1:13336",
+                "--ingress-external-addr=127.0.0.1:13327,127.0.0.1:13327,127.0.0.1:13327",
+                "--ingress-pwd-dir=${workspaceFolder}/localdebug/ingress_keys",
+                "--ingress-upstream-addr=127.0.0.1:9999,127.0.0.1:9999,127.0.0.1:9999",
+                "--pprof=:8080",
+            ],
+            "env": {
+                "GODEBUG": "gctrace=1",
+                "GOMAXPROCS": "1",
+            },
+        },
+        {
+            "name": "test forward packet",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/internal/vkgo/rpc/statshouse_test.go",
+            "args": [
+                "-test.run=TestForwardPacket",
+            ],
+        },
+        {
+            "name": "test play PCAP",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}/internal/vkgo/rpc/statshouse_test.go",
+            "args": [
+                "-test.run=TestPlayPcap",
+            ],
+            "env": {
+                "STATSHOUSE_TEST_PLAY_PCAP_FILE_PATH":"",
+            },
+        }
     ]
 }

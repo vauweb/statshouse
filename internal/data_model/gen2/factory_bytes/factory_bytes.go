@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -173,6 +173,8 @@ func init() {
 	meta.SetGlobalFactoryCreateForFunctionBytes(0x28bea524, func() meta.Object { var ret internal.StatshouseAutoCreateBytes; return &ret }, func() meta.Function { var ret internal.StatshouseAutoCreateBytes; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForObjectBytes(0x73fd01e0, func() meta.Object { var ret internal.StatshouseCentroidFloat; return &ret })
 	meta.SetGlobalFactoryCreateForFunctionBytes(0x4285ff57, func() meta.Object { var ret internal.StatshouseGetConfig2Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseGetConfig2Bytes; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForFunctionBytes(0x7d7b4991, func() meta.Object { var ret internal.StatshouseGetConfig3Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseGetConfig3Bytes; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForObjectBytes(0xf13698cb, func() meta.Object { var ret internal.StatshouseGetConfigResult3Bytes; return &ret })
 	meta.SetGlobalFactoryCreateForFunctionBytes(0x42855554, func() meta.Object { var ret internal.StatshouseGetMetrics3Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseGetMetrics3Bytes; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForObjectBytes(0x0c803d05, func() meta.Object { var ret internal.StatshouseGetMetricsResultBytes; return &ret })
 	meta.SetGlobalFactoryCreateForFunctionBytes(0x4285ff56, func() meta.Object { var ret internal.StatshouseGetTagMapping2Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseGetTagMapping2Bytes; return &ret }, nil)
@@ -187,9 +189,13 @@ func init() {
 	meta.SetGlobalFactoryCreateForObjectBytes(0x486affde, func() meta.Object { var ret internal.StatshousePutTagMappingBootstrapResult; return &ret })
 	meta.SetGlobalFactoryCreateForObjectBytes(0x4f7b7822, func() meta.Object { var ret internal.StatshouseSampleFactor; return &ret })
 	meta.SetGlobalFactoryCreateForFunctionBytes(0x4285ff53, func() meta.Object { var ret internal.StatshouseSendKeepAlive2Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseSendKeepAlive2Bytes; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForFunctionBytes(0x4285ff54, func() meta.Object { var ret internal.StatshouseSendKeepAlive3Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseSendKeepAlive3Bytes; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForFunctionBytes(0x44575940, func() meta.Object { var ret internal.StatshouseSendSourceBucket2Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseSendSourceBucket2Bytes; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForFunctionBytes(0x0d04aa3f, func() meta.Object { var ret internal.StatshouseSendSourceBucket3Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseSendSourceBucket3Bytes; return &ret }, nil)
+	meta.SetGlobalFactoryCreateForObjectBytes(0x0e177acc, func() meta.Object { var ret internal.StatshouseSendSourceBucket3ResponseBytes; return &ret })
 	meta.SetGlobalFactoryCreateForObjectBytes(0x4124cf9c, func() meta.Object { var ret internal.StatshouseShutdownInfo; return &ret })
 	meta.SetGlobalFactoryCreateForObjectBytes(0x3af6e822, func() meta.Object { var ret internal.StatshouseSourceBucket2Bytes; return &ret })
+	meta.SetGlobalFactoryCreateForObjectBytes(0x16c4dd7b, func() meta.Object { var ret internal.StatshouseSourceBucket3Bytes; return &ret })
 	meta.SetGlobalFactoryCreateForFunctionBytes(0x4285ff58, func() meta.Object { var ret internal.StatshouseTestConnection2Bytes; return &ret }, func() meta.Function { var ret internal.StatshouseTestConnection2Bytes; return &ret }, nil)
 	meta.SetGlobalFactoryCreateForObjectBytes(0x9ffdea42, func() meta.Object { var ret internal.StatshouseTopElementBytes; return &ret })
 	meta.SetGlobalFactoryCreateForObjectBytes(0xb5286e24, func() meta.Object { var ret internal.StringBytes; return &ret })

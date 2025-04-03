@@ -1,3 +1,9 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import {
   type MetricType,
   MetricValueBackendVersion,
@@ -5,7 +11,7 @@ import {
   type QueryWhat,
   type TagKey,
   type TimeRangeKeysTo,
-} from 'api/enum';
+} from '@/api/enum';
 
 export type PlotKey = string;
 
@@ -23,7 +29,9 @@ export type GroupInfo = {
 export type VariableParamsLink = [PlotKey, TagKey];
 
 export type VariableKey = string;
+
 export type VariableSourceKey = string;
+
 export type VariableParamsSource = {
   id: VariableSourceKey;
   metric: string;
@@ -31,6 +39,7 @@ export type VariableParamsSource = {
   filterIn: FilterTag;
   filterNotIn: FilterTag;
 };
+
 export type VariableParams = {
   id: VariableKey;
   name: string;
@@ -42,7 +51,9 @@ export type VariableParams = {
   source: Partial<Record<VariableSourceKey, VariableParamsSource>>;
   sourceOrder: VariableSourceKey[];
 };
+
 export type FilterTag = Partial<Record<TagKey, string[]>>;
+
 export type PlotParams = {
   id: PlotKey;
   metricName: string;
@@ -68,9 +79,11 @@ export type PlotParams = {
   eventsHide: TagKey[];
   totalLine: boolean;
   filledGraph: boolean;
+  logScale: boolean;
   timeShifts: number[];
   prometheusCompat: boolean;
 };
+
 export type TimeRange = {
   to: number;
   urlTo: number | TimeRangeKeysTo;
@@ -86,6 +99,7 @@ export type QueryParams = {
   dashboardName: string;
   dashboardDescription: string;
   dashboardVersion?: number;
+  dashboardCurrentVersion?: number;
   timeRange: TimeRange;
   eventFrom: number;
   timeShifts: number[];

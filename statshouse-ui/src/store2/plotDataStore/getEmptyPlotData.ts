@@ -1,11 +1,11 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { METRIC_TYPE } from 'api/enum';
-import { type PlotData } from './plotsDataStore';
+import { METRIC_TYPE } from '@/api/enum';
+import type { PlotData } from './plotsDataStore';
 import { autoAgg } from '../constants';
 
 export function getEmptyPlotData(): PlotData {
@@ -20,7 +20,7 @@ export function getEmptyPlotData(): PlotData {
     metricName: '',
     metricWhat: '',
     whats: [],
-    plotAgg: autoAgg,
+    plotAgg: autoAgg.toString(),
     showMetricName: '',
     metricUnit: METRIC_TYPE.none,
     lastHeals: true,
@@ -49,3 +49,5 @@ export function getEmptyPlotData(): PlotData {
     promqlExpand: false,
   };
 }
+
+export const emptyPlotData = Object.freeze(getEmptyPlotData());

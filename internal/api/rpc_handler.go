@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,17 +8,19 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
 	"math"
+	"runtime/debug"
 	"strconv"
 	"time"
 
 	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouseApi"
 	"github.com/vkcom/statshouse/internal/format"
+	"github.com/vkcom/statshouse/internal/promql"
+	"github.com/vkcom/statshouse/internal/vkgo/basictl"
 	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/vkuth"
 	"pgregory.net/rand"
 )
 
@@ -36,56 +38,114 @@ const (
 	rpcErrorCodeChunkStorageFailed  = 5007
 )
 
-type RPCHandler struct {
-	ah                *Handler
-	brs               *BigResponseStorage
-	jwtHelper         *vkuth.JWTHelper
-	protectedPrefixes []string
-	localMode         bool
-	insecureMode      bool
+type rpcRouter struct {
+	*Handler
+	brs *BigResponseStorage
 }
 
-func NewRpcHandler(
-	ah *Handler,
-	brs *BigResponseStorage,
-	jwtHelper *vkuth.JWTHelper,
-	opt HandlerOptions,
-) *RPCHandler {
-	return &RPCHandler{
-		ah:                ah,
-		brs:               brs,
-		jwtHelper:         jwtHelper,
-		protectedPrefixes: opt.protectedMetricPrefixes,
-		localMode:         opt.LocalMode,
-		insecureMode:      opt.insecureMode,
-	}
+type rpcRequestHandler struct {
+	requestHandler
+	brs *BigResponseStorage
 }
 
-func (h *RPCHandler) statRpcTime(stat *endpointStat, err error, panicData any) {
-	if panicData != nil {
-		stat.reportServiceTime(rpc.TlErrorInternal, err)
-		panic(panicData)
-	} else {
-		stat.reportServiceTime(0, err)
-	}
+func NewRPCRouter(ah *Handler, brs *BigResponseStorage) *rpcRouter {
+	return &rpcRouter{Handler: ah, brs: brs}
 }
 
-func (h *RPCHandler) RawGetQueryPoint(ctx context.Context, hctx *rpc.HandlerContext) error {
-	arg, qry, err := h.getPointQuery(hctx)
-	if err != nil {
-		return err
+func (h *rpcRouter) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err error) {
+	timeNow := time.Now()
+	w := rpcRequestHandler{
+		requestHandler: requestHandler{
+			Handler: h.Handler,
+			endpointStat: endpointStat{
+				timestamp:  timeNow,
+				protocol:   format.TagValueIDRPC,
+				dataFormat: "TL",
+				timings: ServerTimingHeader{
+					Timings: make(map[string][]time.Duration),
+					started: timeNow,
+				},
+			},
+		},
+		brs: h.brs,
 	}
-	var sr seriesResponse
 	defer func() {
-		log.Printf("POINT QUERY err=%v, res=%v", err, sr)
-		h.statRpcTime(qry.stat, err, recover())
+		var code int // "0" means "success"
+		if r := recover(); r != nil {
+			w.savePanic(hctx.RequestFunctionName, r, debug.Stack())
+			code = rpc.TlErrorInternal
+			err = &rpc.Error{Code: rpc.TlErrorInternal}
+		} else if err != nil {
+			code = rpcCode(err)
+		}
+		w.endpointStat.report(code, format.BuiltinMetricMetaAPIResponseTime.Name)
 	}()
-	var req seriesRequest
-	req, err = qry.toSeriesRequest(h)
+	var tag uint32
+	var req []byte
+	var hfn func(context.Context, *rpc.HandlerContext) error
+	tag, req, _ = basictl.NatReadTag(hctx.Request)
+	switch tag {
+	case 0x0c7349bb:
+		hctx.RequestFunctionName = "statshouseApi.getQuery"
+		hfn = w.rawGetQuery
+		w.endpointStat.endpoint = EndpointQuery
+	case 0x0c7348bb:
+		hctx.RequestFunctionName = "statshouseApi.getQueryPoint"
+		hfn = w.rawGetQueryPoint
+		w.endpointStat.endpoint = EndpointPoint
+	case 0x52721884:
+		hctx.RequestFunctionName = "statshouseApi.getChunk"
+		hfn = w.rawGetChunk
+		w.endpointStat.endpoint = endpointChunk
+	case 0x62adc773:
+		hctx.RequestFunctionName = "statshouseApi.releaseChunks"
+		w.endpointStat.endpoint = endpointChunk
+		hfn = w.rawReleaseChunks
+	default:
+		return rpc.ErrNoHandler
+	}
+	hctx.Request = req
+	if err = hfn(ctx, hctx); err != nil {
+		return fmt.Errorf("failed to handle %s: %w", hctx.RequestFunctionName, err)
+	}
+	return nil
+}
+
+func (h *rpcRequestHandler) init(accessToken string, version int32) (err error) {
+	var s string
+	if version != 0 {
+		s = strconv.Itoa(int(version))
+	}
+	return h.requestHandler.init(accessToken, s)
+}
+
+func (h *rpcRequestHandler) rawGetQueryPoint(ctx context.Context, hctx *rpc.HandlerContext) (err error) {
+	var args tlstatshouseApi.GetQueryPoint
+	if _, err = args.Read(hctx.Request); err != nil {
+		err = fmt.Errorf("failed to deserialize statshouseApi.GetQueryPoint request: %w", err)
+		return err
+	}
+	if err = h.init(args.AccessToken, args.Query.Version); err != nil {
+		return err
+	}
+	qry := seriesRequestRPC{
+		filter:      args.Query.Filter,
+		function:    args.Query.Function,
+		groupBy:     args.Query.GroupBy,
+		metricName:  args.Query.MetricName,
+		timeFrom:    args.Query.TimeFrom,
+		timeShift:   args.Query.TimeShift,
+		timeTo:      args.Query.TimeTo,
+		topN:        args.Query.TopN,
+		what:        args.Query.What,
+		whatFlagSet: args.Query.IsSetWhat(),
+	}
+	req, err := qry.toSeriesRequest(h)
 	if err != nil {
 		return err
 	}
-	sr, cancel, err := h.ah.handleSeriesRequest(ctx, req, seriesRequestOptions{mode: data_model.PointQuery, trace: true})
+	sr, cancel, err := h.handleSeriesRequest(ctx, req, seriesRequestOptions{mode: data_model.PointQuery})
+	h.endpointStat.report(rpcCode(err), format.BuiltinMetricMetaAPIServiceTime.Name)
 	if err != nil {
 		err = &rpc.Error{Code: rpcErrorCodeQueryHandlingFailed, Description: fmt.Sprintf("can't handle query: %v", err)}
 		return err
@@ -113,30 +173,47 @@ func (h *RPCHandler) RawGetQueryPoint(ctx context.Context, hctx *rpc.HandlerCont
 		res.Meta = append(res.Meta, meta)
 		res.Data = append(res.Data, (*d.Values)[0])
 	}
-	if hctx.Response, err = arg.WriteResult(hctx.Response, res); err != nil {
+	if hctx.Response, err = args.WriteResult(hctx.Response, res); err != nil {
 		return fmt.Errorf("failed to serialize tlstatshouseApi.GetQueryPointResponse response: %w", err)
 	}
 	return nil
 }
 
-func (h *RPCHandler) RawGetQuery(ctx context.Context, hctx *rpc.HandlerContext) error {
-	arg, qry, err := h.getSeriesQuery(hctx)
-	if err != nil {
+func (h *rpcRequestHandler) rawGetQuery(ctx context.Context, hctx *rpc.HandlerContext) (err error) {
+	var args tlstatshouseApi.GetQuery
+	if _, err = args.Read(hctx.Request); err != nil {
+		err = fmt.Errorf("failed to deserialize statshouseApi.getQuery request: %w", err)
 		return err
 	}
-	defer func() {
-		h.statRpcTime(qry.stat, err, recover())
-	}()
+	if err = h.init(args.AccessToken, args.Query.Version); err != nil {
+		return err
+	}
+	qry := seriesRequestRPC{
+		filter:      args.Query.Filter,
+		function:    args.Query.Function,
+		groupBy:     args.Query.GroupBy,
+		interval:    args.Query.Interval,
+		metricName:  args.Query.MetricName,
+		promQL:      args.Query.Promql,
+		timeFrom:    args.Query.TimeFrom,
+		timeShift:   args.Query.TimeShift,
+		timeTo:      args.Query.TimeTo,
+		topN:        args.Query.TopN,
+		what:        args.Query.What,
+		widthAgg:    args.Query.WidthAgg,
+		whatFlagSet: args.Query.IsSetWhat(),
+	}
 	req, err := qry.toSeriesRequest(h)
 	if err != nil {
 		return err
 	}
-	srs, cancel, err := h.ah.handleSeriesRequestS(ctx, req, qry.stat, make([]seriesResponse, 1))
+	srs, cancel, err := h.handleSeriesRequestS(ctx, req, make([]seriesResponse, 1))
+	h.endpointStat.report(rpcCode(err), format.BuiltinMetricMetaAPIServiceTime.Name)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-	sr := h.ah.buildSeriesResponse(srs...)
+	sr := h.buildSeriesResponse(srs...)
 	res := tlstatshouseApi.GetQueryResponse{
 		TotalTimePoints: int32(len(sr.Series.Time)),
 		SeriesMeta:      make([]tlstatshouseApi.SeriesMeta, 0, len(sr.Series.SeriesMeta)),
@@ -158,7 +235,7 @@ func (h *RPCHandler) RawGetQuery(ctx context.Context, hctx *rpc.HandlerContext) 
 		}
 		res.SeriesMeta = append(res.SeriesMeta, m)
 	}
-	if arg.Query.IsSetExcessPointsFlag() {
+	if args.Query.IsSetExcessPointsFlag() {
 		res.SetExcessPointLeft(sr.ExcessPointLeft)
 		res.SetExcessPointRight(sr.ExcessPointRight)
 	}
@@ -167,7 +244,7 @@ func (h *RPCHandler) RawGetQuery(ctx context.Context, hctx *rpc.HandlerContext) 
 		res.Series.Time = sr.Series.Time
 		res.Series.SeriesData = make([][]float64, 0, len(sr.Series.SeriesData))
 		for _, data := range sr.Series.SeriesData {
-			res.Series.SeriesData = append(res.Series.SeriesData, *data)
+			res.Series.SeriesData = append(res.Series.SeriesData, *FloatSlicePtrToNative(data))
 		}
 	} else if chunkMaxSize < metaSize {
 		return &rpc.Error{
@@ -178,7 +255,7 @@ func (h *RPCHandler) RawGetQuery(ctx context.Context, hctx *rpc.HandlerContext) 
 		chunks := chunkResponse(sr, columnSize, totalSize, metaSize)
 		res.Series = chunks[0] // return first chunk immediately
 		rid := int64(rand.Uint64())
-		if err = h.brs.Set(ctx, rid, req.ai.user, chunks[1:], bigResponseTTL); err != nil {
+		if err = h.brs.Set(ctx, rid, h.accessInfo.user, chunks[1:], bigResponseTTL); err != nil {
 			return &rpc.Error{Code: rpcErrorCodeChunkStorageFailed, Description: fmt.Sprintf("can't save chunks: %v", err)}
 		}
 		res.ResponseId = rid
@@ -187,80 +264,13 @@ func (h *RPCHandler) RawGetQuery(ctx context.Context, hctx *rpc.HandlerContext) 
 			res.ChunkIds = append(res.ChunkIds, int32(i-1))
 		}
 	}
-	if hctx.Response, err = arg.WriteResult(hctx.Response, res); err != nil {
+	if hctx.Response, err = args.WriteResult(hctx.Response, res); err != nil {
 		return fmt.Errorf("failed to serialize statshouseApi.getQuery response: %w", err)
 	}
 	return nil
 }
 
-func (h *RPCHandler) GetChunk(_ context.Context, args tlstatshouseApi.GetChunk) (tlstatshouseApi.GetChunkResponse, error) {
-	var err error
-	es := newEndpointStatRPC(endpointChunk, args.TLName())
-	defer func() {
-		h.statRpcTime(es, err, recover())
-	}()
-
-	ai, err := h.parseAccessToken(args.AccessToken)
-	if err != nil {
-		err = &rpc.Error{Code: rpcErrorCodeAuthFailed, Description: fmt.Sprintf("can't parse access token: %v", err)}
-		return tlstatshouseApi.GetChunkResponse{}, err
-	}
-	es.setAccessInfo(ai)
-
-	br, ok := h.brs.Get(args.ResponseId)
-	if !ok {
-		err = &rpc.Error{Code: rpcErrorCodeNotFound, Description: fmt.Sprintf("can't find response %q", args.ResponseId)}
-		return tlstatshouseApi.GetChunkResponse{}, err
-	}
-	if br.owner != ai.user {
-		err = &rpc.Error{Code: rpcErrorCodeForbidden, Description: fmt.Sprintf("response %d belongs to another user", args.ResponseId)}
-		return tlstatshouseApi.GetChunkResponse{}, err
-	}
-	if int(args.ChunkId) > len(br.chunks)-1 {
-		err = &rpc.Error{Code: rpcErrorCodeBadChunkID, Description: fmt.Sprintf("got id %q, there are only %d chunks", args.ResponseId, len(br.chunks))}
-		return tlstatshouseApi.GetChunkResponse{}, err
-	}
-
-	res := tlstatshouseApi.GetChunkResponse{
-		Series: br.chunks[int(args.ChunkId)],
-		Index:  args.ChunkId,
-	}
-	return res, nil
-}
-
-func (h *RPCHandler) ReleaseChunks(_ context.Context, args tlstatshouseApi.ReleaseChunks) (tlstatshouseApi.ReleaseChunksResponse, error) {
-	es := newEndpointStatRPC(endpointChunk, args.TLName())
-	ai, err := h.parseAccessToken(args.AccessToken)
-	defer func() {
-		h.statRpcTime(es, err, recover())
-	}()
-	if err != nil {
-		err = &rpc.Error{Code: rpcErrorCodeAuthFailed, Description: fmt.Sprintf("can't parse access token: %v", err)}
-		return tlstatshouseApi.ReleaseChunksResponse{}, err
-	}
-	es.setAccessInfo(ai)
-	br, ok := h.brs.Get(args.ResponseId)
-	if !ok {
-		err = &rpc.Error{Code: rpcErrorCodeNotFound, Description: fmt.Sprintf("can't find response %q", args.ResponseId)}
-		return tlstatshouseApi.ReleaseChunksResponse{}, err
-	}
-	if br.owner != ai.user {
-		err = &rpc.Error{Code: rpcErrorCodeForbidden, Description: fmt.Sprintf("response %q belongs to another user", args.ResponseId)}
-		return tlstatshouseApi.ReleaseChunksResponse{}, err
-	}
-	res := tlstatshouseApi.ReleaseChunksResponse{
-		ReleasedChunkCount: int32(h.brs.Release(args.ResponseId)),
-	}
-	return res, nil
-}
-
-func (h *RPCHandler) parseAccessToken(token string) (accessInfo, error) {
-	return parseAccessToken(h.jwtHelper, token, h.protectedPrefixes, h.localMode, h.insecureMode)
-}
-
 type seriesRequestRPC struct {
-	stat        *endpointStat
-	accessToken string
 	filter      []tlstatshouseApi.Filter
 	function    tlstatshouseApi.Function
 	groupBy     []string
@@ -271,101 +281,105 @@ type seriesRequestRPC struct {
 	timeShift   []int64
 	timeTo      int64
 	topN        int32
-	version     int32
 	what        []tlstatshouseApi.Function
 	widthAgg    string
 	whatFlagSet bool
 }
 
-func (h *RPCHandler) getSeriesQuery(hctx *rpc.HandlerContext) (tlstatshouseApi.GetQuery, seriesRequestRPC, error) {
-	var q tlstatshouseApi.GetQuery
-	_, err := q.Read(hctx.Request)
-	if err != nil {
-		err = fmt.Errorf("failed to deserialize statshouseApi.getQuery request: %w", err)
-		return tlstatshouseApi.GetQuery{}, seriesRequestRPC{}, err
+func (h *rpcRequestHandler) rawGetChunk(ctx context.Context, hctx *rpc.HandlerContext) (err error) {
+	var args tlstatshouseApi.GetChunk
+	if _, err = args.Read(hctx.Request); err != nil {
+		return fmt.Errorf("failed to deserialize %s request: %w", args.TLName(), err)
 	}
-	r := seriesRequestRPC{
-		accessToken: q.AccessToken,
-		stat:        newEndpointStatRPC(EndpointQuery, q.TLName()),
-		filter:      q.Query.Filter,
-		function:    q.Query.Function,
-		groupBy:     q.Query.GroupBy,
-		interval:    q.Query.Interval,
-		metricName:  q.Query.MetricName,
-		promQL:      q.Query.Promql,
-		timeFrom:    q.Query.TimeFrom,
-		timeShift:   q.Query.TimeShift,
-		timeTo:      q.Query.TimeTo,
-		topN:        q.Query.TopN,
-		version:     q.Query.Version,
-		what:        q.Query.What,
-		widthAgg:    q.Query.WidthAgg,
-		whatFlagSet: q.Query.IsSetWhat(),
-	}
-	return q, r, nil
-}
-
-func (h *RPCHandler) getPointQuery(hctx *rpc.HandlerContext) (tlstatshouseApi.GetQueryPoint, seriesRequestRPC, error) {
-	var q tlstatshouseApi.GetQueryPoint
-	_, err := q.Read(hctx.Request)
-	if err != nil {
-		err = fmt.Errorf("failed to deserialize statshouseApi.GetQueryPoint request: %w", err)
-		return tlstatshouseApi.GetQueryPoint{}, seriesRequestRPC{}, err
-	}
-	r := seriesRequestRPC{
-		accessToken: q.AccessToken,
-		stat:        newEndpointStatRPC(EndpointQuery, q.TLName()),
-		filter:      q.Query.Filter,
-		function:    q.Query.Function,
-		groupBy:     q.Query.GroupBy,
-		metricName:  q.Query.MetricName,
-		timeFrom:    q.Query.TimeFrom,
-		timeShift:   q.Query.TimeShift,
-		timeTo:      q.Query.TimeTo,
-		topN:        q.Query.TopN,
-		version:     q.Query.Version,
-		what:        q.Query.What,
-		whatFlagSet: q.Query.IsSetWhat(),
-	}
-	return q, r, nil
-}
-
-func (q *seriesRequestRPC) toSeriesRequest(h *RPCHandler) (seriesRequest, error) {
-	req := seriesRequest{
-		version:    strconv.FormatInt(int64(q.version), 10),
-		numResults: int(q.topN),
-		metricName: q.metricName,
-		from:       time.Unix(q.timeFrom, 0),
-		to:         time.Unix(q.timeTo, 0),
-		by:         q.groupBy,
-		promQL:     q.promQL,
-	}
-	var err error
-	req.ai, err = h.parseAccessToken(q.accessToken)
-	if err != nil {
+	if err = h.init(args.AccessToken, 0); err != nil {
 		err = &rpc.Error{Code: rpcErrorCodeAuthFailed, Description: fmt.Sprintf("can't parse access token: %v", err)}
-		return seriesRequest{}, err
+		return err
 	}
-	q.stat.setAccessInfo(req.ai)
-	var metric *format.MetricMetaValue
-	metric, err = h.ah.getMetricMeta(req.ai, q.metricName)
+	br, ok := h.brs.Get(args.ResponseId)
+	if !ok {
+		err = &rpc.Error{Code: rpcErrorCodeNotFound, Description: fmt.Sprintf("can't find response %q", args.ResponseId)}
+		h.endpointStat.report(rpcCode(err), format.BuiltinMetricMetaAPIServiceTime.Name)
+		return err
+	}
+	if br.owner != h.accessInfo.user {
+		err = &rpc.Error{Code: rpcErrorCodeForbidden, Description: fmt.Sprintf("response %d belongs to another user", args.ResponseId)}
+		h.endpointStat.report(rpcCode(err), format.BuiltinMetricMetaAPIServiceTime.Name)
+		return err
+	}
+	if int(args.ChunkId) > len(br.chunks)-1 {
+		err = &rpc.Error{Code: rpcErrorCodeBadChunkID, Description: fmt.Sprintf("got id %q, there are only %d chunks", args.ResponseId, len(br.chunks))}
+		h.endpointStat.report(rpcCode(err), format.BuiltinMetricMetaAPIServiceTime.Name)
+		return err
+	}
+	h.endpointStat.report(0, format.BuiltinMetricMetaAPIServiceTime.Name)
+	res := tlstatshouseApi.GetChunkResponse{
+		Series: br.chunks[int(args.ChunkId)],
+		Index:  args.ChunkId,
+	}
+	if hctx.Response, err = args.WriteResult(hctx.Response, res); err != nil {
+		return fmt.Errorf("failed to serialize %s response: %w", res.TLName(), err)
+	}
+	return nil
+}
+
+func (h *rpcRequestHandler) rawReleaseChunks(ctx context.Context, hctx *rpc.HandlerContext) (err error) {
+	var args tlstatshouseApi.ReleaseChunks
+	if _, err = args.Read(hctx.Request); err != nil {
+		return fmt.Errorf("failed to deserialize %s request: %w", args.TLName(), err)
+	}
+	if err = h.init(args.AccessToken, 0); err != nil {
+		err = &rpc.Error{Code: rpcErrorCodeAuthFailed, Description: fmt.Sprintf("can't parse access token: %v", err)}
+		return err
+	}
+	br, ok := h.brs.Get(args.ResponseId)
+	if !ok {
+		err = &rpc.Error{Code: rpcErrorCodeNotFound, Description: fmt.Sprintf("can't find response %q", args.ResponseId)}
+		h.endpointStat.report(rpcCode(err), format.BuiltinMetricMetaAPIServiceTime.Name)
+		return err
+	}
+	if br.owner != h.accessInfo.user {
+		err = &rpc.Error{Code: rpcErrorCodeForbidden, Description: fmt.Sprintf("response %q belongs to another user", args.ResponseId)}
+		h.endpointStat.report(rpcCode(err), format.BuiltinMetricMetaAPIServiceTime.Name)
+		return err
+	}
+	h.endpointStat.report(0, format.BuiltinMetricMetaAPIServiceTime.Name)
+	res := tlstatshouseApi.ReleaseChunksResponse{
+		ReleasedChunkCount: int32(h.brs.Release(args.ResponseId)),
+	}
+	if hctx.Response, err = args.WriteResult(hctx.Response, res); err != nil {
+		return fmt.Errorf("failed to serialize %s response: %w", res.TLName(), err)
+	}
+	return nil
+}
+
+func (qry *seriesRequestRPC) toSeriesRequest(h *rpcRequestHandler) (seriesRequest, error) {
+	req := seriesRequest{
+		version:    h.version,
+		numResults: int(qry.topN),
+		metricName: qry.metricName,
+		from:       time.Unix(qry.timeFrom, 0),
+		to:         time.Unix(qry.timeTo, 0),
+		by:         qry.groupBy,
+		promQL:     qry.promQL,
+	}
+	metric, err := h.getMetricMeta(qry.metricName)
 	if err != nil {
 		err = &rpc.Error{Code: rpcErrorCodeUnknownMetric, Description: fmt.Sprintf("can't get metric's meta: %v", err)}
 		return seriesRequest{}, err
 	}
-	q.stat.setMetricMeta(metric)
+	h.endpointStat.setMetricMeta(metric)
 	if metric != nil {
-		req.filterIn, req.filterNotIn, err = parseFilterValues(q.filter, metric)
+		req.filterIn, req.filterNotIn, err = parseFilterValues(qry.filter, metric)
 		if err != nil {
 			err = fmt.Errorf("can't parse filter: %v", err)
 			return seriesRequest{}, err
 		}
-	} else if len(q.promQL) == 0 {
+	} else if len(qry.promQL) == 0 {
 		err = fmt.Errorf("neither metric name nor PromQL expression specified")
 		return seriesRequest{}, err
 	}
-	if len(q.interval) != 0 || len(q.widthAgg) != 0 {
-		width, widthKind, err := parseWidth(q.interval, q.widthAgg)
+	if len(qry.interval) != 0 || len(qry.widthAgg) != 0 {
+		width, widthKind, err := parseWidth(qry.interval, qry.widthAgg)
 		if err != nil {
 			err = fmt.Errorf("can't parse interval: %v", err)
 			return seriesRequest{}, err
@@ -376,21 +390,21 @@ func (q *seriesRequestRPC) toSeriesRequest(h *RPCHandler) (seriesRequest, error)
 			req.step = int64(width)
 		}
 	}
-	req.shifts = make([]time.Duration, 0, len(q.timeShift))
-	for _, ts := range q.timeShift {
+	req.shifts = make([]time.Duration, 0, len(qry.timeShift))
+	for _, ts := range qry.timeShift {
 		if req.step == _1M && ts%_1M != 0 {
 			err = fmt.Errorf("time shift %d can't be used with month interval", ts)
 			return seriesRequest{}, err
 		}
 		req.shifts = append(req.shifts, time.Duration(ts)*time.Second)
 	}
-	if q.whatFlagSet {
-		req.what = make([]QueryFunc, 0, len(q.what))
-		for _, fn := range q.what {
-			req.what = append(req.what, QueryFuncFromTLFunc(fn, &req.maxHost))
+	if qry.whatFlagSet {
+		req.what = make([]promql.SelectorWhat, 0, len(qry.what))
+		for _, fn := range qry.what {
+			req.what = append(req.what, promql.QueryFuncFromTLFunc(fn, &req.maxHost))
 		}
 	} else {
-		req.what = []QueryFunc{QueryFuncFromTLFunc(q.function, &req.maxHost)}
+		req.what = []promql.SelectorWhat{promql.QueryFuncFromTLFunc(qry.function, &req.maxHost)}
 	}
 	return req, nil
 }
@@ -409,8 +423,8 @@ func parseFilterValues(filter []tlstatshouseApi.Filter, meta *format.MetricMetaV
 			case tlstatshouseApi.FlagRaw():
 				tagValue = format.AddRawValuePrefix(tagValue)
 			case tlstatshouseApi.FlagAuto():
-				tag, ok := meta.Name2Tag[tid]
-				if !ok {
+				tag := meta.Name2Tag(tid)
+				if tag == nil {
 					return nil, nil, fmt.Errorf("tag with name %q not found", f.Key)
 				}
 				if !tag.Raw {
@@ -445,7 +459,7 @@ func chunkResponse(res *SeriesResponse, columnSize int, totalSize int, metaSize 
 	firstChunk := tlstatshouseApi.Series{Time: res.Series.Time[0:firstColumnPerChunk]}
 	firstChunk.SeriesData = make([][]float64, 0, len(res.Series.SeriesData))
 	for _, data := range res.Series.SeriesData {
-		firstChunk.SeriesData = append(firstChunk.SeriesData, (*data)[0:firstColumnPerChunk])
+		firstChunk.SeriesData = append(firstChunk.SeriesData, (*FloatSlicePtrToNative(data))[0:firstColumnPerChunk])
 	}
 	chunks = append(chunks, firstChunk)
 
@@ -459,7 +473,7 @@ func chunkResponse(res *SeriesResponse, columnSize int, totalSize int, metaSize 
 		chunk := tlstatshouseApi.Series{Time: res.Series.Time[low:high]}
 		chunk.SeriesData = make([][]float64, 0, len(res.Series.SeriesData))
 		for _, data := range res.Series.SeriesData {
-			chunk.SeriesData = append(chunk.SeriesData, (*data)[low:high])
+			chunk.SeriesData = append(chunk.SeriesData, (*FloatSlicePtrToNative(data))[low:high])
 		}
 
 		chunks = append(chunks, chunk)
@@ -482,4 +496,15 @@ func estimateResponseSize(data *SeriesResponse) (int, int, int) {
 	metaSize := (4 + 8 + 8 + 20*tagsCount) * len(data.Series.SeriesMeta) // (fields_mask + shift + what + avg_size(tag)*len(tags))*len(metas)
 
 	return columnSize, columnSize*len(data.Series.Time) + metaSize, metaSize
+}
+
+func rpcCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var rpcError *rpc.Error
+	if errors.As(err, &rpcError) {
+		return int(rpcError.Code)
+	}
+	return -1
 }

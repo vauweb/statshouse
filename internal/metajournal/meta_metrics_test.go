@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,35 +9,45 @@ package metajournal
 import (
 	"context"
 	"encoding/json"
+	"math"
+	"strings"
 	"testing"
 
+	"github.com/mailru/easyjson"
 	"github.com/stretchr/testify/require"
+	"pgregory.net/rapid"
+
+	"github.com/vkcom/statshouse/internal/data_model"
 
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/format"
 )
 
-func newMetricStorage(loader MetricsStorageLoader) *MetricsStorage {
-	result := MakeMetricsStorage("", nil, nil)
-	result.journal.metaLoader = loader
-	result.journal.parseDiscCache()
-	return result
+func newMetricStorage(loader MetricsStorageLoader) (*MetricsStorage, *JournalFast) {
+	m := MakeMetricsStorage(nil)
+	//j := MakeJournal("", data_model.JournalDDOSProtectionTimeout, nil,
+	//	[]ApplyEvent{m.ApplyEvent})
+	j := MakeJournalFast(data_model.JournalDDOSProtectionTimeout, false,
+		[]ApplyEvent{m.ApplyEvent})
+	j.metaLoader = loader
+	j.parseDiscCache()
+	return m, j
 }
 
-const metricID = 123456
-const namespace1ID = 332
-const group1Id = 233
-const id6 = 62488
-const id7 = 62418
+const testMetricID = 123456
+const testNamespace1ID = 332
+const testGroup1ID = 233
+const testID6 = 62488
+const testID7 = 62418
 
 var group1 = format.MetricsGroup{
-	ID:     group1Id,
+	ID:     testGroup1ID,
 	Name:   "group1",
 	Weight: 1,
 }
 
-var group2Metric6 = format.MetricMetaValue{MetricID: id6, Name: group1.Name + "_metric6"}
-var testMetric7 = format.MetricMetaValue{MetricID: id7, Name: "test_metric7"}
+var group2Metric6 = format.MetricMetaValue{MetricID: testID6, Name: group1.Name + "_metric6"}
+var testMetric7 = format.MetricMetaValue{MetricID: testID7, Name: "test_metric7"}
 
 type testCase struct {
 	name string
@@ -47,6 +57,7 @@ type testCase struct {
 func TestMetricStorage1(t *testing.T) {
 	events := []tlmetadata.Event{}
 	var m *MetricsStorage
+	var journal *JournalFast
 	createEntity := func(id, namespaceID int64, name string, typ int32, version int64, data any) tlmetadata.Event {
 		b, err := json.Marshal(data)
 		if err != nil {
@@ -71,7 +82,7 @@ func TestMetricStorage1(t *testing.T) {
 		ns.Version = 1
 		metric := createEntity(2, 1, "namespace@metric", format.MetricEvent, 2, format.MetricMetaValue{})
 		events = []tlmetadata.Event{namespace, metric}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.metricsByName, metric.Name)
@@ -81,200 +92,182 @@ func TestMetricStorage1(t *testing.T) {
 		require.Equal(t, ns, *m.namespaceByName[ns.Name], ns)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(namespace.Id), actualMetric.NamespaceID)
-		require.NotNil(t, actualMetric.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"create metric before namespace", func(t *testing.T) {
 		metric := createEntity(2, 1, "namespace@metric", format.MetricEvent, 1, format.MetricMetaValue{})
 		namespace := createEntity(1, 0, "namespace", format.NamespaceEvent, 2, format.NamespaceMeta{})
 		events = []tlmetadata.Event{metric, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.metricsByName, metric.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(namespace.Id), actualMetric.NamespaceID)
-		require.NotNil(t, actualMetric.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"put metric in namespace", func(t *testing.T) {
 		metric := createEntity(2, 0, "metric", format.MetricEvent, 1, format.MetricMetaValue{})
 		namespace := createEntity(1, 0, "namespace", format.NamespaceEvent, 2, format.NamespaceMeta{})
 		events = []tlmetadata.Event{metric, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.metricsByName, metric.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(format.BuiltinNamespaceIDDefault), actualMetric.NamespaceID)
-		require.Equal(t, m.builtInNamespace[format.BuiltinNamespaceIDDefault], actualMetric.Namespace)
 		events = append(events, createEntity(2, 1, "namespace@metric", format.MetricEvent, 3, format.MetricMetaValue{}))
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		actualMetric = m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(namespace.Id), actualMetric.NamespaceID)
-		require.NotNil(t, actualMetric.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"remove metric from namespace", func(t *testing.T) {
 		metric := createEntity(2, 1, "namespace@metric", format.MetricEvent, 1, format.MetricMetaValue{})
 		namespace := createEntity(1, 0, "namespace", format.NamespaceEvent, 2, format.NamespaceMeta{})
 		events = []tlmetadata.Event{metric, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.metricsByName, metric.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(namespace.Id), actualMetric.NamespaceID)
-		require.NotNil(t, actualMetric.Namespace)
 
 		events = append(events, createEntity(2, 0, "metric", format.MetricEvent, 3, format.MetricMetaValue{}))
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		actualMetric = m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(format.BuiltinNamespaceIDDefault), actualMetric.NamespaceID)
-		require.Equal(t, m.builtInNamespace[format.BuiltinNamespaceIDDefault], actualMetric.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"create group after namespace", func(t *testing.T) {
 		namespace := createEntity(1, 0, "namespace", format.NamespaceEvent, 1, format.NamespaceMeta{})
 		group := createEntity(2, 1, "namespace@group", format.MetricsGroupEvent, 2, format.MetricsGroup{})
 		events = []tlmetadata.Event{namespace, group}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualGroup := m.groupsByID[int32(group.Id)]
 		require.Equal(t, int32(namespace.Id), actualGroup.NamespaceID)
-		require.NotNil(t, actualGroup.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"create group before namespace", func(t *testing.T) {
 		group := createEntity(2, 1, "namespace@group", format.MetricsGroupEvent, 1, format.MetricsGroup{})
 		namespace := createEntity(1, 0, "namespace", format.NamespaceEvent, 2, format.NamespaceMeta{})
 		events = []tlmetadata.Event{group, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualGroup := m.groupsByID[int32(group.Id)]
 		require.Equal(t, int32(namespace.Id), actualGroup.NamespaceID)
-		require.NotNil(t, actualGroup.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"put group in namespace", func(t *testing.T) {
 		group := createEntity(2, 0, "group", format.MetricsGroupEvent, 1, format.MetricsGroup{})
 		namespace := createEntity(1, 0, "namespace", format.NamespaceEvent, 2, format.NamespaceMeta{})
 		events = []tlmetadata.Event{group, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualGroup := m.groupsByID[int32(group.Id)]
 		require.Equal(t, int32(format.BuiltinNamespaceIDDefault), actualGroup.NamespaceID)
-		require.Equal(t, m.builtInNamespace[format.BuiltinNamespaceIDDefault], actualGroup.Namespace)
 		events = append(events, createEntity(2, 1, "namespace@group", format.MetricsGroupEvent, 3, format.MetricsGroup{}))
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		actualGroup = m.groupsByID[int32(group.Id)]
 		require.Equal(t, int32(namespace.Id), actualGroup.NamespaceID)
-		require.NotNil(t, actualGroup.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"remove group from namespace", func(t *testing.T) {
 		group := createEntity(2, 1, "namespace@group", format.MetricsGroupEvent, 1, format.MetricsGroup{})
 		namespace := createEntity(1, 0, "namespace", format.NamespaceEvent, 2, format.NamespaceMeta{})
 		events = []tlmetadata.Event{group, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualGroup := m.groupsByID[int32(group.Id)]
 		require.Equal(t, int32(namespace.Id), actualGroup.NamespaceID)
-		require.NotNil(t, actualGroup.Namespace)
 
 		events = append(events, createEntity(2, 0, "group", format.MetricsGroupEvent, 3, format.MetricsGroup{}))
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		actualGroup = m.groupsByID[int32(group.Id)]
 		require.Equal(t, int32(format.BuiltinNamespaceIDDefault), actualGroup.NamespaceID)
-		require.Equal(t, m.builtInNamespace[format.BuiltinNamespaceIDDefault], actualGroup.Namespace)
 	}})
 
 	testCases = append(testCases, testCase{"create group after metric", func(t *testing.T) {
 		metric := createEntity(1, 0, "group_metric", format.MetricEvent, 1, format.MetricMetaValue{})
 		group := createEntity(2, 0, "group_", format.MetricsGroupEvent, 2, format.MetricsGroup{})
 		events = []tlmetadata.Event{metric, group}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(group.Id), actualMetric.GroupID)
-		require.NotNil(t, actualMetric.Group)
 	}})
 
 	testCases = append(testCases, testCase{"create group before metric", func(t *testing.T) {
 		group := createEntity(2, 0, "group_", format.MetricsGroupEvent, 1, format.MetricsGroup{})
 		metric := createEntity(1, 0, "group_metric", format.MetricEvent, 2, format.MetricMetaValue{})
 		events = []tlmetadata.Event{group, metric}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(group.Id), actualMetric.GroupID)
-		require.NotNil(t, actualMetric.Group)
 	}})
 
 	testCases = append(testCases, testCase{"rename group and check metric", func(t *testing.T) {
 		group := createEntity(2, 0, "group_", format.MetricsGroupEvent, 1, format.MetricsGroup{})
 		metric := createEntity(1, 0, "group_metric", format.MetricEvent, 2, format.MetricMetaValue{})
 		events = []tlmetadata.Event{group, metric}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(group.Id), actualMetric.GroupID)
-		require.NotNil(t, actualMetric.Group)
 		group = createEntity(2, 0, "group1_", format.MetricsGroupEvent, 3, format.MetricsGroup{})
 		events = append(events, group)
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric = m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(format.BuiltinGroupIDDefault), actualMetric.GroupID)
-		require.Equal(t, m.builtInGroup[format.BuiltinGroupIDDefault], actualMetric.Group)
 	}})
 
 	testCases = append(testCases, testCase{"rename metric and check metric", func(t *testing.T) {
 		group := createEntity(2, 0, "group_", format.MetricsGroupEvent, 1, format.MetricsGroup{})
 		metric := createEntity(1, 0, "group_metric", format.MetricEvent, 2, format.MetricMetaValue{})
 		events = []tlmetadata.Event{group, metric}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(group.Id), actualMetric.GroupID)
-		require.NotNil(t, actualMetric.Group)
 		metric = createEntity(1, 0, "group1_metric", format.MetricEvent, 3, format.MetricMetaValue{})
 		events = append(events, metric)
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric = m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(format.BuiltinGroupIDDefault), actualMetric.GroupID)
-		require.Equal(t, m.builtInGroup[format.BuiltinGroupIDDefault], actualMetric.Group)
 	}})
 
 	testCases = append(testCases, testCase{"move group to another namespace", func(t *testing.T) {
@@ -282,24 +275,22 @@ func TestMetricStorage1(t *testing.T) {
 		metric := createEntity(1, 0, "group_metric", format.MetricEvent, 2, format.MetricMetaValue{})
 		namespace := createEntity(3, 0, "namespace", format.NamespaceEvent, 3, format.NamespaceMeta{})
 		events = []tlmetadata.Event{group, metric, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(group.Id), actualMetric.GroupID)
-		require.NotNil(t, actualMetric.Group)
 		group = createEntity(2, 3, "namespace@group_", format.MetricsGroupEvent, 4, format.MetricsGroup{})
 		events = append(events, group)
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric = m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(format.BuiltinGroupIDDefault), actualMetric.GroupID)
-		require.Equal(t, m.builtInGroup[format.BuiltinGroupIDDefault], actualMetric.Group)
 	}})
 
 	testCases = append(testCases, testCase{"move metric to another namespace", func(t *testing.T) {
@@ -307,29 +298,27 @@ func TestMetricStorage1(t *testing.T) {
 		metric := createEntity(1, 0, "group_metric", format.MetricEvent, 2, format.MetricMetaValue{})
 		namespace := createEntity(3, 0, "namespace", format.NamespaceEvent, 3, format.NamespaceMeta{})
 		events = []tlmetadata.Event{group, metric, namespace}
-		err := m.journal.updateJournal(nil)
+		err := journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric := m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(group.Id), actualMetric.GroupID)
-		require.NotNil(t, actualMetric.Group)
 		metric = createEntity(1, 3, "namespace@group_metric", format.MetricEvent, 4, format.MetricMetaValue{})
 		events = append(events, metric)
-		err = m.journal.updateJournal(nil)
+		err = journal.updateJournal(nil)
 		require.NoError(t, err)
 		require.Contains(t, m.metricsByID, int32(metric.Id))
 		require.Contains(t, m.groupsByID, int32(group.Id))
 		require.Contains(t, m.groupsByName, group.Name)
 		actualMetric = m.metricsByID[int32(metric.Id)]
 		require.Equal(t, int32(format.BuiltinGroupIDDefault), actualMetric.GroupID)
-		require.Equal(t, m.builtInGroup[format.BuiltinGroupIDDefault], actualMetric.Group)
 	}})
 
 	for _, tc := range testCases {
 		events = nil
-		m = newMetricStorage(func(ctx context.Context, lastVersion int64, returnIfEmpty bool) ([]tlmetadata.Event, int64, error) {
+		m, journal = newMetricStorage(func(ctx context.Context, lastVersion int64, returnIfEmpty bool) ([]tlmetadata.Event, int64, error) {
 			var result []tlmetadata.Event
 			for _, e := range events {
 				if e.Version > lastVersion {
@@ -343,27 +332,18 @@ func TestMetricStorage1(t *testing.T) {
 			return result, v, nil
 		})
 		t.Run(tc.name, tc.f)
-		for id, metric := range m.metricsByID {
-			m1 := m.metaSnapshot.metricsByIDSnapshot[id]
-			require.Equal(t, *metric, *m1)
-
-			m2 := m.metaSnapshot.metricsByNameSnapshot[metric.Name]
-			require.Equal(t, *metric, *m2)
-		}
 	}
 
 }
 
 func TestMetricsStorage(t *testing.T) {
 	events := []tlmetadata.Event{}
-	var version int64 = 1
+	var version int64 = 0
 	incVersion := func() int64 {
-		defer func() {
-			version++
-		}()
+		version++
 		return version
 	}
-	m := newMetricStorage(func(ctx context.Context, lastVersion int64, returnIfEmpty bool) ([]tlmetadata.Event, int64, error) {
+	loader := func(ctx context.Context, lastVersion int64, returnIfEmpty bool) ([]tlmetadata.Event, int64, error) {
 		var result []tlmetadata.Event
 		for _, e := range events {
 			if e.Version > lastVersion {
@@ -375,14 +355,16 @@ func TestMetricsStorage(t *testing.T) {
 			v = events[len(events)-1].Version
 		}
 		return result, v, nil
-	})
+	}
+	m, journal := newMetricStorage(loader)
 	// actually 1 test, but grouped by small test case (need to run together)
 	t.Run("updateJournal test(each other depends on previous)", func(t *testing.T) {
 		descrField := "__description"
-		metric := format.BuiltinMetrics[format.BuiltinMetricIDAPIBRS]
-		metric.MetricID = metricID
+		metric := *format.BuiltinMetricMetaAPIBRS
+		metric.MetricID = testMetricID
 		metric.Name = "test_metric"
 		metric.GroupID = 0
+		metric.BuiltinAllowedToReceive = false // this field is not restored by RestoreCachedInfo
 		_ = metric.RestoreCachedInfo()
 		metricBytes, err := metric.MarshalBinary()
 		require.NoError(t, err)
@@ -413,18 +395,17 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(metricBytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 1)
-			require.Len(t, m.journal.journalOld, 1)
+			require.Len(t, journal.journal, 1)
 
-			require.Equal(t, metric.Version, m.journal.versionLocked())
+			require.Equal(t, metric.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 1)
 			require.Len(t, m.metricsByName, 1)
-			require.Equal(t, *metric, *m.metricsByID[metric.MetricID])
-			require.Equal(t, *metric, *m.metricsByName[metric.Name])
+			require.Equal(t, metric, *m.metricsByID[metric.MetricID])
+			require.Equal(t, metric, *m.metricsByName[metric.Name])
 		})
 
 		t.Run("edit metric", func(t *testing.T) {
@@ -442,18 +423,17 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 1)
-			require.Len(t, m.journal.journalOld, 1)
+			require.Len(t, journal.journal, 1)
 
-			require.Equal(t, metric.Version, m.journal.versionLocked())
+			require.Equal(t, metric.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 1)
 			require.Len(t, m.metricsByName, 1)
-			require.Equal(t, *metric, *m.metricsByID[metric.MetricID])
-			require.Equal(t, *metric, *m.metricsByName[metric.Name])
+			require.Equal(t, metric, *m.metricsByID[metric.MetricID])
+			require.Equal(t, metric, *m.metricsByName[metric.Name])
 		})
 
 		t.Run("rename metric", func(t *testing.T) {
@@ -472,18 +452,17 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 1)
-			require.Len(t, m.journal.journalOld, 1)
+			require.Len(t, journal.journal, 1)
 
-			require.Equal(t, metric.Version, m.journal.versionLocked())
+			require.Equal(t, metric.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 1)
 			require.Len(t, m.metricsByName, 1)
-			require.Equal(t, *metric, *m.metricsByID[metric.MetricID])
-			require.Equal(t, *metric, *m.metricsByName[metric.Name])
+			require.Equal(t, metric, *m.metricsByID[metric.MetricID])
+			require.Equal(t, metric, *m.metricsByName[metric.Name])
 		})
 
 		t.Run("create dashboard", func(t *testing.T) {
@@ -497,13 +476,12 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(dashboardBytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 2)
-			require.Len(t, m.journal.journalOld, 1)
+			require.Len(t, journal.journal, 2)
 
-			require.Equal(t, dashboard.Version, m.journal.versionLocked())
+			require.Equal(t, dashboard.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 1)
 			require.Len(t, m.metricsByName, 1)
@@ -527,13 +505,12 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 2)
-			require.Len(t, m.journal.journalOld, 1)
+			require.Len(t, journal.journal, 2)
 
-			require.Equal(t, dashboard.Version, m.journal.versionLocked())
+			require.Equal(t, dashboard.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 1)
 			require.Len(t, m.metricsByName, 1)
@@ -552,8 +529,8 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(metricBytes),
 				},
 			}
-			waitCh := m.journal.waitVersion(metric.Version)
-			err = m.journal.updateJournal(nil)
+			waitCh := m.waitVersion(metric.Version)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 			t.Run("got version update by broadcast", func(t *testing.T) {
 				select {
@@ -564,7 +541,7 @@ func TestMetricsStorage(t *testing.T) {
 			})
 			t.Run("got version update after journal update", func(t *testing.T) {
 				select {
-				case <-m.journal.waitVersion(metric.Version):
+				case <-m.waitVersion(metric.Version):
 				default:
 					t.Fatal("Expected to get update of journal")
 				}
@@ -585,13 +562,12 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 4)
-			require.Len(t, m.journal.journalOld, 2)
+			require.Len(t, journal.journal, 4)
 
-			require.Equal(t, dashboard.Version, m.journal.versionLocked())
+			require.Equal(t, dashboard.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 2)
 			require.Len(t, m.metricsByName, 2)
@@ -601,13 +577,12 @@ func TestMetricsStorage(t *testing.T) {
 
 		t.Run("empty journal", func(t *testing.T) {
 			events = []tlmetadata.Event{}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 4)
-			require.Len(t, m.journal.journalOld, 2)
+			require.Len(t, journal.journal, 4)
 
-			require.Equal(t, dashboard.Version, m.journal.versionLocked())
+			require.Equal(t, dashboard.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 2)
 			require.Len(t, m.metricsByName, 2)
@@ -617,7 +592,7 @@ func TestMetricsStorage(t *testing.T) {
 
 		t.Run("group created (check metric added to group)", func(t *testing.T) {
 			group1.Version = incVersion()
-			bytesGroup2, err := json.Marshal(group1)
+			bytesGroup2, err := easyjson.Marshal(group1)
 			require.NoError(t, err)
 			events = []tlmetadata.Event{
 				{
@@ -628,23 +603,23 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytesGroup2),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 5)
+			require.Len(t, journal.journal, 5)
 
-			require.Equal(t, group1.Version, m.journal.versionLocked())
+			require.Equal(t, group1.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 2)
 			require.Len(t, m.metricsByName, 2)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
 		})
 
 		t.Run("metric renamed (check old metric removed from group and new metric added)", func(t *testing.T) {
 			metric.Version = incVersion()
 			metric.Name = group1.Name + "_metric"
-			bytes, err := json.Marshal(metric)
+			bytes, err := easyjson.Marshal(metric)
 			require.NoError(t, err)
 			events = []tlmetadata.Event{
 				{
@@ -655,25 +630,25 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 5)
+			require.Len(t, journal.journal, 5)
 
-			require.Equal(t, metric.Version, m.journal.versionLocked())
+			require.Equal(t, metric.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 2)
 			require.Len(t, m.metricsByName, 2)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
 		})
 		t.Run("metric created (check new metric in group)", func(t *testing.T) {
 			var id int32 = 65463
-			metricCopy := *metric
+			metricCopy := metric
 			metricCopy.Version = incVersion()
 			metricCopy.MetricID = id
 			metricCopy.Name = group1.Name + "_metric5"
-			bytes, err := json.Marshal(metricCopy)
+			bytes, err := easyjson.Marshal(metricCopy)
 			require.NoError(t, err)
 			events = []tlmetadata.Event{
 				{
@@ -684,23 +659,22 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 6)
-			require.Len(t, m.journal.journalOld, 3)
+			require.Len(t, journal.journal, 6)
 
-			require.Equal(t, metricCopy.Version, m.journal.versionLocked())
+			require.Equal(t, metricCopy.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 3)
 			require.Len(t, m.metricsByName, 3)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
 		})
 		t.Run("group renamed (check old metric removed from group and metric added)", func(t *testing.T) {
 			group1.Version = incVersion()
 			group1.Name = "group3"
-			bytes, err := json.Marshal(group1)
+			bytes, err := easyjson.Marshal(group1)
 			require.NoError(t, err)
 			events = []tlmetadata.Event{
 				{
@@ -711,18 +685,17 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 6)
-			require.Len(t, m.journal.journalOld, 3)
+			require.Len(t, journal.journal, 6)
 
-			require.Equal(t, group1.Version, m.journal.versionLocked())
+			require.Equal(t, group1.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 3)
 			require.Len(t, m.metricsByName, 3)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
 		})
 		t.Run("broadcast prom clients", func(t *testing.T) {
 			v1 := incVersion()
@@ -747,7 +720,7 @@ func TestMetricsStorage(t *testing.T) {
 			m.applyPromConfig = func(_ int32, configString string) {
 				promConfgString = configString
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 			require.Equal(t, "def", promConfgString)
 		})
@@ -763,18 +736,18 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      `{"weight": 1}`,
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 8)
+			require.Len(t, journal.journal, 8)
 
-			require.Equal(t, namespace.Version, m.journal.versionLocked())
+			require.Equal(t, namespace.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 3)
 			require.Len(t, m.metricsByName, 3)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
-			require.Len(t, m.namespaceByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
+			require.Len(t, m.namespaceByID, 1+len(format.BuiltInNamespaceDefault))
 		})
 
 		t.Run("metric added to namespace", func(t *testing.T) {
@@ -793,21 +766,20 @@ func TestMetricsStorage(t *testing.T) {
 					Data:        string(metricBytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 8)
+			require.Len(t, journal.journal, 8)
 
-			require.Equal(t, metric.Version, m.journal.versionLocked())
+			require.Equal(t, metric.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 3)
 			require.Len(t, m.metricsByName, 3)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
-			require.Len(t, m.namespaceByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
+			require.Len(t, m.namespaceByID, 1+len(format.BuiltInNamespaceDefault))
 
 			require.Contains(t, m.metricsByID, metric.MetricID)
-			require.Equal(t, *m.metricsByID[metric.MetricID].Namespace, namespace)
 		})
 
 		t.Run("group added to namespace", func(t *testing.T) {
@@ -826,30 +798,29 @@ func TestMetricsStorage(t *testing.T) {
 					Data:        string(groupBytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 8)
+			require.Len(t, journal.journal, 8)
 
-			require.Equal(t, group1.Version, m.journal.versionLocked())
+			require.Equal(t, group1.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 3)
 			require.Len(t, m.metricsByName, 3)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
-			require.Len(t, m.namespaceByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
+			require.Len(t, m.namespaceByID, 1+len(format.BuiltInNamespaceDefault))
 
 			require.Contains(t, m.groupsByID, group1.ID)
-			require.Equal(t, *m.groupsByID[group1.ID].Namespace, namespace)
 		})
 		t.Run("metric created (check new metric not in group)", func(t *testing.T) {
 			group2Metric6.Version = incVersion()
 			group2Metric6.NamespaceID = 0
-			metric6Bytes, err := json.Marshal(group2Metric6)
+			metric6Bytes, err := easyjson.Marshal(group2Metric6)
 			require.NoError(t, err)
 			testMetric7.Version = incVersion()
-			testMetric7.NamespaceID = namespace1ID
-			metric7Bytes, err := json.Marshal(testMetric7)
+			testMetric7.NamespaceID = testNamespace1ID
+			metric7Bytes, err := easyjson.Marshal(testMetric7)
 			require.NoError(t, err)
 			events = []tlmetadata.Event{
 				{
@@ -867,22 +838,22 @@ func TestMetricsStorage(t *testing.T) {
 					Data:      string(metric7Bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 10)
+			require.Len(t, journal.journal, 10)
 
-			require.Equal(t, testMetric7.Version, m.journal.versionLocked())
+			require.Equal(t, testMetric7.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 5)
 			require.Len(t, m.metricsByName, 5)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
 		})
 		t.Run("metric change namespace (check metric in group)", func(t *testing.T) {
 			group2Metric6.Version = incVersion()
 			group2Metric6.NamespaceID = namespace.ID
-			bytes, err := json.Marshal(group2Metric6)
+			bytes, err := easyjson.Marshal(group2Metric6)
 			require.NoError(t, err)
 			events = []tlmetadata.Event{
 				{
@@ -894,88 +865,263 @@ func TestMetricsStorage(t *testing.T) {
 					Data:        string(bytes),
 				},
 			}
-			err = m.journal.updateJournal(nil)
+			err = journal.updateJournal(nil)
 			require.NoError(t, err)
 
-			require.Len(t, m.journal.journal, 10)
+			require.Len(t, journal.journal, 10)
 
-			require.Equal(t, group2Metric6.Version, m.journal.versionLocked())
+			require.Equal(t, group2Metric6.Version, journal.versionLocked())
 
 			require.Len(t, m.metricsByID, 5)
 			require.Len(t, m.metricsByName, 5)
 			require.Len(t, m.dashboardByID, 2)
-			require.Len(t, m.groupsByID, 1)
+			require.Len(t, m.groupsByID, 1+len(format.BuiltInGroupDefault))
 		})
 		t.Run("get metric 6", func(t *testing.T) {
 			metric := m.GetMetaMetricByName(namespace.Name + format.NamespaceSeparator + group2Metric6.Name)
 			require.Equal(t, group2Metric6.MetricID, metric.MetricID)
 		})
 	})
+	journal = MakeJournalFast(data_model.JournalDDOSProtectionTimeout, false,
+		nil)
+	journal.metaLoader = loader
+
 	t.Run("test getJournalDiffLocked3", func(t *testing.T) {
-		a := tlmetadata.Event{
-			Id:      1,
-			Version: 1,
-		}
-		b := tlmetadata.Event{
-			Id:      2,
-			Version: 2,
-		}
-		c := tlmetadata.Event{
-			Id:      3,
-			Version: 3,
-		}
-		test := func(clientVersion int64, journal, expected []tlmetadata.Event) func(t *testing.T) {
+		test := func(clientVersion int64, expected []tlmetadata.Event) func(t *testing.T) {
 			return func(t *testing.T) {
-				m.journal.journal = journal
-				res := m.journal.getJournalDiffLocked3(clientVersion)
+				var res tlmetadata.GetJournalResponsenew
+				journal.getJournalDiffLocked3(clientVersion, &res)
 				if len(expected) == 0 {
 					require.Len(t, res.Events, 0)
 				} else {
 					require.Equal(t, expected, res.Events)
 				}
-				require.Equal(t, m.journal.versionLocked(), res.CurrentVersion)
+				require.Equal(t, journal.versionLocked(), res.CurrentVersion)
 			}
 		}
-		t.Run("empty journal", test(0, nil, nil))
-		t.Run("full journal", test(0, []tlmetadata.Event{a, b, c}, []tlmetadata.Event{a, b, c}))
-		t.Run("part of journal1", test(1, []tlmetadata.Event{a, b, c}, []tlmetadata.Event{b, c}))
-		t.Run("part of journal2", test(2, []tlmetadata.Event{a, b, c}, []tlmetadata.Event{c}))
-		t.Run("part of journal3", test(3, []tlmetadata.Event{a, b, c}, nil))
-		t.Run("part of journal4", test(999, []tlmetadata.Event{a, b, c}, nil))
+		t.Run("empty journal", test(0, nil))
+		events = []tlmetadata.Event{
+			{FieldMask: 1, Id: 1, Version: 1},
+			{FieldMask: 1, Id: 2, Version: 2},
+			{FieldMask: 1, Id: 3, Version: 3},
+		}
+		err := journal.updateJournal(nil)
+		require.NoError(t, err)
+		t.Run("full journal", test(0, events))
+		t.Run("part of journal1", test(1, events[1:]))
+		t.Run("part of journal2", test(2, events[2:]))
+		t.Run("part of journal3", test(3, nil))
+		t.Run("part of journal4", test(999, nil))
 	})
 }
 
-// to check by race detector
-func TestRace(t *testing.T) {
-	const name = "name"
-	metric := format.BuiltinMetrics[format.BuiltinMetricIDAPIBRS]
-	metric.Name = name
-	metric.MetricID = 1
-	data, err := metric.MarshalBinary()
-	require.NoError(t, err)
-	m := newMetricStorage(func(ctx context.Context, lastVersion int64, returnIfEmpty bool) ([]tlmetadata.Event, int64, error) {
-		var result []tlmetadata.Event
-		result = append(result, tlmetadata.Event{
-			NamespaceId: 0,
-			Id:          1,
-			Name:        name,
-			EventType:   format.MetricEvent,
-			Version:     lastVersion + 1,
-			Data:        string(data),
+func TestMetricsStorageProperties(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		ms, _ := newMetricStorage(func(ctx context.Context, lastVersion int64, returnIfEmpty bool) ([]tlmetadata.Event, int64, error) {
+			var result []tlmetadata.Event
+			var v int64
+			return result, v, nil
 		})
-		return result, lastVersion + 1, nil
-	})
-	require.NoError(t, m.Journal().updateJournal(nil))
 
-	go func() {
-		for {
-			metric := m.GetMetaMetricDelayed(1)
-			require.Equal(t, name, m.GetMetaMetricDelayed(1).Name)
-			require.Equal(t, name, m.GetMetaMetric(1).Name)
-			require.Equal(t, int32(format.BuiltinGroupIDDefault), m.GetGroupBy(metric).ID)
-		}
-	}()
-	for i := 0; i < 10000; i++ {
-		require.NoError(t, m.Journal().updateJournal(nil))
+		events1 := rapid.SliceOf(genEvent()).Draw(t, "events")
+		ms.ApplyEvent(events1)
+		checkInvariants(t, ms)
+
+		// we want to check changes to already initialized struct
+		events2 := rapid.SliceOf(genEvent()).Draw(t, "events")
+		ms.ApplyEvent(events2)
+		checkInvariants(t, ms)
+	})
+}
+
+func checkInvariants(t *rapid.T, ms *MetricsStorage) {
+	ms.mu.RLock()
+	defer ms.mu.RUnlock()
+	checkPointerEquality(t, ms)
+	checkKeyConsistency(t, ms)
+	checkGroupPrefixes(t, ms)
+	checkDisabledGroups(t, ms)
+}
+
+func checkPointerEquality(t *rapid.T, ms *MetricsStorage) {
+	for _, byName := range ms.metricsByName {
+		byId := ms.metricsByID[byName.MetricID]
+		require.Same(t, byName, byId, "metric pointers mismatch")
 	}
+
+	for _, byName := range ms.groupsByName {
+		byId := ms.groupsByID[byName.ID]
+		require.Same(t, byName, byId, "group pointers mismatch")
+	}
+
+	for _, byName := range ms.namespaceByName {
+		byId := ms.namespaceByID[byName.ID]
+		require.Same(t, byId, byName, "namespace pointers mismatch")
+	}
+}
+
+func checkKeyConsistency(t *rapid.T, ms *MetricsStorage) {
+	for id, metric := range ms.metricsByID {
+		require.Equal(t, id, metric.MetricID, "metric ID key mismatch")
+	}
+	for name, metric := range ms.metricsByName {
+		require.Equal(t, name, metric.Name, "metric name key mismatch")
+	}
+
+	for id, group := range ms.groupsByID {
+		require.Equal(t, id, group.ID, "group ID key mismatch")
+	}
+	for name, group := range ms.groupsByName {
+		require.Equal(t, name, group.Name, "group name key mismatch")
+	}
+
+	for id, ns := range ms.namespaceByID {
+		require.Equal(t, id, ns.ID, "namespace ID key mismatch")
+	}
+	for name, ns := range ms.namespaceByName {
+		require.Equal(t, name, ns.Name, "namespace name key mismatch")
+	}
+}
+
+func checkGroupPrefixes(t *rapid.T, ms *MetricsStorage) {
+	for _, metric := range ms.metricsByID {
+		if metric.GroupID < 0 {
+			// builtin groups are exception
+			continue
+		}
+		group := ms.groupsByID[metric.GroupID]
+		if group != nil {
+			require.True(t, strings.HasPrefix(metric.Name, group.Name),
+				"metric %q name doesn't start with group %q", metric.Name, group.Name)
+		}
+	}
+}
+
+func checkDisabledGroups(t *rapid.T, ms *MetricsStorage) {
+	for _, group := range ms.groupsByID {
+		// format.BuiltinGroupIDDefault is special we set it when group is being disabled
+		if group.ID != format.BuiltinGroupIDDefault && group.Disable {
+			for _, metric := range ms.metricsByID {
+				require.NotEqual(t, group.ID, metric.GroupID,
+					"metric %q points to disabled group %q", metric.Name, group.Name)
+			}
+		}
+	}
+}
+
+func genEvent() *rapid.Generator[tlmetadata.Event] {
+	return rapid.Custom(func(t *rapid.T) tlmetadata.Event {
+		eventType := rapid.OneOf(
+			rapid.Just(format.MetricEvent),
+			rapid.Just(format.DashboardEvent),
+			rapid.Just(format.MetricsGroupEvent),
+			rapid.Just(format.PromConfigEvent),
+			rapid.Just(format.NamespaceEvent),
+		).Draw(t, "eventType")
+
+		id := int64(rapid.Int32().Draw(t, "id"))
+		name := rapid.StringN(1, 120, 120).Draw(t, "name")
+		version := rapid.Int64().Draw(t, "version")
+		namespaceID := int64(rapid.Int32().Draw(t, "namespaceID"))
+		updateTime := rapid.Uint32().Draw(t, "updateTime")
+
+		var data string
+		switch eventType {
+		case format.MetricEvent:
+			metric := genMetricMetaValue().Draw(t, "metric")
+			_ = metric.RestoreCachedInfo()
+			jsonData, err := easyjson.Marshal(metric)
+			require.Nil(t, err, "metric marshal failed")
+			data = string(jsonData)
+
+		case format.MetricsGroupEvent:
+			group := genMetricsGroup().Draw(t, "group")
+			jsonData, err := easyjson.Marshal(group)
+			require.Nil(t, err, "group marshal failed")
+			data = string(jsonData)
+
+		case format.NamespaceEvent:
+			ns := genNamespaceMeta(id).Draw(t, "namespace")
+			jsonData, err := easyjson.Marshal(ns)
+			require.Nil(t, err, "namespace marshal failed")
+			data = string(jsonData)
+
+		case format.DashboardEvent:
+			dashboard := rapid.MapOf(
+				rapid.String(),
+				rapid.String(),
+			).Draw(t, "dashboard")
+			jsonData, err := json.Marshal(dashboard)
+			require.Nil(t, err, "dashboard marshal failed")
+			data = string(jsonData)
+
+		case format.PromConfigEvent:
+			data = rapid.String().Draw(t, "promConfig")
+		}
+
+		return tlmetadata.Event{
+			Id:          id,
+			Name:        name,
+			EventType:   eventType,
+			Version:     version,
+			Data:        data,
+			NamespaceId: namespaceID,
+			UpdateTime:  updateTime,
+		}
+	})
+}
+
+func genMetricMetaValue() *rapid.Generator[format.MetricMetaValue] {
+	return rapid.Custom(func(t *rapid.T) format.MetricMetaValue {
+		return format.MetricMetaValue{
+			Description:          rapid.String().Draw(t, "description"),
+			Tags:                 rapid.SliceOfN(genMetricMetaTag(), 0, 48).Draw(t, "tags"),
+			TagsDraft:            rapid.MapOf(rapid.String(), genMetricMetaTag()).Draw(t, "tagsDraft"),
+			Disable:              rapid.Bool().Draw(t, "disable"),
+			Kind:                 rapid.StringMatching("^counter$|^value$|^value_p$|^unique$|^mixed$|^mixed_p$").Draw(t, "kind"),
+			Weight:               rapid.Float64().Draw(t, "weight"),
+			Resolution:           rapid.IntRange(0, math.MaxInt32).Draw(t, "resolution"),
+			StringTopName:        rapid.String().Draw(t, "stringTopName"),
+			StringTopDescription: rapid.String().Draw(t, "stringTopDescription"),
+			PreKeyTagID:          rapid.String().Draw(t, "preKeyTagID"),
+			PreKeyFrom:           rapid.Uint32().Draw(t, "preKeyFrom"),
+			SkipMaxHost:          rapid.Bool().Draw(t, "skipMaxHost"),
+			SkipMinHost:          rapid.Bool().Draw(t, "skipMinHost"),
+			SkipSumSquare:        rapid.Bool().Draw(t, "skipSumSquare"),
+			PreKeyOnly:           rapid.Bool().Draw(t, "preKeyOnly"),
+			MetricType:           rapid.String().Draw(t, "metricType"),
+			FairKeyTagIDs:        rapid.SliceOf(rapid.String()).Draw(t, "fairKeyTagIDs"),
+			ShardStrategy:        rapid.StringMatching("^tags_hash$|^fixed_shard$|^metric_id$|^$").Draw(t, "shardStrategy"),
+			ShardNum:             rapid.Uint32Max(16).Draw(t, "shardNum"),
+			PipelineVersion:      rapid.Uint8Range(0, 3).Draw(t, "pipelineVersion"),
+		}
+	})
+}
+
+func genMetricMetaTag() *rapid.Generator[format.MetricMetaTag] {
+	return rapid.Custom(func(t *rapid.T) format.MetricMetaTag {
+		return format.MetricMetaTag{
+			Name:        rapid.String().Draw(t, "name"),
+			Description: rapid.String().Draw(t, "description"),
+		}
+	})
+}
+
+func genMetricsGroup() *rapid.Generator[format.MetricsGroup] {
+	return rapid.Custom(func(t *rapid.T) format.MetricsGroup {
+		return format.MetricsGroup{
+			Weight:  rapid.Float64().Draw(t, "weight"),
+			Disable: rapid.Bool().Draw(t, "disable"),
+		}
+	})
+}
+
+func genNamespaceMeta(id int64) *rapid.Generator[format.NamespaceMeta] {
+	return rapid.Custom(func(t *rapid.T) format.NamespaceMeta {
+		return format.NamespaceMeta{
+			ID:      int32(id),
+			Weight:  rapid.Float64().Draw(t, "weight"),
+			Disable: rapid.Bool().Draw(t, "disable"),
+		}
+	})
 }

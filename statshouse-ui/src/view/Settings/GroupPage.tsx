@@ -1,18 +1,18 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { groupAdd, groupListErrors, groupListLoad, groupLoad, groupSave, useGroupListStore } from 'store/group';
+import { groupAdd, groupListErrors, groupListLoad, groupLoad, groupSave, useGroupListStore } from '@/store2/group';
 import { ReactComponent as SVGPlus } from 'bootstrap-icons/icons/plus.svg';
 import cn from 'classnames';
-import { GroupInfo, GroupMetric } from 'api/group';
-import { toNumber } from 'common/helpers';
+import { GroupInfo, GroupMetric } from '@/api/group';
+import { toNumber } from '@/common/helpers';
 import { produce } from 'immer';
-import { ErrorMessages } from 'components/ErrorMessages';
-import { InputText } from 'components/UI';
+import { ErrorMessages } from '@/components/ErrorMessages';
+import { InputText } from '@/components/UI';
 
 type SelectGroup = {
   group: Pick<GroupInfo, 'name' | 'weight' | 'namespace_id'> &

@@ -1,5 +1,11 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import { useMemo } from 'react';
-import { type PlotKey, type QueryParams } from 'url2';
+import type { PlotKey, QueryParams } from '@/url2';
 import { useStatsHouse } from '../store2';
 import { GET_PARAMS } from '../api/enum';
 import { getLoadPlotUrlParams } from '../store2/plotDataStore/loadPlotData';

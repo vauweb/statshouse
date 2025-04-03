@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,6 +6,7 @@
 
 import { produce } from 'immer';
 import { mapKeyboardEnToRu, mapKeyboardRuToEn, toggleKeyboard } from './toggleKeyboard';
+import type uPlot from 'uplot';
 
 export function isArray(item: unknown): item is unknown[] {
   return Array.isArray(item);
@@ -81,9 +82,10 @@ export function toNumber(item: unknown, defaultNumber?: number): number | null {
       return item;
     case 'boolean':
       return +item;
-    case 'string':
+    case 'string': {
       const n = +item;
-      return item && !isNaN(n) ? n : defaultNumber ?? null;
+      return item && !isNaN(n) ? n : (defaultNumber ?? null);
+    }
     case 'undefined':
     case 'function':
     case 'object':
@@ -160,7 +162,7 @@ export function mergeLeft<T>(targetMerge: T, valueMerge: T): T {
     return produce(targetMerge, (s) => {
       tKey.forEach((key) => {
         const v = mergeLeft(s[key], valueMerge[key]);
-        if (!valueMerge.hasOwnProperty(key)) {
+        if (!Object.hasOwn(valueMerge, key)) {
           delete s[key];
         } else if (s[key] !== v) {
           Object.assign(s, { [key]: v });
@@ -213,7 +215,7 @@ export function invertObj<K extends string, V extends string>(obj: Record<K, V>)
 export function objectRemoveKeyShift<T = unknown>(obj: Record<string, T>, index: number) {
   return Object.fromEntries(
     Object.entries(obj).map(([key, value]) => {
-      let nKey = toNumber(key);
+      const nKey = toNumber(key);
       if (nKey && nKey > index) {
         return [nKey - 1, value];
       }
@@ -228,13 +230,28 @@ export function resortObjectKey<T = unknown>(obj: Record<string, T>, nextIndex: 
 
 export function round(val: number, dec: number = 0, radix: number = 10) {
   if (Number.isInteger(val) && dec >= 0 && radix === 10) return val;
-  let p = Math.pow(radix, dec);
+  const p = Math.pow(radix, dec);
   return Math.round(val * p * (1 + Number.EPSILON)) / p;
+}
+
+export function fixFloat(v: number) {
+  return round(v, 14);
+}
+
+export function incrRoundUp(num: number, incr: number) {
+  if (num === 0) return num;
+
+  return fixFloat(Math.ceil(fixFloat(num / incr)) * incr);
+}
+
+export function incrRoundDn(num: number, incr: number) {
+  if (num === 0) return num;
+  return fixFloat(Math.floor(fixFloat(num / incr)) * incr);
 }
 
 export function floor(val: number, dec: number = 0, radix: number = 10) {
   if (Number.isInteger(val) && dec >= 0 && radix === 10) return val;
-  let p = Math.pow(radix, dec);
+  const p = Math.pow(radix, dec);
   return Math.floor(val * p * (1 + Number.EPSILON)) / p;
 }
 
@@ -278,7 +295,7 @@ export function parseURLSearchParams(url: string): [string, string][] {
   try {
     const parseUrl = new URL(url, document.location.origin);
     return [...parseUrl.searchParams.entries()];
-  } catch (e) {
+  } catch (_) {
     return [];
   }
 }
@@ -306,3 +323,107 @@ export function skipTimeout(timeout: number = 0) {
     setTimeout(resolve, timeout);
   });
 }
+
+function findIncrease(self: uPlot, localStep: number, foundSpace: number, incrs: number[]): number | undefined {
+  const y = self.posToVal(localStep, 'y');
+  const step = Math.abs(y - self.posToVal(localStep - foundSpace, 'y'));
+  const incrIndex = incrs.findIndex((i: number) => i >= step);
+  return incrs[Math.max(0, incrIndex - 1)];
+}
+
+const generateSplits = (
+  self: uPlot,
+  incrs: number[],
+  start: number,
+  step: number,
+  limit: number,
+  condition: (v: number, limit: number) => boolean
+): { splits: number[]; localIncrs: (number | undefined)[] } => {
+  const splits: number[] = [];
+  const localIncrs: (number | undefined)[] = [];
+  let position = start;
+
+  while (condition(position, limit)) {
+    splits.push(position);
+    localIncrs.push(findIncrease(self, position, step, incrs));
+    position += step;
+  }
+
+  return { splits, localIncrs };
+};
+
+export function log2Splits(
+  self: uPlot,
+  axisIdx: number,
+  scaleMin: number,
+  scaleMax: number,
+  _foundIncr: number,
+  foundSpace: number
+): number[] {
+  const axisIncrs = self.axes[axisIdx]?.incrs ?? [];
+  const incrs =
+    typeof axisIncrs === 'function'
+      ? axisIncrs(self, axisIdx, scaleMin, scaleMax, self.rect.height, foundSpace)
+      : axisIncrs;
+
+  const isTwoDirections = scaleMin * scaleMax < 0;
+  const hasNegativeDirection = scaleMin < 0;
+
+  const posMin = self.valToPos(scaleMin, 'y');
+  const posMax = self.valToPos(scaleMax, 'y');
+  const posZero = isTwoDirections ? self.valToPos(0, 'y') : hasNegativeDirection ? posMax : posMin;
+
+  const { splits: posSplitsNegative, localIncrs: incrsNegative } = generateSplits(
+    self,
+    incrs,
+    posZero,
+    -foundSpace,
+    posMax,
+    (pos, lim) => pos > lim
+  );
+
+  const { splits: posSplitsPositive, localIncrs: incrsPositive } = generateSplits(
+    self,
+    incrs,
+    isTwoDirections ? posZero + foundSpace : posZero,
+    foundSpace,
+    posMin,
+    (pos, lim) => pos < lim
+  );
+
+  const allSplits = [...posSplitsNegative, ...posSplitsPositive];
+  const allIncrs = [...incrsNegative, ...incrsPositive];
+
+  return allSplits.map((v, i) => {
+    const increment = allIncrs[i];
+    const value = self.posToVal(v, 'y');
+    if (!increment) {
+      return value;
+    }
+    return value < 0 ? incrRoundDn(value, increment) : incrRoundUp(value, increment);
+  });
+}
+
+export function log2Filter(_: uPlot, splits: number[]) {
+  return splits;
+}
+
+export const fwd = (v: number) => {
+  if (v === 0) {
+    return 0;
+  }
+  if (v < 0) {
+    return -Math.log2(-v + 1);
+  }
+  return Math.log2(v + 1);
+};
+
+export const bwd = (v: number) => {
+  if (v === 0) {
+    return 0;
+  }
+  if (v < 0) {
+    return -(Math.pow(2, -v) - 1);
+  }
+  return Math.pow(2, v) - 1;
+};

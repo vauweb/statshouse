@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -17,7 +17,7 @@ import (
 
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/vkcom/statshouse-go"
-	"github.com/vkcom/statshouse/internal/data_model"
+	"github.com/vkcom/statshouse/internal/chutil"
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/promql/parser"
 )
@@ -34,7 +34,7 @@ type Series struct {
 
 type SeriesData struct {
 	Values     *[]float64
-	MinMaxHost [2][]int32 // "min" at [0], "max" at [1]
+	MinMaxHost [2][]chutil.ArgMinMaxStringFloat32 // "min" at [0], "max" at [1]
 	Tags       SeriesTags
 	Offset     int64
 	What       SelectorWhat
@@ -60,7 +60,7 @@ type SeriesTag struct {
 	Index       int    // shifted by "SeriesTagIndexOffset", zero means not set
 	ID          string // canonical name, always set
 	Name        string // optional custom name
-	Value       int32
+	Value       int64
 	SValue      string
 	stringified bool
 }
@@ -120,40 +120,31 @@ func (sr *Series) appendSome(src Series, xs ...int) {
 	}
 }
 
-func (ev *evaluator) groupMinMaxHost(ds []SeriesData, x int) []int32 {
+func (ev *evaluator) groupMinMaxHost(ds []SeriesData, x int) []chutil.ArgMinMaxStringFloat32 {
 	if len(ds) == 0 {
 		return nil
 	}
 	if len(ds) == 1 {
 		return ds[0].MinMaxHost[x]
 	}
-	var (
-		i   int
-		t   = ev.time()
-		res []int32
-	)
+	var i int
+	var t = ev.time()
+	var res []chutil.ArgMinMaxStringFloat32
 	for ; i < len(ds); i++ {
 		if len(ds[i].MinMaxHost[x]) != 0 {
-			res = make([]int32, 0, len(t))
+			res = make([]chutil.ArgMinMaxStringFloat32, 0, len(t))
 			break
 		}
 	}
-	if res == nil {
-		return nil
+	if len(res) == 0 {
+		return res
 	}
 	for j := 0; j < len(t); j++ {
-		var (
-			v = ds[i].MinMaxHost[x][j]
-			k = i + 1
-		)
+		v := ds[i].MinMaxHost[x][j]
+		k := i + 1
 		for ; k < len(ds); k++ {
-			if k < len(ds) && ds[k].MinMaxHost[x][j] != 0 && ds[k].MinMaxHost[x][j] != v {
-				if v == 0 {
-					v = ds[k].MinMaxHost[x][j]
-				} else {
-					v = 0
-					break
-				}
+			if k < len(ds) {
+				v.Merge(ds[k].MinMaxHost[x][j], x)
 			}
 		}
 		res = append(res, v)
@@ -209,7 +200,7 @@ func (sr *Series) histograms(ev *evaluator) ([]histogram, error) {
 	if sr.Meta.Metric == nil {
 		return nil, fmt.Errorf("metric meta not found")
 	}
-	if len(sr.Meta.Metric.HistorgamBuckets) == 0 {
+	if len(sr.Meta.Metric.HistogramBuckets) == 0 {
 		return nil, fmt.Errorf("histogram meta not found")
 	}
 	m, _, err := sr.group(ev, hashOptions{
@@ -221,7 +212,7 @@ func (sr *Series) histograms(ev *evaluator) ([]histogram, error) {
 	}
 	var res []histogram
 	for _, xs := range m {
-		buckets := make([]bucket, 0, len(sr.Meta.Metric.HistorgamBuckets))
+		buckets := make([]bucket, 0, len(sr.Meta.Metric.HistogramBuckets))
 		for _, x := range xs {
 			if t, ok := sr.Data[x].Tags.Get(labels.BucketLabel); ok {
 				var le float32
@@ -233,7 +224,7 @@ func (sr *Series) histograms(ev *evaluator) ([]histogram, error) {
 					}
 					le = float32(v)
 				} else {
-					le = statshouse.LexDecode(t.Value)
+					le = statshouse.LexDecode(int32(t.Value))
 				}
 				buckets = append(buckets, bucket{le: le, x: x})
 			}
@@ -286,7 +277,7 @@ func (h *histogram) data() []SeriesData {
 }
 
 type secondsFormat struct {
-	n int32  // number of seconds
+	n int64  // number of seconds
 	s string // corresponding format string
 }
 
@@ -310,9 +301,9 @@ func (tg *SeriesTag) stringify(ev *evaluator) {
 	var v string
 	switch tg.ID {
 	case LabelWhat:
-		v = DigestWhatString(data_model.DigestWhat(tg.Value))
+		v = DigestWhat(tg.Value).String()
 	case LabelShard:
-		v = strconv.FormatUint(uint64(tg.Value), 10)
+		v = strconv.FormatInt(tg.Value, 10)
 	case LabelOffset:
 		n := tg.Value // seconds
 		if n < 0 {
@@ -325,10 +316,14 @@ func (tg *SeriesTag) stringify(ev *evaluator) {
 			}
 		}
 	case LabelMinHost, LabelMaxHost:
-		v = ev.GetHostName(tg.Value)
+		if tg.SValue != "" {
+			v = tg.SValue
+		} else {
+			v = ev.GetHostName64(tg.Value)
+		}
 	default:
 		if !ev.opt.RawBucketLabel && tg.Name == labels.BucketLabel {
-			v = strconv.FormatFloat(float64(statshouse.LexDecode(tg.Value)), 'f', -1, 32)
+			v = strconv.FormatFloat(float64(statshouse.LexDecode(int32(tg.Value))), 'f', -1, 32)
 		} else {
 			v = ev.GetTagValue(TagValueQuery{
 				Version:    ev.opt.Version,
@@ -338,10 +333,10 @@ func (tg *SeriesTag) stringify(ev *evaluator) {
 			})
 		}
 	}
-	tg.setSValue(v)
+	tg.SetSValue(v)
 }
 
-func (tg *SeriesTag) setSValue(v string) {
+func (tg *SeriesTag) SetSValue(v string) {
 	tg.SValue = v
 	tg.stringified = true
 }
@@ -467,10 +462,8 @@ func (tgs *SeriesTags) cloneSome(ids ...string) SeriesTags {
 
 func (d *SeriesData) GetSMaxHosts(h Handler) []string {
 	res := make([]string, len(d.MinMaxHost[1]))
-	for j, id := range d.MinMaxHost[1] {
-		if id != 0 {
-			res[j] = h.GetHostName(id)
-		}
+	for j, v := range d.MinMaxHost[1] {
+		res[j] = getHostName(h, v)
 	}
 	return res
 }
@@ -494,7 +487,7 @@ func (d *SeriesData) labelMinMaxHost(ev *evaluator, x int, tagID string) []Serie
 	if len(d.MinMaxHost[x]) == 0 {
 		return []SeriesData{*d}
 	}
-	m := map[int32]int{}
+	m := map[chutil.ArgMinMaxStringFloat32]int{}
 	for i, h := range d.MinMaxHost[x] {
 		if !math.IsNaN((*d.Values)[i]) {
 			m[h] = i
@@ -516,8 +509,9 @@ func (d *SeriesData) labelMinMaxHost(ev *evaluator, x int, tagID string) []Serie
 			}
 		}
 		data.Tags.add(&SeriesTag{
-			ID:    tagID,
-			Value: h,
+			ID:     tagID,
+			Value:  int64(h.AsInt32),
+			SValue: h.Arg,
 		}, nil)
 		res = append(res, data)
 	}
@@ -594,7 +588,7 @@ func (d *SeriesData) filterMinMaxHost(ev *evaluator, x int, matchers []*labels.M
 	n := 0
 	for i, maxHost := range d.MinMaxHost[x] {
 		discard := false
-		maxHostname := ev.GetHostName(maxHost)
+		maxHostname := getHostName(ev, maxHost)
 		for _, matcher := range matchers {
 			if !matcher.Matches(maxHostname) {
 				discard = true
@@ -603,7 +597,7 @@ func (d *SeriesData) filterMinMaxHost(ev *evaluator, x int, matchers []*labels.M
 		}
 		if discard {
 			(*d.Values)[i] = NilValue
-			d.MinMaxHost[x][i] = 0
+			d.MinMaxHost[x][i] = chutil.ArgMinMaxStringFloat32{}
 		} else if !math.IsNaN((*d.Values)[i]) {
 			n++
 		}
@@ -618,11 +612,11 @@ func (d *SeriesData) pruneMinMaxHost() {
 	for i, v := range *d.Values {
 		if math.IsNaN(v) {
 			if i < len(d.MinMaxHost[0]) {
-				d.MinMaxHost[0][i] = 0
+				d.MinMaxHost[0][i] = chutil.ArgMinMaxStringFloat32{}
 
 			}
 			if i < len(d.MinMaxHost[1]) {
-				d.MinMaxHost[1][i] = 0
+				d.MinMaxHost[1][i] = chutil.ArgMinMaxStringFloat32{}
 			}
 		}
 	}
@@ -693,6 +687,9 @@ func (tgs *SeriesTags) hash(ev *evaluator, opt hashOptions) (uint64, hashTags, e
 					break
 				}
 			}
+			if tag.Name != "" {
+				id = tag.Name
+			}
 			if !found {
 				ht.used = append(ht.used, id)
 			} else if opt.listUnused {
@@ -754,7 +751,7 @@ func (ts *TimeSeries) MarshalJSON() ([]byte, error) {
 		if len(s.Tags.ID2Tag) != 0 {
 			m = make(map[string]string, len(s.Tags.ID2Tag))
 			for _, tag := range s.Tags.ID2Tag {
-				if !tag.stringified || tag.SValue == format.TagValueCodeZero {
+				if !tag.stringified || tag.SValue == "" {
 					continue
 				}
 				if len(tag.Name) != 0 {
@@ -792,7 +789,7 @@ func decodeTagIndexLegacy(i int) (ix int, id string, ok bool) {
 	ix = i - SeriesTagIndexOffset
 	if 0 <= ix && ix < format.MaxTags {
 		id, ok = format.TagIDLegacy(ix), true
-	} else if i == format.StringTopTagIndex {
+	} else if i == format.StringTopTagIndex || i == format.StringTopTagIndexV3 {
 		id, ok = format.LegacyStringTopTagID, true
 	}
 	return ix, id, ok

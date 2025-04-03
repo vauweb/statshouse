@@ -1,30 +1,25 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo, useCallback, useEffect, useMemo } from 'react';
-import { Select, type SelectOptionProps } from 'components/Select';
+import { memo, useCallback, useEffect, useMemo } from 'react';
+import { Select, type SelectOptionProps } from '@/components/Select';
 import cn from 'classnames';
-import { type QueryWhat } from 'api/enum';
-import { metricKindToWhat } from 'view/api';
-import { getNewMetric, type PlotKey } from 'url2';
-import { useStatsHouseShallow } from 'store2';
-import { whatToWhatDesc } from 'view/whatToWhatDesc';
+import type { QueryWhat } from '@/api/enum';
+import { metricKindToWhat } from '@/view/api';
+import { whatToWhatDesc } from '@/view/whatToWhatDesc';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
+import { useMetricMeta } from '@/hooks/useMetricMeta';
+import { useMetricName } from '@/hooks/useMetricName';
 
-export type PlotControlWhatsProps = {
-  plotKey: PlotKey;
-};
-
-const defaultWhats = getNewMetric().what;
-
-export function _PlotControlWhats({ plotKey }: PlotControlWhatsProps) {
-  const { what, meta, setPlot } = useStatsHouseShallow((s) => ({
-    what: s.params.plots[plotKey]?.what ?? defaultWhats,
-    meta: s.metricMeta[s.params.plots[plotKey]?.metricName ?? ''],
-    setPlot: s.setPlot,
-  }));
+export const PlotControlWhats = memo(function PlotControlWhats() {
+  const {
+    plot: { what },
+    setPlot,
+  } = useWidgetPlotContext();
+  const meta = useMetricMeta(useMetricName(true));
 
   const options = useMemo(() => {
     const whats: SelectOptionProps[] = metricKindToWhat(meta?.kind).map((w) => ({
@@ -42,21 +37,21 @@ export function _PlotControlWhats({ plotKey }: PlotControlWhatsProps) {
         const whats = metricKindToWhat(meta?.kind);
         whatValue.push(whats[0]);
       }
-      setPlot(plotKey, (s) => {
+      setPlot((s) => {
         s.what = whatValue as QueryWhat[];
       });
     },
-    [meta?.kind, plotKey, setPlot]
+    [meta?.kind, setPlot]
   );
 
   useEffect(() => {
     const whats = metricKindToWhat(meta?.kind);
     if (what.some((qw) => whats.indexOf(qw) === -1)) {
-      setPlot(plotKey, (p) => {
+      setPlot((p) => {
         p.what = [whats[0] as QueryWhat];
       });
     }
-  }, [meta?.kind, plotKey, setPlot, what]);
+  }, [meta?.kind, setPlot, what]);
   return (
     <Select
       value={what}
@@ -68,6 +63,4 @@ export function _PlotControlWhats({ plotKey }: PlotControlWhatsProps) {
       classNameList="dropdown-menu"
     />
   );
-}
-
-export const PlotControlWhats = memo(_PlotControlWhats);
+});

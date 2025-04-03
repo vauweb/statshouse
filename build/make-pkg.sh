@@ -31,20 +31,20 @@ GOCACHE=$PWD/build/go-cache
 mkdir -p "$GOCACHE"
 
 if [[ $TAG == "ubuntu-focal" ]]; then
-  docker build --file build/golang-ubuntu/golang-1.21-focal.Dockerfile --tag golang:1.21-focal build/golang-ubuntu
+  docker build --file build/golang-ubuntu/golang-1.22-focal.Dockerfile --tag golang:1.22-focal build/golang-ubuntu
 fi
 if [[ $TAG == "ubuntu-jammy" ]]; then
-  docker build --file build/golang-ubuntu/golang-1.21-jammy.Dockerfile --tag golang:1.21-jammy build/golang-ubuntu
+  docker build --file build/golang-ubuntu/golang-1.22-jammy.Dockerfile --tag golang:1.22-jammy build/golang-ubuntu
 fi
 if [[ $TAG == "debian-buster" ]]; then
-  docker build --file build/golang-debian/golang-1.21-buster.Dockerfile --tag golang:1.21-buster build/golang-debian
+  docker build --file build/golang-debian/golang-1.22-buster.Dockerfile --tag golang:1.22-buster build/golang-debian
 fi
 
 docker build --file build/packages.Dockerfile \
     --build-arg BUILD_TIME \
     --build-arg BUILD_MACHINE \
-    --build-arg BUILD_COMMIT \
-    --build-arg BUILD_COMMIT_TS \
+    --build-arg BUILD_COMMIT=$BUILD_COMMIT \
+    --build-arg BUILD_COMMIT_TS=$BUILD_COMMIT_TS \
     --build-arg BUILD_ID \
     --build-arg BUILD_VERSION=$UPSTREAM \
     --build-arg BUILD_TRUSTED_SUBNET_GROUPS \

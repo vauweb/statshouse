@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,6 +8,7 @@ package format
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode"
@@ -16,6 +17,7 @@ import (
 	"go4.org/mem"
 	"pgregory.net/rapid"
 
+	"github.com/mailru/easyjson"
 	"github.com/stretchr/testify/require"
 )
 
@@ -231,6 +233,65 @@ func BenchmarkAllowedResolutionTable(b *testing.B) {
 	fmt.Printf("result: %d\n", allowed) // do not allow to optimize out
 }
 
+var sum int32
+
+func TestName2Tag(t *testing.T) {
+	meta := &MetricMetaValue{
+		MetricID:      1,
+		NamespaceID:   -5,
+		Name:          "hren",
+		StringTopName: "some",
+	}
+	for i := 0; i < 100; i++ {
+		meta.Tags = append(meta.Tags, MetricMetaTag{Index: int32(i)})
+	}
+	require.Nil(t, meta.Name2Tag(""))    // test short string
+	require.Nil(t, meta.Name2Tag("100")) // test long string
+	for i := 0; i < 256; i++ {
+		for j := 0; j < 256; j++ {
+			str := string(byte(i)) + string(byte(j)) // test all 2-digit strings
+			index, err := strconv.Atoi(str)
+			tag := meta.Name2Tag(str)
+			if err != nil || strings.Contains(str, "+") || strings.Contains(str, "-") { // +1, -0 is parsed by Atoi, but not Name2Tag
+				require.Nil(t, tag)
+			} else {
+				require.NotNil(t, tag)
+				require.True(t, tag.Index == int32(index))
+			}
+		}
+	}
+}
+
+func BenchmarkName2Tag(b *testing.B) {
+	meta := &MetricMetaValue{
+		MetricID:      1,
+		NamespaceID:   -5,
+		Name:          "hren",
+		StringTopName: "some",
+	}
+	_ = meta.RestoreCachedInfo()
+	for i := 0; i < b.N; i++ {
+		if t := meta.name2Tag[TagID(i&15)]; t != nil {
+			sum += t.Index
+		}
+	}
+}
+
+func BenchmarkName2TagX(b *testing.B) {
+	meta := &MetricMetaValue{
+		MetricID:      1,
+		NamespaceID:   -5,
+		Name:          "hren",
+		StringTopName: "some",
+	}
+	_ = meta.RestoreCachedInfo()
+	for i := 0; i < b.N; i++ {
+		if t := meta.Name2Tag(TagID(i & 15)); t != nil {
+			sum += t.Index
+		}
+	}
+}
+
 func TestNamespaceConst(t *testing.T) {
 	require.Equal(t, NamespaceSeparator, string(NamespaceSeparatorRune))
 }
@@ -256,4 +317,12 @@ func TestValidDashboardName(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMetricMetaJson(t *testing.T) {
+	mm := MetricMetaValue{}
+
+	jsonB, err := easyjson.Marshal(mm)
+	require.NoError(t, err)
+	require.Equal(t, "{}", string(jsonB))
 }

@@ -1,21 +1,24 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo, useCallback, useMemo } from 'react';
-import { Select, type SelectOptionProps } from 'components/Select';
+import { memo, useCallback, useMemo } from 'react';
+import { Select, type SelectOptionProps } from '@/components/Select';
 import cn from 'classnames';
-import { isNotNil, parseURLSearchParams } from 'common/helpers';
+import { isNotNil, parseURLSearchParams } from '@/common/helpers';
 import { produce } from 'immer';
 import { dequal } from 'dequal/lite';
-import { PLOT_TYPE } from 'api/enum';
+import { PLOT_TYPE } from '@/api/enum';
 import { ReactComponent as SVGFlagFill } from 'bootstrap-icons/icons/flag-fill.svg';
-import { globalSettings } from 'common/settings';
-import { arrToObj, type PlotKey, type PlotParams, toPlotKey, toTreeObj, urlDecode } from 'url2';
-import { addPlot, getMetricFullName } from 'store2/helpers';
-import { useStatsHouseShallow } from 'store2';
+import { globalSettings } from '@/common/settings';
+import { arrToObj, type PlotKey, type PlotParams, toPlotKey, toTreeObj, urlDecode } from '@/url2';
+import { addPlot, getMetricFullName } from '@/store2/helpers';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
+import { useWidgetPlotDataContext } from '@/contexts/useWidgetPlotDataContext';
+import { StatsHouseStore, useStatsHouse } from '@/store2';
+import { setParams } from '@/store2/methods';
 
 const eventPreset: (SelectOptionProps & { plot: PlotParams })[] = globalSettings.event_preset
   .map((url) => {
@@ -31,22 +34,21 @@ const eventPreset: (SelectOptionProps & { plot: PlotParams })[] = globalSettings
   .filter(isNotNil);
 
 export type PlotControlEventOverlayProps = {
-  plotKey: PlotKey;
   className?: string;
 };
-export function _PlotControlEventOverlay({ className, plotKey }: PlotControlEventOverlayProps) {
-  const { events, plots, plotData, setParams } = useStatsHouseShallow(
-    ({ params: { plots }, plotsData, setParams }) => ({
-      events: plots[plotKey]?.events,
-      plotData: plotsData[plotKey],
-      plots,
-      setParams,
-    })
-  );
-  // const { events, plots } = useUrlStore(
-  //   useShallow((s) => ({ events: s.params.plots[plotKey]?.events, plots: s.params.plots }))
-  // );
-  // const plotData = usePlotsDataStore((s) => s.plotsData[plotKey]);
+
+const selectorStore = ({ params: { plots } }: StatsHouseStore) => plots;
+
+export const PlotControlEventOverlay = memo(function PlotControlEventOverlay({
+  className,
+}: PlotControlEventOverlayProps) {
+  const plots = useStatsHouse(selectorStore);
+
+  const {
+    plot: { id, events },
+  } = useWidgetPlotContext();
+  const { plotData } = useWidgetPlotDataContext();
+
   const onChange = useCallback(
     (value: string | string[] = []) => {
       const valuesEvent: PlotKey[] = [];
@@ -70,7 +72,7 @@ export function _PlotControlEventOverlay({ className, plotKey }: PlotControlEven
           valuesEvent.push(param.tabNum);
         });
         param = produce(param, (p) => {
-          const pl = p.plots[plotKey];
+          const pl = p.plots[id];
           if (pl) {
             pl.events = [...valuesEvent];
           }
@@ -79,7 +81,7 @@ export function _PlotControlEventOverlay({ className, plotKey }: PlotControlEven
         return param;
       });
     },
-    [plotKey, setParams]
+    [id]
   );
 
   const list = useMemo<SelectOptionProps[]>(() => {
@@ -88,7 +90,7 @@ export function _PlotControlEventOverlay({ className, plotKey }: PlotControlEven
       .filter((p) => p?.type === PLOT_TYPE.Event && p?.metricName !== '');
     const eventPresetFilter = eventPreset.filter(({ plot: presetPlot }) => {
       if (presetPlot) {
-        let index = plotsArr.findIndex((plot) => dequal({ ...plot, id: '0' }, { ...presetPlot, id: 0 }));
+        const index = plotsArr.findIndex((plot) => dequal({ ...plot, id: '0' }, { ...presetPlot, id: 0 }));
         return index < 0;
       }
       return false;
@@ -130,6 +132,4 @@ export function _PlotControlEventOverlay({ className, plotKey }: PlotControlEven
       </span>
     </div>
   );
-}
-
-export const PlotControlEventOverlay = memo(_PlotControlEventOverlay);
+});

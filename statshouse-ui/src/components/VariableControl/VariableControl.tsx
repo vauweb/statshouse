@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -7,14 +7,14 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import cn from 'classnames';
 import { TagSelect } from '../TagSelect';
-import { formatTagValue } from '../../view/api';
-import { SelectOptionProps } from '../Select';
-import { normalizeTagValues } from '../../view/utils';
-import { MetricMetaTag } from '../../api/metric';
-import { MetricTagValueInfo } from '../../api/metricTagValues';
-import { escapeHTML } from '../../common/helpers';
-import { Button } from '../UI';
-import { formatPercent } from '../../view/utils2';
+import { formatTagValue } from '@/view/api';
+import { SelectOptionProps } from '@/components/Select';
+import { normalizeTagValues } from '@/view/utils';
+import { MetricMetaTag } from '@/api/metric';
+import { MetricTagValueInfo } from '@/api/metricTagValues';
+import { escapeHTML } from '@/common/helpers';
+import { Button } from '@/components/UI';
+import { formatPercent } from '@/view/utils2';
 
 const emptyListArray: MetricTagValueInfo[] = [];
 const emptyValues: string[] = [];
@@ -32,7 +32,7 @@ export type VariableControlProps<T> = {
   onChange?: (name: T | undefined, value: string[]) => void;
   tagMeta?: MetricMetaTag;
   more?: boolean;
-  customValue?: boolean;
+  customValue?: boolean | ((value: string) => SelectOptionProps);
   loaded?: boolean;
   list?: MetricTagValueInfo[];
   small?: boolean;
@@ -60,8 +60,6 @@ export function VariableControl<T>({
   customBadge,
 }: VariableControlProps<T>) {
   const [sortByName, setSortByName] = useState(false);
-
-  const allValues = useMemo(() => [...values, ...notValues], [notValues, values]);
 
   const listSort = useMemo<SelectOptionProps[]>(
     () =>
@@ -114,19 +112,20 @@ export function VariableControl<T>({
   const onRemoveFilter = useCallback<React.MouseEventHandler<HTMLButtonElement>>(
     (event) => {
       const value = event.currentTarget.getAttribute('data-value');
+      const oldValues = negative ? notValues : values;
       onChange?.(
         target,
-        allValues.filter((v) => v !== value)
+        oldValues.filter((v) => v !== value)
       );
     },
-    [target, onChange, allValues]
+    [negative, notValues, values, onChange, target]
   );
   return (
     <div className={className}>
       <div className="d-flex align-items-center">
         <div className={cn('input-group flex-nowrap w-100', small ? 'input-group-sm' : 'input-group')}>
           <TagSelect
-            values={allValues}
+            values={negative ? notValues : values}
             placeholder={placeholder}
             loading={loaded}
             onChange={onChangeFilter}

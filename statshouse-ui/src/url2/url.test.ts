@@ -1,5 +1,11 @@
-import 'testMock/matchMedia.mock';
-import { type QueryParams } from './queryParams';
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+import '@/testMock/matchMedia.mock';
+import type { QueryParams } from './queryParams';
 import { urlEncode } from './urlEncode';
 import { urlDecode } from './urlDecode';
 import { getDefaultParams, getNewGroup, getNewVariable } from './getDefault';
@@ -56,12 +62,12 @@ const params2: QueryParams = {
   orderVariables: ['3', '1', '0'],
 };
 
-describe('urlStore', () => {
-  test.skip('urlEncode => urlDecode', () => {
+describe('@/urlStore', () => {
+  test('@/urlEncode => urlDecode', () => {
     expect(urlDecode(toTreeObj(arrToObj(urlEncode(params))), params)).toEqual(params);
   });
-  test('urlEncode => urlDecode save', () => {
-    // expect(urlDecode(toTreeObj(arrToObj(urlEncode(params2, params))), params)).toEqual(params2);
+  test('@/urlEncode => urlDecode save', () => {
+    expect(urlDecode(toTreeObj(arrToObj(urlEncode(params2, params))), params)).toEqual(params2);
     expect(urlDecode(toTreeObj(arrToObj(urlEncode(params, params2))), params2)).toEqual(params);
   });
 });

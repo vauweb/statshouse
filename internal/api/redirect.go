@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -34,7 +34,7 @@ type legacyRedirectReq struct {
 	keys        map[string]string
 }
 
-func HandleLegacyRedirect(h *HTTPRequestHandler, r *http.Request) {
+func (h *Handler) HandleLegacyRedirect(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	req := legacyRedirectReq{
 		name:        strings.TrimSpace(r.FormValue("name")),
@@ -54,8 +54,8 @@ func HandleLegacyRedirect(h *HTTPRequestHandler, r *http.Request) {
 
 	u := h.handleLegacyRedirect(req)
 
-	h.Header().Set("Location", u.String())
-	h.WriteHeader(http.StatusSeeOther)
+	w.Header().Set("Location", u.String())
+	w.WriteHeader(http.StatusSeeOther)
 }
 
 func (h *Handler) handleLegacyRedirect(req legacyRedirectReq) *url.URL {
@@ -100,36 +100,36 @@ func (h *Handler) handleLegacyRedirect(req legacyRedirectReq) *url.URL {
 
 	switch req.function {
 	case "count":
-		values.Set(ParamQueryWhat, ParamQueryFnCount)
+		values.Set(ParamQueryWhat, format.ParamQueryFnCount)
 	case "unique":
-		values.Set(ParamQueryWhat, ParamQueryFnUnique)
+		values.Set(ParamQueryWhat, format.ParamQueryFnUnique)
 	case "accumulate":
-		values.Set(ParamQueryWhat, ParamQueryFnCumulCount)
+		values.Set(ParamQueryWhat, format.ParamQueryFnCumulCount)
 	case "avg":
-		values.Set(ParamQueryWhat, ParamQueryFnAvg)
+		values.Set(ParamQueryWhat, format.ParamQueryFnAvg)
 	case "max":
-		values.Set(ParamQueryWhat, ParamQueryFnMax)
+		values.Set(ParamQueryWhat, format.ParamQueryFnMax)
 	case "min":
-		values.Set(ParamQueryWhat, ParamQueryFnMin)
+		values.Set(ParamQueryWhat, format.ParamQueryFnMin)
 	case "sum":
-		values.Set(ParamQueryWhat, ParamQueryFnSum)
+		values.Set(ParamQueryWhat, format.ParamQueryFnSum)
 	case "sum_accum":
-		values.Set(ParamQueryWhat, ParamQueryFnCumulSum)
+		values.Set(ParamQueryWhat, format.ParamQueryFnCumulSum)
 	}
 
 	switch req.percentiles {
 	case "p500":
-		values.Set(ParamQueryWhat, ParamQueryFnP50)
+		values.Set(ParamQueryWhat, format.ParamQueryFnP50)
 	case "p750":
-		values.Set(ParamQueryWhat, ParamQueryFnP75)
+		values.Set(ParamQueryWhat, format.ParamQueryFnP75)
 	case "p900":
-		values.Set(ParamQueryWhat, ParamQueryFnP90)
+		values.Set(ParamQueryWhat, format.ParamQueryFnP90)
 	case "p950":
-		values.Set(ParamQueryWhat, ParamQueryFnP95)
+		values.Set(ParamQueryWhat, format.ParamQueryFnP95)
 	case "p990":
-		values.Set(ParamQueryWhat, ParamQueryFnP99)
+		values.Set(ParamQueryWhat, format.ParamQueryFnP99)
 	case "p999":
-		values.Set(ParamQueryWhat, ParamQueryFnP999)
+		values.Set(ParamQueryWhat, format.ParamQueryFnP999)
 	}
 
 	switch req.interval {

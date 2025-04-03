@@ -1,41 +1,48 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo, useCallback, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import cn from 'classnames';
-import { ToggleButton } from 'components/UI';
-import { useStatsHouseShallow } from 'store2';
-import { getTimeShifts, timeShiftAbbrevExpand, timeShiftDesc } from 'view/utils2';
+import { ToggleButton } from '@/components/UI';
+import { getTimeShifts, timeShiftAbbrevExpand, timeShiftDesc } from '@/view/utils2';
+import { setParams } from '@/store2/methods';
+import { StatsHouseStore, useStatsHouseShallow } from '@/store2';
 
 export type PlotControlGlobalTimeShiftsProps = {
   className?: string;
 };
 
-export function _PlotControlGlobalTimeShifts({ className }: PlotControlGlobalTimeShiftsProps) {
-  const { timeShifts, maxCustomAgg, setParams } = useStatsHouseShallow((s) => ({
-    timeShifts: s.params.timeShifts,
-    maxCustomAgg: Math.max(0, ...s.params.orderPlot.map((pK) => s.params.plots[pK]?.customAgg ?? 0)),
-    setParams: s.setParams,
-  }));
+const selectorStore = ({ params: { timeShifts, plots, orderPlot } }: StatsHouseStore) => ({
+  timeShifts,
+  plots,
+  orderPlot,
+});
 
-  const onChange = useCallback(
-    (status: boolean, value?: number) => {
-      if (value == null) {
-        return;
-      }
-      setParams((p) => {
-        if (status) {
-          p.timeShifts.push(value);
-        } else {
-          p.timeShifts = p.timeShifts.filter((t) => t !== value);
-        }
-      });
-    },
-    [setParams]
+export const PlotControlGlobalTimeShifts = memo(function PlotControlGlobalTimeShifts({
+  className,
+}: PlotControlGlobalTimeShiftsProps) {
+  const { timeShifts, plots, orderPlot } = useStatsHouseShallow(selectorStore);
+
+  const maxCustomAgg = useMemo(
+    () => Math.max(0, ...orderPlot.map((pK) => plots[pK]?.customAgg ?? 0)),
+    [orderPlot, plots]
   );
+
+  const onChange = useCallback((status: boolean, value?: number) => {
+    if (value == null) {
+      return;
+    }
+    setParams((p) => {
+      if (status) {
+        p.timeShifts.push(value);
+      } else {
+        p.timeShifts = p.timeShifts.filter((t) => t !== value);
+      }
+    });
+  }, []);
 
   const list = useMemo(() => {
     const shifts = getTimeShifts(maxCustomAgg).map(timeShiftAbbrevExpand);
@@ -68,6 +75,4 @@ export function _PlotControlGlobalTimeShifts({ className }: PlotControlGlobalTim
       ))}
     </div>
   );
-}
-
-export const PlotControlGlobalTimeShifts = memo(_PlotControlGlobalTimeShifts);
+});

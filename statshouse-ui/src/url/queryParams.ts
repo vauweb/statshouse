@@ -1,4 +1,4 @@
-// Copyright 2023 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -16,8 +16,9 @@ import {
   QueryWhat,
   TAG_KEY,
   TagKey,
-} from '../api/enum';
-import { KeysTo, stringToTime, TIME_RANGE_KEYS_TO } from '../common/TimeRange';
+  TIME_RANGE_KEYS_TO,
+  TimeRangeKeysTo,
+} from '@/api/enum';
 import { dequal } from 'dequal/lite';
 import {
   deepClone,
@@ -29,8 +30,9 @@ import {
   toNumber,
   toString,
   uniqueArray,
-} from '../common/helpers';
-import { globalSettings } from '../common/settings';
+} from '@/common/helpers';
+import { globalSettings } from '@/common/settings';
+import { stringToTime } from '@/url2';
 
 export const filterInSep = '-';
 export const filterNotInSep = '~';
@@ -153,6 +155,7 @@ export type PlotParams = {
   eventsHide: string[];
   totalLine: boolean;
   filledGraph: boolean;
+  logScale: boolean;
 };
 
 export type GroupInfo = {
@@ -199,7 +202,7 @@ export type QueryParams = {
   live: boolean;
   theme?: string;
   dashboard?: DashboardParams;
-  timeRange: { to: number | KeysTo; from: number };
+  timeRange: { to: number | TimeRangeKeysTo; from: number };
   eventFrom: number;
   timeShifts: number[];
   tabNum: number;
@@ -260,7 +263,7 @@ export function getNewPlot(): PlotParams {
     customDescription: '',
     promQL: '',
     metricType: undefined,
-    what: globalSettings.default_metric_what.slice(),
+    what: globalSettings.default_metric_what?.slice() ?? [],
     customAgg: 0,
     groupBy: globalSettings.default_metric_group_by.slice(),
     filterIn: deepClone(globalSettings.default_metric_filter_in),
@@ -278,6 +281,7 @@ export function getNewPlot(): PlotParams {
     eventsHide: [],
     totalLine: false,
     filledGraph: true,
+    logScale: false,
   };
 }
 
@@ -429,7 +433,7 @@ export function encodeParams(value: QueryParams, defaultParams?: QueryParams): [
         !defaultParams?.dashboard?.groupInfo?.length
       )
     ) {
-      value.dashboard.groupInfo.forEach(({ name, show, count, size, description }, indexGroup) => {
+      value.dashboard.groupInfo.forEach(({ name, count, size, description }, indexGroup) => {
         const prefix = toGroupInfoPrefix(indexGroup) + '.';
         search.push([prefix + GET_PARAMS.dashboardGroupInfoName, name]);
         if (count) {
@@ -641,7 +645,7 @@ export function decodeParams(searchParams: [string, string][], defaultParams?: Q
 
   const groupInfo: GroupInfo[] = [];
 
-  let dashboard: DashboardParams = {
+  const dashboard: DashboardParams = {
     dashboard_id:
       toNumber(urlParams[GET_PARAMS.dashboardID]?.[searchParamsObjectValueSymbol]?.[0]) ??
       defaultParams?.dashboard?.dashboard_id ??
@@ -779,6 +783,7 @@ export function decodeParams(searchParams: [string, string][], defaultParams?: Q
 
     const totalLine = plotParams[GET_PARAMS.viewTotalLine]?.[searchParamsObjectValueSymbol]?.[0] === '1';
     const filledGraph = plotParams[GET_PARAMS.viewFilledGraph]?.[searchParamsObjectValueSymbol]?.[0] !== '0';
+    const logScale = plotParams[GET_PARAMS.viewLogScale]?.[searchParamsObjectValueSymbol]?.[0] === '1';
 
     plots.push({
       id,
@@ -805,6 +810,7 @@ export function decodeParams(searchParams: [string, string][], defaultParams?: Q
       eventsHide,
       totalLine,
       filledGraph,
+      logScale,
     });
   }
 
@@ -931,11 +937,4 @@ export function decodeParams(searchParams: [string, string][], defaultParams?: Q
     tagSync,
     variables,
   };
-}
-
-export function decodeDashboardIdParam(urlSearchParams: URLSearchParams) {
-  return toNumber(urlSearchParams.get(GET_PARAMS.dashboardID));
-}
-export function decodeDashboardVersionParam(urlSearchParams: URLSearchParams) {
-  return toNumber(urlSearchParams.get(GET_PARAMS.dashboardVersion));
 }

@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10,11 +10,12 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"math"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/vkcom/statshouse/internal/compress"
 	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/vkcom/statshouse/internal/format"
@@ -36,7 +37,7 @@ type ShardReplica struct {
 
 	timeSpreadDelta time.Duration // randomly spread bucket sending through second between sources/machines
 
-	client tlstatshouse.Client
+	clientField tlstatshouse.Client
 
 	// aggregator is considered live at start.
 	// then, if K of L last recent conveyor sends fail, it is considered dead and keepalive process started
@@ -48,72 +49,97 @@ type ShardReplica struct {
 	//      if spare is also dead, data is sent to original
 	lastSendSuccessful []bool
 
-	successTestConnectionDurationBucket      *BuiltInItemValue
-	aggTimeDiffBucket                        *BuiltInItemValue
-	noConnectionTestConnectionDurationBucket *BuiltInItemValue
-	failedTestConnectionDurationBucket       *BuiltInItemValue
-	rpcErrorTestConnectionDurationBucket     *BuiltInItemValue
-	timeoutTestConnectionDurationBucket      *BuiltInItemValue
-
 	stats *shardStat
+}
+
+func (s *ShardReplica) client() tlstatshouse.Client {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clientField
 }
 
 func (s *ShardReplica) FillStats(stats map[string]string) {
 	s.stats.fillStats(stats)
 }
 
-func (s *ShardReplica) sendSourceBucketCompressed(ctx context.Context, cbd compressedBucketData, historic bool, spare bool, ret *[]byte, shard *Shard) error {
+func (s *ShardReplica) sendSourceBucket2Compressed(ctx context.Context, cbd compressedBucketData, sendMoreBytes int, historic bool, spare bool, ret *string) error {
 	extra := rpc.InvokeReqExtra{FailIfNoConnection: true}
-	args := tlstatshouse.SendSourceBucket2Bytes{
-		Time:            cbd.time,
-		BuildCommit:     []byte(build.Commit()),
-		BuildCommitDate: s.agent.commitDateTag,
-		BuildCommitTs:   s.agent.commitTimestamp,
-		QueueSizeDisk:   math.MaxInt32,
-		QueueSizeMemory: math.MaxInt32,
-		OriginalSize:    binary.LittleEndian.Uint32(cbd.data),
-		CompressedData:  cbd.data[4:],
+	originalSize, compressedData, _ := compress.DeFrame(cbd.data)
+	args := tlstatshouse.SendSourceBucket2{
+		Time:           cbd.time,
+		BuildCommit:    build.Commit(),
+		BuildCommitTs:  build.CommitTimestamp(),
+		OriginalSize:   originalSize,
+		CompressedData: string(compressedData), // unsafe.String(unsafe.SliceData(compressedData), len(compressedData)), // we either convert to string here, or convert mappings in response to string there, this is less dangerous because 100% local
 	}
-	s.fillProxyHeaderBytes(&args.FieldsMask, &args.Header)
+	s.fillProxyHeader(&args.FieldsMask, &args.Header)
 	args.SetHistoric(historic)
 	args.SetSpare(spare)
 
-	sizeMem := shard.HistoricBucketsDataSizeMemory()
-	if sizeMem < math.MaxInt32 {
-		args.QueueSizeMemory = int32(sizeMem)
+	c := s.client()
+	if c.Address != "" { // Skip sending to "empty" shards. Provides fast way to answer "what if there were more shards" question
+		//if err := s.client.SendSourceBucket2(ctx, args, &extra, ret); err != nil {
+		//	return err
+		//}
+		var err error
+		// copy SendSourceBucket2 method to add more bytes
+		req := c.Client.GetRequest()
+		req.ActorID = c.ActorID
+		req.FunctionName = "statshouse.sendSourceBucket2"
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+		rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+		req.Body, err = args.WriteBoxedGeneral(req.Body)
+		if err != nil {
+			return fmt.Errorf("failed to serialize statshouse.sendSourceBucket2 request: %w", err)
+		}
+		if sendMoreBytes > 0 {
+			if sendMoreBytes > data_model.MaxSendMoreData {
+				sendMoreBytes = data_model.MaxSendMoreData
+			}
+			req.Body = append(req.Body, make([]byte, sendMoreBytes)...)
+		}
+		resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+		if resp != nil {
+			extra.ResponseExtra = resp.Extra
+		}
+		defer c.Client.PutResponse(resp)
+		if err != nil {
+			return fmt.Errorf("statshouse.sendSourceBucket request to %s://%d@%s failed: %w", c.Network, c.ActorID, c.Address, err)
+		}
+		if ret != nil {
+			if _, err = args.ReadResult(resp.Body, ret); err != nil {
+				return fmt.Errorf("failed to deserialize statshouse.sendSourceBucket2 response from %s://%d@%s: %w", c.Network, c.ActorID, c.Address, err)
+			}
+		}
+		return nil
 	}
-	sizeDiskTotal, sizeDiskUnsent := shard.HistoricBucketsDataSizeDisk()
-	if sizeDiskTotal < math.MaxInt32 {
-		args.QueueSizeDisk = int32(sizeDiskTotal)
+	return nil
+}
+
+func (s *ShardReplica) sendSourceBucket3Compressed(ctx context.Context, cbd compressedBucketData, sendMoreBytes int, historic bool, spare bool, response *tlstatshouse.SendSourceBucket3Response) error {
+	extra := rpc.InvokeReqExtra{FailIfNoConnection: true}
+	originalSize, compressedData, _ := compress.DeFrame(cbd.data)
+	args := tlstatshouse.SendSourceBucket3{
+		Time:           cbd.time,
+		BuildCommit:    build.Commit(),
+		BuildCommitTs:  build.CommitTimestamp(),
+		OriginalSize:   originalSize,
+		CompressedData: string(compressedData), // unsafe.String(unsafe.SliceData(compressedData), len(compressedData)), // we either convert to string here, or convert mappings in response to string there, this is less dangerous because 100% local
 	}
-	if sizeDiskUnsent < math.MaxInt32 {
-		args.SetQueueSizeDiskUnsent(int32(sizeDiskUnsent))
-	} else {
-		args.SetQueueSizeDiskUnsent(math.MaxInt32)
+	if sendMoreBytes > 0 {
+		if sendMoreBytes > data_model.MaxSendMoreData {
+			sendMoreBytes = data_model.MaxSendMoreData
+		}
+		args.SendMoreBytes = string(make([]byte, sendMoreBytes))
 	}
-	sizeDiskSumTotal, sizeDiskSumUnsent := s.agent.HistoricBucketsDataSizeDiskSum()
-	if sizeDiskSumTotal < math.MaxInt32 {
-		args.SetQueueSizeDiskSum(int32(sizeDiskSumTotal))
-	} else {
-		args.SetQueueSizeDiskSum(math.MaxInt32)
-	}
-	if sizeDiskSumUnsent < math.MaxInt32 {
-		args.SetQueueSizeDiskSumUnsent(int32(sizeDiskSumUnsent))
-	} else {
-		args.SetQueueSizeDiskSumUnsent(math.MaxInt32)
-	}
-	sizeMemSum := s.agent.HistoricBucketsDataSizeMemorySum()
-	if sizeMemSum < math.MaxInt32 {
-		args.SetQueueSizeMemorySum(int32(sizeMemSum))
-	} else {
-		args.SetQueueSizeMemorySum(math.MaxInt32)
-	}
-	if s.agent.envLoader != nil {
-		env := s.agent.envLoader.Load()
-		args.SetOwner([]byte(env.Owner))
-	}
-	if s.client.Address != "" { // Skip sending to "empty" shards. Provides fast way to answer "what if there were more shards" question
-		if err := s.client.SendSourceBucket2Bytes(ctx, args, &extra, ret); err != nil {
+	s.fillProxyHeader(&args.FieldsMask, &args.Header)
+	args.SetHistoric(historic)
+	args.SetSpare(spare)
+
+	client := s.client()
+	if client.Address != "" { // Skip sending to "empty" shards. Provides fast way to answer "what if there were more shards" question
+		if err := client.SendSourceBucket3(ctx, args, &extra, response); err != nil {
 			return err
 		}
 	}
@@ -128,7 +154,8 @@ func (s *ShardReplica) doTestConnection(ctx context.Context) (aggTimeDiff time.D
 	var ret []byte
 
 	start := time.Now()
-	err = s.client.TestConnection2Bytes(ctx, args, &extra, &ret)
+	client := s.client()
+	err = client.TestConnection2Bytes(ctx, args, &extra, &ret)
 	finish := time.Now()
 	duration = finish.Sub(start)
 	if err == nil && len(ret) >= 8 {
@@ -151,6 +178,12 @@ func (s *ShardReplica) fillProxyHeaderBytes(fieldsMask *uint32, header *tlstatsh
 		ComponentTag:      s.agent.componentTag,
 		BuildArch:         s.agent.buildArchTag,
 	}
+	if s.agent.envLoader != nil {
+		e := s.agent.envLoader.Load()
+		if len(e.Owner) != 0 {
+			header.SetOwner([]byte(e.Owner), fieldsMask)
+		}
+	}
 	data_model.SetProxyHeaderBytesStagingLevel(header, fieldsMask, s.agent.stagingLevel)
 }
 
@@ -161,6 +194,12 @@ func (s *ShardReplica) fillProxyHeader(fieldsMask *uint32, header *tlstatshouse.
 		HostName:          string(s.agent.hostName),
 		ComponentTag:      s.agent.componentTag,
 		BuildArch:         s.agent.buildArchTag,
+	}
+	if s.agent.envLoader != nil {
+		e := s.agent.envLoader.Load()
+		if len(e.Owner) != 0 {
+			header.SetOwner(e.Owner, fieldsMask)
+		}
 	}
 	data_model.SetProxyHeaderStagingLevel(header, fieldsMask, s.agent.stagingLevel)
 }
@@ -177,45 +216,31 @@ func (s *ShardReplica) goTestConnectionLoop() {
 		aggTimeDiff, duration, err := s.doTestConnection(ctx)
 		cancel()
 		seconds := duration.Seconds()
-		if err == nil {
-			s.successTestConnectionDurationBucket.AddValueCounter(seconds, 1)
-			if aggTimeDiff != 0 {
-				s.aggTimeDiffBucket.AddValueCounter(aggTimeDiff.Seconds(), 1)
-			}
-		} else {
-			var rpcError rpc.Error
+		statusTag := int32(format.TagOKConnection)
+		rpcCodeTag := int32(0)
+		if err != nil {
+			var rpcError *rpc.Error
 			if errors.Is(err, rpc.ErrClientConnClosedNoSideEffect) || errors.Is(err, rpc.ErrClientConnClosedSideEffect) || errors.Is(err, rpc.ErrClientClosed) {
-				s.noConnectionTestConnectionDurationBucket.AddValueCounter(seconds, 1)
-			} else if errors.Is(err, &rpcError) {
-				s.rpcErrorTestConnectionDurationBucket.AddValueCounter(seconds, 1)
+				statusTag = format.TagNoConnection
+			} else if errors.As(err, &rpcError) {
+				statusTag = format.TagRPCError
+				rpcCodeTag = rpcError.Code
 			} else if errors.Is(err, context.DeadlineExceeded) {
-				s.timeoutTestConnectionDurationBucket.AddValueCounter(seconds, 1)
+				statusTag = format.TagTimeoutError
 			} else {
-				s.failedTestConnectionDurationBucket.AddValueCounter(seconds, 1)
+				statusTag = format.TagOtherError
+			}
+		}
+		s.agent.AddValueCounter(0, format.BuiltinMetricMetaSrcTestConnection,
+			[]int32{0, s.agent.componentTag, statusTag, rpcCodeTag, format.AggShardTag: s.ShardKey, format.AggReplicaTag: s.ReplicaKey},
+			seconds, 1)
+		if aggTimeDiff != 0 { // never in case of err != nil
+			s.agent.AddValueCounter(0, format.BuiltinMetricMetaAgentAggregatorTimeDiff,
+				[]int32{0, s.agent.componentTag, format.AggShardTag: s.ShardKey, format.AggReplicaTag: s.ReplicaKey},
+				aggTimeDiff.Seconds(), 1)
+			if aggTimeDiff.Abs() > 2*time.Second {
+				s.agent.logF("WARNING: time difference with aggregator is %v, more then 2 seconds, agent will be working poorly", aggTimeDiff)
 			}
 		}
 	}
-}
-
-func (s *ShardReplica) InitBuiltInMetric() {
-	// Unfortunately we do not know aggregator host tag.
-	s.successTestConnectionDurationBucket = s.agent.CreateBuiltInItemValue(data_model.AggKey(0,
-		format.BuiltinMetricIDSrcTestConnection,
-		[format.MaxTags]int32{0, s.agent.componentTag, format.TagOKConnection}, 0, s.ShardKey, s.ReplicaKey), format.BuiltinMetricMetaSrcTestConnection)
-	s.noConnectionTestConnectionDurationBucket = s.agent.CreateBuiltInItemValue(data_model.AggKey(0,
-		format.BuiltinMetricIDSrcTestConnection,
-		[format.MaxTags]int32{0, s.agent.componentTag, format.TagNoConnection}, 0, s.ShardKey, s.ReplicaKey), format.BuiltinMetricMetaSrcTestConnection)
-	s.failedTestConnectionDurationBucket = s.agent.CreateBuiltInItemValue(data_model.AggKey(0,
-		format.BuiltinMetricIDSrcTestConnection,
-		[format.MaxTags]int32{0, s.agent.componentTag, format.TagOtherError}, 0, s.ShardKey, s.ReplicaKey), format.BuiltinMetricMetaSrcTestConnection)
-	s.rpcErrorTestConnectionDurationBucket = s.agent.CreateBuiltInItemValue(data_model.AggKey(0,
-		format.BuiltinMetricIDSrcTestConnection,
-		[format.MaxTags]int32{0, s.agent.componentTag, format.TagRPCError}, 0, s.ShardKey, s.ReplicaKey), format.BuiltinMetricMetaSrcTestConnection)
-	s.timeoutTestConnectionDurationBucket = s.agent.CreateBuiltInItemValue(data_model.AggKey(0,
-		format.BuiltinMetricIDSrcTestConnection,
-		[format.MaxTags]int32{0, s.agent.componentTag, format.TagTimeoutError}, 0, s.ShardKey, s.ReplicaKey), format.BuiltinMetricMetaSrcTestConnection)
-
-	s.aggTimeDiffBucket = s.agent.CreateBuiltInItemValue(data_model.AggKey(0,
-		format.BuiltinMetricIDAgentAggregatorTimeDiff,
-		[format.MaxTags]int32{0, s.agent.componentTag}, 0, s.ShardKey, s.ReplicaKey), format.BuiltinMetricMetaAgentAggregatorTimeDiff)
 }

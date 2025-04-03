@@ -1,3 +1,9 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import uPlot from 'uplot';
 
 function getMinDeltaYValue(
@@ -16,13 +22,13 @@ function getMinDeltaYValue(
   }, Infinity);
 }
 
-export function dataIdxNearest(self: uPlot, seriesIdx: number, hoveredIdx: number): number {
+export function dataIdxNearest(self: uPlot, _seriesIdx: number, hoveredIdx: number): number | null {
   const max = self.scales['x']?.max ?? 0;
   const min = self.scales['x']?.min ?? 0;
   const yCursor = self.cursor.top ?? 0;
   const yCursorValue = self.posToVal(yCursor, 'y');
   const timeLine = self.data[0] ?? [];
-  const onlyLines = self.data.filter((l, indexLine) => self.series[indexLine].show).slice(1);
+  const onlyLines = self.data.filter((_l, indexLine) => self.series[indexLine]?.show).slice(1);
   const length = self.data[0]?.length ?? 0;
   const delta = Math.round(length * 0.02); //delta 2%;
   const deltaY = self.bbox.height * 0.01; //deltaY 1%;
@@ -55,6 +61,5 @@ export function dataIdxNearest(self: uPlot, seriesIdx: number, hoveredIdx: numbe
     return resIdx;
   }
   // null for not find idx
-  // @ts-ignore
   return null;
 }

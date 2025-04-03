@@ -1,6 +1,12 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import type { TimeRange } from './queryParams';
-import { toNumber } from 'common/helpers';
-import { TIME_RANGE_KEYS_TO, type TimeRangeKeysTo, toTimeRangeKeysTo } from 'api/enum';
+import { toNumber } from '@/common/helpers';
+import { TIME_RANGE_KEYS_TO, type TimeRangeKeysTo, toTimeRangeKeysTo } from '@/api/enum';
 
 export function toTimeStamp(time: number) {
   return Math.floor(time / 1000);
@@ -18,23 +24,27 @@ export function getNow(now?: number): number {
 }
 
 export function getEndDay(now?: number) {
-  let time = toDateTime(now);
+  const time = toDateTime(now);
   time.setHours(23, 59, 59, 0);
   return toTimeStamp(+time);
 }
 
 export function getEndWeek(now?: number) {
-  let time = toDateTime(now);
+  const time = toDateTime(now);
   time.setHours(23, 59, 59, 0);
   time.setDate(time.getDate() - (time.getDay() || 7) + 7);
   return toTimeStamp(+time);
 }
 
+export function stringToTime(str: string) {
+  return toNumber(str) || toTimeRangeKeysTo(str);
+}
+
 export function readTimeRange(from: unknown, to: unknown): TimeRange {
   const timeNow = getNow();
-  let urlTo = toNumber(to) || toTimeRangeKeysTo(to, TIME_RANGE_KEYS_TO.default); //?
+  let urlTo = toNumber(to) || toTimeRangeKeysTo(to, TIME_RANGE_KEYS_TO.default);
   let timeTo;
-  let timeAbsolute = (typeof urlTo === 'number' && urlTo > 0) || urlTo === TIME_RANGE_KEYS_TO.default;
+  const timeAbsolute = (typeof urlTo === 'number' && urlTo > 0) || urlTo === TIME_RANGE_KEYS_TO.default;
   switch (urlTo) {
     case TIME_RANGE_KEYS_TO.EndDay:
       timeTo = getEndDay(timeNow);

@@ -165,16 +165,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/MetricInfo"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ]
+                  "$ref": "#/components/schemas/GetMetricInfoResp"
                 }
               }
             }
@@ -764,7 +755,11 @@
           "timestamp",
           "timestamp_local",
           "ip",
-          "ip_bswap"
+          "ip_bswap",
+          "lexenc_float",
+          "float",
+          "int64",
+          "uint64"
         ]
       },
       "MetricMetaTag": {
@@ -778,7 +773,8 @@
             "type": "string"
           },
           "raw": {
-            "type": "boolean"
+            "type": "boolean",
+            "deprecated": true
           },
           "raw_kind": {
             "$ref": "#/components/schemas/MetricMetaTagRawKind"
@@ -820,6 +816,10 @@
             }
           },
           "visible": {
+            "type": "boolean",
+            "deprecated": true
+          },
+          "disable": {
             "type": "boolean"
           },
           "kind": {
@@ -905,16 +905,37 @@
       "GetMetricsListResp": {
         "type": "object",
         "additionalProperties": false,
-        "properties": {
-          "metrics": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/metricShortInfo"
-            }
+        "properties":{
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "metrics": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/metricShortInfo"
+                }
+              }
+            },
+            "required": [
+              "metrics"
+            ]
           }
         },
         "required": [
-          "metrics"
+          "data"
+        ]
+      },
+      "GetMetricInfoResp": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MetricInfo"
+          }
+        },
+        "required": [
+          "data"
         ]
       },
       "queryFn": {
@@ -1147,19 +1168,28 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "tag_values": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/MetricTagValueInfo"
-            }
-          },
-          "tag_values_more": {
-            "type": "boolean"
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "tag_values": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MetricTagValueInfo"
+                }
+              },
+              "tag_values_more": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "tag_values",
+              "tag_values_more"
+            ]
           }
         },
         "required": [
-          "tag_values",
-          "tag_values_more"
+          "data"
         ]
       },
       "dashboardShortInfo": {

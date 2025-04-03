@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -30,14 +30,14 @@ type worker struct {
 	sh2           *agent.Agent
 	metricStorage *metajournal.MetricsStorage
 	mapper        *mapping.Mapper
-	autoCreate    *mapping.AutoCreate
+	autoCreate    *data_model.AutoCreate
 	logPackets    func(format string, args ...interface{})
 
 	floodTimeMu            sync.Mutex
 	floodTimeHandlePkgFail time.Time
 }
 
-func startWorker(sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache, ac *mapping.AutoCreate, suffix string, logPackets func(format string, args ...interface{})) *worker {
+func startWorker(sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache, ac *data_model.AutoCreate, suffix string, logPackets func(format string, args ...interface{})) *worker {
 	w := &worker{
 		sh2:           sh2,
 		metricStorage: metricStorage,
@@ -48,32 +48,49 @@ func startWorker(sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, pm
 	return w
 }
 
-// func (w *worker) wait() {
-//	w.mapper.Stop()
-// }
-
 func (w *worker) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader, done bool) {
 	if w.logPackets != nil {
 		w.logPackets("Parsed metric: %s\n", args.MetricBytes.String())
 	}
+	{ // duplication code - TODO - remove after conveyor v3 fully works
+		const dupSuffix = "_statshouse_dup"
+		originalNameLen := len(args.MetricBytes.Name)
+		dupName := append(args.MetricBytes.Name, dupSuffix...)
+		args.MetricBytes.Name = dupName[:originalNameLen] // reuse, if allocated above
+		if dupMeta := w.metricStorage.GetMetaMetricByNameBytes(dupName); dupMeta != nil && !dupMeta.Disable {
+			w.fillTime(args, &h)
+			h.MetricMeta = dupMeta
+			h.Key.Metric = dupMeta.MetricID
+			// mapping tags code below either changes args but in a way second call is NOP, or returns error
+			w.sh2.Map(args, &h, nil, true) // no autocreate for duplicates
+			w.sh2.ApplyMetric(*args.MetricBytes, h, format.TagValueIDSrcIngestionStatusOKDup, args.Scratch)
+			h = data_model.MappedMetricHeader{}
+		}
+	}
 	w.fillTime(args, &h)
 	metaOk := w.fillMetricMeta(args, &h)
-	if metaOk {
-		h.Key.Metric = h.MetricMeta.MetricID
-		if !h.MetricMeta.Visible {
-			h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMetricInvisible
+	conveyorV3 := w.sh2.UseConveyorV3() || (h.MetricMeta != nil && h.MetricMeta.PipelineVersion == 3)
+	if conveyorV3 {
+		if metaOk {
+			w.sh2.Map(args, &h, w.autoCreate, false)
+		} else {
+			w.sh2.MapEnvironment(args.MetricBytes, &h)
 		}
-		done = w.mapper.Map(args, h.MetricMeta, &h)
-	} else {
-		w.mapper.MapEnvironment(args.MetricBytes, &h)
 		done = true
+	} else {
+		if metaOk {
+			done = w.mapper.Map(args, h.MetricMeta, &h)
+		} else {
+			w.mapper.MapEnvironment(args.MetricBytes, &h)
+			done = true
+		}
 	}
-
 	if done {
 		if w.logPackets != nil {
 			w.printMetric("cached", *args.MetricBytes, h)
 		}
-		w.sh2.ApplyMetric(*args.MetricBytes, h, format.TagValueIDSrcIngestionStatusOKCached)
+		w.sh2.TimingsMapping.AddValueCounter(time.Since(h.ReceiveTime).Seconds(), 1)
+		w.sh2.ApplyMetric(*args.MetricBytes, h, format.TagValueIDSrcIngestionStatusOKCached, args.Scratch)
 	}
 	return h, done
 }
@@ -94,11 +111,21 @@ func (w *worker) fillMetricMeta(args data_model.HandlerArgs, h *data_model.Mappe
 	metricMeta := w.metricStorage.GetMetaMetricByNameBytes(metric.Name)
 	if metricMeta != nil {
 		h.MetricMeta = metricMeta
+		h.Key.Metric = metricMeta.MetricID
+		if metricMeta.Disable {
+			h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMetricDisabled
+			return false
+		}
 		return true
 	}
-	metricMeta = format.BuiltinMetricAllowedToReceive[string(metric.Name)]
+	metricMeta = format.BuiltinMetricByName[string(metric.Name)]
 	if metricMeta != nil {
 		h.MetricMeta = metricMeta
+		h.Key.Metric = metricMeta.MetricID
+		if !metricMeta.BuiltinAllowedToReceive {
+			h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMetricBuiltin
+			return false
+		}
 		return true
 	}
 
@@ -124,7 +151,8 @@ func (w *worker) handleMappedMetricUnlocked(m tlstatshouse.MetricBytes, h data_m
 	if w.logPackets != nil {
 		w.printMetric("uncached", m, h)
 	}
-	w.sh2.ApplyMetric(m, h, format.TagValueIDSrcIngestionStatusOKUncached)
+	w.sh2.TimingsMappingSlow.AddValueCounter(time.Since(h.ReceiveTime).Seconds(), 1)
+	w.sh2.ApplyMetric(m, h, format.TagValueIDSrcIngestionStatusOKUncached, nil) // will be allocation for resolution hash, but this is slow path
 }
 
 func (w *worker) HandleParseError(pkt []byte, err error) {

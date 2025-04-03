@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -16,7 +16,7 @@ import (
 )
 
 type Mapper struct {
-	pipeline *mapPipeline
+	pipelineV2 *mapPipelineV2
 }
 
 func NewTagsCache(loader pcache.LoaderFunc, suffix string, dc *pcache.DiskCache) *pcache.Cache {
@@ -38,33 +38,32 @@ func NewTagsCache(loader pcache.LoaderFunc, suffix string, dc *pcache.DiskCache)
 	return result
 }
 
-func NewMapper(suffix string, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache, ac *AutoCreate, metricMapQueueSize int, mapCallback data_model.MapCallbackFunc) *Mapper {
+func NewMapper(suffix string, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache, ac *data_model.AutoCreate, metricMapQueueSize int, mapCallback data_model.MapCallbackFunc) *Mapper {
 	tagValue := NewTagsCache(pmcLoader, suffix, dc)
 
 	return &Mapper{
-		pipeline: newMapPipeline(mapCallback, tagValue, ac, data_model.MappingMaxMetricsInQueue, metricMapQueueSize),
+		pipelineV2: newMapPipelineV2(mapCallback, tagValue, ac, data_model.MappingMaxMetricsInQueue, metricMapQueueSize),
 	}
 }
 
 func (m *Mapper) TagValueDiskCacheEmpty() bool {
-	return m.pipeline.tagValue.DiskCacheEmpty()
+	return m.pipelineV2.tagValue.DiskCacheEmpty()
 }
 
 func (m *Mapper) SetBootstrapValue(now time.Time, key string, v pcache.Value, ttl time.Duration) error {
-	return m.pipeline.tagValue.SetBootstrapValue(now, key, v, ttl)
+	return m.pipelineV2.tagValue.SetBootstrapValue(now, key, v, ttl)
 }
 
 func (m *Mapper) Stop() {
-	m.pipeline.stop()
+	m.pipelineV2.stop()
 }
 
-// cb.MetricInfo must be set from journal. If nil, will lookup allowed built-in metric, otherwise set ingestion status not found
+// Map chooses the appropriate pipeline based on PipelineVersion
 func (m *Mapper) Map(args data_model.HandlerArgs, metricInfo *format.MetricMetaValue, h *data_model.MappedMetricHeader) (done bool) {
-	return m.pipeline.Map(args, metricInfo, h)
+	return m.pipelineV2.Map(args, metricInfo, h)
 }
 
-// We wish to know which environment generates 'metric not found' events and other errors
-// so we call it even if we had an error
+// MapEnvironment chooses the appropriate pipeline based on PipelineVersion
 func (m *Mapper) MapEnvironment(metric *tlstatshouse.MetricBytes, h *data_model.MappedMetricHeader) {
-	m.pipeline.MapEnvironment(metric, h)
+	m.pipelineV2.MapEnvironment(metric, h)
 }

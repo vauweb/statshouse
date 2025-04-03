@@ -1,19 +1,18 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo } from 'react';
+import { memo } from 'react';
 import { ButtonToggleLiveMode } from '../Plot/PlotNavigate/ButtonToggleLiveMode';
-import { ButtonToggleTvMode } from './ButtonToggleTvMode';
-import { TvModeInterval } from './TvModeInterval';
+import { ButtonToggleTvMode, TvModeInterval } from '@/components2';
 
 export type TvModePanelProps = {
   className?: string;
 };
 
-export function _TvModePanel({ className }: TvModePanelProps) {
+export const TvModePanel = memo(function TvModePanel({ className }: TvModePanelProps) {
   return (
     <div className={className}>
       <div className="input-group input-group-sm">
@@ -23,6 +22,4 @@ export function _TvModePanel({ className }: TvModePanelProps) {
       </div>
     </div>
   );
-}
-
-export const TvModePanel = memo(_TvModePanel);
+});

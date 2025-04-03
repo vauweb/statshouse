@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -74,7 +74,7 @@ export function EditFormCreate() {
 }
 
 function useSubmitCreate(name: string) {
-  let navigate = useNavigate();
+  const navigate = useNavigate();
   const [isRunning, setRunning] = React.useState<boolean>(false);
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<string | null>(null);
@@ -95,6 +95,7 @@ function useSubmitCreate(name: string) {
       resolution: 1,
       withPercentiles: false,
       visible: true,
+      disable: false,
       tags: [
         { name: '', alias: 'environment', customMapping: [] }, // env
         ...new Array(maxTagsSize - 1).fill({}).map(() => getDefaultTag()),

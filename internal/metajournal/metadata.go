@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -15,7 +15,10 @@ import (
 	"math"
 	"time"
 
+	"github.com/mailru/easyjson"
 	"go4.org/mem"
+
+	"github.com/vkcom/statshouse/internal/data_model"
 
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/vkcom/statshouse/internal/format"
@@ -29,6 +32,8 @@ const (
 )
 
 var errorInvalidUserRequest = errors.New("")
+var errInvalidKeyValue = errors.New("key value is invalid")
+var errEmptyStringMapping = errors.New("empty string mapping is special should never be created")
 
 type MetricMetaLoader struct {
 	loadTimeout time.Duration
@@ -37,6 +42,21 @@ type MetricMetaLoader struct {
 
 func IsUserRequestError(err error) bool {
 	return errors.Is(err, errorInvalidUserRequest)
+}
+
+func wrapSaveEntityError(err error) error {
+	var rpcErr = &rpc.Error{}
+	if errors.As(err, &rpcErr) {
+		switch rpcErr.Code {
+		case data_model.ErrEntityInvalidVersion.Code:
+			return errors.Join(errorInvalidUserRequest, fmt.Errorf(data_model.ErrEntityInvalidVersion.Description))
+		case data_model.ErrEntityExists.Code:
+			return errors.Join(errorInvalidUserRequest, fmt.Errorf(data_model.ErrEntityExists.Description))
+		case data_model.ErrEntityNotExists.Code:
+			return errors.Join(errorInvalidUserRequest, fmt.Errorf(data_model.ErrEntityNotExists.Description))
+		}
+	}
+	return err
 }
 
 func NewMetricMetaLoader(client *tlmetadata.Client, loadTimeout time.Duration) *MetricMetaLoader {
@@ -71,7 +91,7 @@ func (l *MetricMetaLoader) SaveDashboard(ctx context.Context, value format.Dashb
 	event := tlmetadata.Event{}
 	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
 	if err != nil {
-		return format.DashboardMeta{}, fmt.Errorf("failed to edit metric: %w", err)
+		return format.DashboardMeta{}, wrapSaveEntityError(err)
 	}
 	if event.Id < math.MinInt32 || event.Id > math.MaxInt32 {
 		return format.DashboardMeta{}, fmt.Errorf("dashboard ID %d assigned by metaengine does not fit into int32 for dashboard %q", event.Id, event.Name)
@@ -100,7 +120,7 @@ func (l *MetricMetaLoader) SaveMetricsGroup(ctx context.Context, value format.Me
 		return g, fmt.Errorf("invalid group name %w: %q", errorInvalidUserRequest, value.Name)
 	}
 
-	groupBytes, err := json.Marshal(value)
+	groupBytes, err := easyjson.Marshal(value)
 	if err != nil {
 		return format.MetricsGroup{}, fmt.Errorf("faield to serialize group: %w", err)
 	}
@@ -121,12 +141,12 @@ func (l *MetricMetaLoader) SaveMetricsGroup(ctx context.Context, value format.Me
 	event := tlmetadata.Event{}
 	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
 	if err != nil {
-		return format.MetricsGroup{}, fmt.Errorf("failed to edit group: %w", err)
+		return format.MetricsGroup{}, wrapSaveEntityError(err)
 	}
 	if event.Id < math.MinInt32 || event.Id > math.MaxInt32 {
 		return g, fmt.Errorf("group ID %d assigned by metaengine does not fit into int32 for group %q", event.Id, event.Name)
 	}
-	err = json.Unmarshal([]byte(event.Data), &g)
+	err = easyjson.Unmarshal([]byte(event.Data), &g)
 	if err != nil {
 		return format.MetricsGroup{}, fmt.Errorf("failed to deserialize json group: %w", err)
 	}
@@ -146,7 +166,7 @@ func (l *MetricMetaLoader) SaveNamespace(ctx context.Context, value format.Names
 		return g, fmt.Errorf("invalid namespace name %w: %q", errorInvalidUserRequest, value.Name)
 	}
 
-	namespaceBytes, err := json.Marshal(value)
+	namespaceBytes, err := easyjson.Marshal(value)
 	if err != nil {
 		return format.NamespaceMeta{}, fmt.Errorf("faield to serialize namespace: %w", err)
 	}
@@ -167,12 +187,12 @@ func (l *MetricMetaLoader) SaveNamespace(ctx context.Context, value format.Names
 	event := tlmetadata.Event{}
 	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
 	if err != nil {
-		return format.NamespaceMeta{}, fmt.Errorf("failed to edit namespace: %w", err)
+		return format.NamespaceMeta{}, wrapSaveEntityError(err)
 	}
 	if event.Id < math.MinInt32 || event.Id > math.MaxInt32 {
 		return g, fmt.Errorf("namespace ID %d assigned by metaengine does not fit into int32 for group %q", event.Id, event.Name)
 	}
-	err = json.Unmarshal([]byte(event.Data), &g)
+	err = easyjson.Unmarshal([]byte(event.Data), &g)
 	if err != nil {
 		return format.NamespaceMeta{}, fmt.Errorf("failed to deserialize json namespace: %w", err)
 	}
@@ -189,7 +209,7 @@ func (l *MetricMetaLoader) GetMetric(ctx context.Context, id int64, version int6
 		return ret, err
 	}
 	m := format.MetricMetaValue{}
-	err = json.Unmarshal([]byte(entity.Data), &m)
+	err = easyjson.Unmarshal([]byte(entity.Data), &m)
 	if err != nil {
 		return ret, err
 	}
@@ -239,9 +259,9 @@ func (l *MetricMetaLoader) GetShortHistory(ctx context.Context, id int64) (ret t
 func (l *MetricMetaLoader) SaveMetric(ctx context.Context, value format.MetricMetaValue, metadata string) (m format.MetricMetaValue, _ error) {
 	create := value.MetricID == 0
 
-	metricBytes, err := format.MetricJSON(&value)
+	metricBytes, err := easyjson.Marshal(value)
 	if err != nil {
-		return m, err
+		return m, fmt.Errorf("failed to serialize metric: %w", err)
 	}
 	editMetricReq := tlmetadata.EditEntitynew{
 		Event: tlmetadata.Event{
@@ -260,19 +280,13 @@ func (l *MetricMetaLoader) SaveMetric(ctx context.Context, value format.MetricMe
 	event := tlmetadata.Event{}
 	err = l.client.EditEntitynew(ctx, editMetricReq, nil, &event)
 	if err != nil {
-		return m, fmt.Errorf("failed to edit metric: %w", err)
+		return m, wrapSaveEntityError(err)
 	}
-	if event.Id < math.MinInt32 || event.Id > math.MaxInt32 {
-		return m, fmt.Errorf("metric ID %d assigned by metaengine does not fit into int32 for metric %q", event.Id, event.Name)
-	}
-	err = json.Unmarshal([]byte(event.Data), &m)
+	mm, err := MetricMetaFromEvent(event)
 	if err != nil {
 		return m, fmt.Errorf("failed to deserialize json metric: %w", err)
 	}
-	m.Version = event.Version
-	m.Name = event.Name
-	m.UpdateTime = event.UpdateTime
-	m.MetricID = int32(event.Id)
+	m = *mm
 	return m, nil
 }
 
@@ -308,10 +322,10 @@ func (l *MetricMetaLoader) PutTagMapping(ctx context.Context, tag string, id int
 
 func (l *MetricMetaLoader) GetTagMapping(ctx context.Context, tag string, metricName string, create bool) (int32, int32, time.Duration, error) {
 	if tag == "" {
-		return 0, format.TagValueIDAggMappingCreatedStatusErrorInvariant, pmcBigNegativeCacheTTL, fmt.Errorf("empty string mapping is special should never be created")
+		return 0, format.TagValueIDAggMappingCreatedStatusErrorInvariant, pmcBigNegativeCacheTTL, errEmptyStringMapping
 	}
 	if !format.ValidStringValue(mem.S(tag)) {
-		return 0, format.TagValueIDAggMappingCreatedStatusErrorInvalidValue, pmcBigNegativeCacheTTL, fmt.Errorf("key value is invalid")
+		return 0, format.TagValueIDAggMappingCreatedStatusErrorInvalidValue, pmcBigNegativeCacheTTL, errInvalidKeyValue
 	}
 
 	ctx, cancelFunc := context.WithTimeout(ctx, l.loadTimeout)
@@ -419,7 +433,7 @@ func (l *MetricMetaLoader) SaveBuiltInGroup(ctx context.Context, value format.Me
 	if err := value.RestoreCachedInfo(true); err != nil {
 		return g, err
 	}
-	groupBytes, err := json.Marshal(value)
+	groupBytes, err := easyjson.Marshal(value)
 	if err != nil {
 		return g, fmt.Errorf("faield to serialize group: %w", err)
 	}
@@ -443,7 +457,7 @@ func (l *MetricMetaLoader) SaveBuiltInGroup(ctx context.Context, value format.Me
 	if err != nil {
 		return g, fmt.Errorf("failed to edit group: %w", err)
 	}
-	err = json.Unmarshal([]byte(event.Data), &g)
+	err = easyjson.Unmarshal([]byte(event.Data), &g)
 	if err != nil {
 		return g, fmt.Errorf("failed to deserialize json group: %w", err)
 	}
@@ -463,7 +477,7 @@ func (l *MetricMetaLoader) SaveBuiltinNamespace(ctx context.Context, value forma
 	if !ok {
 		return g, fmt.Errorf("invalid buildin namespace id: %d", value.ID)
 	}
-	namespaceBytes, err := json.Marshal(value)
+	namespaceBytes, err := easyjson.Marshal(value)
 	if err != nil {
 		return format.NamespaceMeta{}, fmt.Errorf("faield to serialize namespace: %w", err)
 	}
@@ -487,7 +501,7 @@ func (l *MetricMetaLoader) SaveBuiltinNamespace(ctx context.Context, value forma
 	if event.Id < math.MinInt32 || event.Id > math.MaxInt32 {
 		return g, fmt.Errorf("namespace ID %d assigned by metaengine does not fit into int32 for group %q", event.Id, event.Name)
 	}
-	err = json.Unmarshal([]byte(event.Data), &g)
+	err = easyjson.Unmarshal([]byte(event.Data), &g)
 	if err != nil {
 		return format.NamespaceMeta{}, fmt.Errorf("failed to deserialize json namespace: %w", err)
 	}

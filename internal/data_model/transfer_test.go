@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -6,6 +6,7 @@
 package data_model
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -35,11 +36,12 @@ func genKey() *rapid.Generator[Key] {
 	return rapid.Custom(func(t *rapid.T) Key {
 		key := Key{
 			Timestamp: uint32(rapid.Int64Range(1, now).Draw(t, "timestamp")),
-			Metric:    int32(rapid.Int64Range(0, 1000).Draw(t, "metric")),
+			Metric:    int32(rapid.Int64Range(1, 1000).Draw(t, "metric")),
 		}
 
 		// Generate random tags
-		for i := range key.Tags {
+		tags := rapid.IntRange(0, len(key.Tags)-1).Draw(t, "tags")
+		for i := 0; i < tags; i++ {
 			key.Tags[i] = int32(rapid.Int64Range(0, 1000).Draw(t, "tag"))
 		}
 
@@ -117,13 +119,13 @@ func TestKeySizeEstimationEdgeCases(t *testing.T) {
 		{
 			name: "Single STag",
 			key: Key{
-				sTags: &sTagsHolder{[format.MaxTags]string{"test"}},
+				STags: [format.MaxTags]string{"test"},
 			},
 		},
 		{
 			name: "Single STag max length",
 			key: Key{
-				sTags: &sTagsHolder{[format.MaxTags]string{strings.Repeat("a", maxSTagLength)}},
+				STags: [format.MaxTags]string{strings.Repeat("a", maxSTagLength)},
 			},
 		},
 		{
@@ -132,12 +134,12 @@ func TestKeySizeEstimationEdgeCases(t *testing.T) {
 				Timestamp: 12345,
 				Metric:    67890,
 				Tags:      [format.MaxTags]int32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
-				sTags: func() *sTagsHolder {
-					var stags sTagsHolder
+				STags: func() [format.MaxTags]string {
+					var stags [format.MaxTags]string
 					for i := 0; i < format.MaxTags; i++ {
-						stags.values[i] = strings.Repeat("a", maxSTagLength)
+						stags[i] = strings.Repeat("a", maxSTagLength)
 					}
-					return &stags
+					return stags
 				}(),
 			},
 		},
@@ -151,12 +153,12 @@ func TestKeySizeEstimationEdgeCases(t *testing.T) {
 		{
 			name: "Mixed length STags",
 			key: Key{
-				sTags: func() *sTagsHolder {
-					var stags sTagsHolder
+				STags: func() [format.MaxTags]string {
+					var stags [format.MaxTags]string
 					for i := 0; i < format.MaxTags; i++ {
-						stags.values[i] = strings.Repeat("a", i)
+						stags[i] = strings.Repeat("a", i)
 					}
-					return &stags
+					return stags
 				}(),
 			},
 		},
@@ -199,6 +201,9 @@ func roundTripKey(key Key, bucketTimestamp uint32, newestTime uint32) Key {
 
 	// Convert MultiItemBytes back to Key
 	reconstructedKey, _ := KeyFromStatshouseMultiItem(multiItemBytes, bucketTimestamp, newestTime)
+	for i, str := range multiItemBytes.Skeys {
+		reconstructedKey.SetSTag(i, string(str))
+	}
 	return reconstructedKey
 }
 
@@ -235,7 +240,81 @@ func TestKeyFromStatshouseMultiItem(t *testing.T) {
 		// Verify key components
 		require.Equal(t, originalKey.Metric, reconstructedKey.Metric, "Metrics should match")
 		require.Equal(t, originalKey.Tags, reconstructedKey.Tags, "Tags should match")
-		require.Equal(t, originalKey.sTags, reconstructedKey.sTags, "STags should match")
+		require.Equal(t, originalKey.STags, reconstructedKey.STags, "STags should match")
 		timestampValid(t, originalKey.Timestamp, newestTime, reconstructedKey.Timestamp, bucketTimestamp)
 	})
+}
+
+func testValuePercentiles(t *testing.T, agentLegacy bool) {
+	const testPercentileCompression = 10000 // compression makes our test non-deterministic
+	// we pass nil rng because all hosts are the same and we should never throw dice
+	metricInfo := &format.MetricMetaValue{MetricID: 1, Name: "a", Kind: "value_p"}
+	require.NoError(t, metricInfo.RestoreCachedInfo())
+	require.True(t, metricInfo.HasPercentiles)
+	rapid.Check(t, func(t *rapid.T) {
+		mv := MultiValue{}
+		iter := rapid.IntRange(0, 4).Draw(t, "iter")
+		// if we miss some centroid, we'll skew the distribution enough to trigger test failure
+		allValues := map[float32]float64{} // v->c
+		for i := 0; i < iter; i++ {
+			values := rapid.SliceOfN(rapid.Float64Range(-math.MaxFloat32, math.MaxFloat32), 0, 10).Draw(t, "values")
+			for _, v := range values {
+				allValues[float32(v)] += 1
+			}
+			if rapid.Bool().Draw(t, "kind") {
+				if agentLegacy {
+					mv.ApplyValuesLegacy(nil, nil, values, float64(len(values)), float64(len(values)), TagUnionBytes{}, testPercentileCompression, metricInfo.HasPercentiles)
+				} else {
+					mv.ApplyValues(nil, nil, values, float64(len(values)), float64(len(values)), TagUnionBytes{}, testPercentileCompression, metricInfo.HasPercentiles)
+				}
+			} else {
+				for _, v := range values {
+					if agentLegacy {
+						mv.AddValueCounterHostPercentileLegacy(nil, v, 1, TagUnionBytes{}, testPercentileCompression)
+					} else {
+						mv.AddValueCounterHostPercentile(nil, v, 1, TagUnionBytes{}, testPercentileCompression)
+					}
+				}
+			}
+		}
+		tlSrc := tlstatshouse.MultiValue{}
+		var fm uint32
+		scratch := mv.MultiValueToTL(metricInfo, &tlSrc, 1, &fm, nil)
+		scratch = tlSrc.Write(scratch[:0], fm)
+		tlDst := tlstatshouse.MultiValueBytes{}
+		_, err := tlDst.Read(scratch, fm)
+		require.NoError(t, err)
+		mv2 := MultiValue{}
+		mv2.MergeWithTL2(nil, &tlDst, fm, TagUnionBytes{}, testPercentileCompression)
+		// Verify key components
+		require.Equal(t, mv.Value, mv2.Value, "wrong value")
+		//if !hasPercentiles { - we decide we want separate test for that
+		//	require.True(t, mv2.ValueTDigest == nil, "must not have tdigest")
+		//	return
+		//}
+		if mv2.ValueTDigest == nil {
+			require.False(t, mv2.Value.ValueSet, "must not have tdigest")
+			return
+		}
+		for _, v := range mv2.ValueTDigest.Centroids() {
+			existing, ok := allValues[float32(v.Mean)]
+			if !ok {
+				t.Fatalf("centroid mean does not exist")
+			}
+			allValues[float32(v.Mean)] = existing - v.Weight
+		}
+		for _, v := range allValues {
+			if v != 0 {
+				t.Fatalf("wrong centroids")
+			}
+		}
+	})
+}
+
+func TestValuePercentiles(t *testing.T) {
+	testValuePercentiles(t, false)
+}
+
+func TestValuePercentilesAgentLegacy(t *testing.T) {
+	testValuePercentiles(t, true)
 }

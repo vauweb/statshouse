@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -14,7 +14,6 @@ import { ReactComponent as SVGCpu } from 'bootstrap-icons/icons/cpu.svg';
 import { ReactComponent as SVGBrightnessHighFill } from 'bootstrap-icons/icons/brightness-high-fill.svg';
 import { ReactComponent as SVGMoonStarsFill } from 'bootstrap-icons/icons/moon-stars-fill.svg';
 import { ReactComponent as SVGCircleHalf } from 'bootstrap-icons/icons/circle-half.svg';
-import { ReactComponent as SVGLightbulbFill } from 'bootstrap-icons/icons/lightbulb-fill.svg';
 import { ReactComponent as SVGGear } from 'bootstrap-icons/icons/gear.svg';
 // import { ReactComponent as SVGTrash } from 'bootstrap-icons/icons/trash.svg';
 // import { ReactComponent as SVGXSquare } from 'bootstrap-icons/icons/x-square.svg';
@@ -22,18 +21,18 @@ import { ReactComponent as SVGGear } from 'bootstrap-icons/icons/gear.svg';
 import css from './style.module.css';
 import { LeftMenuItem } from './LeftMenuItem';
 import { Link, NavLink, useLocation } from 'react-router-dom';
-import { globalSettings } from 'common/settings';
+import { globalSettings } from '@/common/settings';
 import cn from 'classnames';
-import { getClipboard } from 'common/helpers';
-import { useStatsHouse, useStatsHouseShallow } from 'store2';
-import { addPlotByUrl } from 'store2/helpers';
+import { getClipboard } from '@/common/helpers';
+import { useStatsHouse, useStatsHouseShallow } from '@/store2';
+import { addPlotByUrl } from '@/store2/helpers';
 import { produce } from 'immer';
 import { LeftMenuPlotItem } from './LeftMenuPlotItem';
-import { prepareItemsGroup } from 'common/prepareItemsGroup';
-import { AppVersionToggle } from '../AppVersionToggle';
-import { useAddLinkPlot, useLinkPlot } from 'hooks/useLinkPlot';
-import { setDevEnabled, useStoreDev } from 'store/dev';
-import { setTheme, THEMES, useThemeStore, toTheme } from 'store2/themeStore';
+import { prepareItemsGroup } from '@/common/prepareItemsGroup';
+import { useAddLinkPlot, useLinkPlot } from '@/hooks/useLinkPlot';
+import { setDevEnabled, useStoreDev } from '@/store2/dev';
+import { setTheme, THEMES, toTheme, useThemeStore } from '@/store2/themeStore';
+import { WidgetPlotContextProvider } from '@/contexts/WidgetPlotContextProvider';
 
 const themeIcon = {
   [THEMES.Light]: SVGBrightnessHighFill,
@@ -52,19 +51,17 @@ export function LeftMenu({ className }: LeftMenuProps) {
   const location = useLocation();
   const devEnabled = useStoreDev((s) => s.enabled);
   const theme = useThemeStore((s) => s.theme);
-  const { tabNum, setUrlStore, user, paramsTheme, orderPlot, groups, orderGroup, promqltestfailed } =
-    useStatsHouseShallow(
-      ({ params: { theme, tabNum, orderPlot, groups, orderGroup }, plotsData, setUrlStore, user }) => ({
-        tabNum,
-        setUrlStore,
-        user,
-        paramsTheme: theme,
-        orderPlot,
-        groups,
-        orderGroup,
-        promqltestfailed: Object.values(plotsData).some((d) => d?.promqltestfailed),
-      })
-    );
+  const { tabNum, setUrlStore, user, paramsTheme, orderPlot, groups, orderGroup } = useStatsHouseShallow(
+    ({ params: { theme, tabNum, orderPlot, groups, orderGroup }, setUrlStore, user }) => ({
+      tabNum,
+      setUrlStore,
+      user,
+      paramsTheme: theme,
+      orderPlot,
+      groups,
+      orderGroup,
+    })
+  );
   const viewPlots = useMemo(
     () =>
       prepareItemsGroup({ groups, orderGroup, orderPlot }).flatMap(({ plots, groupKey }) =>
@@ -74,7 +71,7 @@ export function LeftMenu({ className }: LeftMenuProps) {
   );
   const isView = location.pathname.indexOf('view') > -1;
   const isSettings = location.pathname.indexOf('settings') > -1;
-  const isDash = tabNum === '-1' || tabNum === '-2';
+  const isDash = tabNum === '-1' || tabNum === '-2' || tabNum === '-3';
   const onSetTheme = useCallback((event: React.MouseEvent) => {
     const value = toTheme(event.currentTarget.getAttribute('data-value'));
     if (value) {
@@ -158,7 +155,11 @@ export function LeftMenu({ className }: LeftMenuProps) {
                 {devEnabled ? 'DEV ON' : 'DEV OFF'}
               </span>
             </li>
-            <AppVersionToggle />
+            <li className={css.subItem}>
+              <NavLink className={css.link} to="/admin/dash" end>
+                Admin Dashboard List
+              </NavLink>
+            </li>
           </>
         )}
         {!!user.login && (
@@ -245,7 +246,9 @@ export function LeftMenu({ className }: LeftMenuProps) {
       <li className={cn(css.scrollStyle, css.plotMenu)}>
         <ul ref={refListMenuItemPlot} className={cn(css.plotNav)}>
           {viewPlots.map((plotKey) => (
-            <LeftMenuPlotItem key={plotKey} plotKey={plotKey} active={isView && tabNum === plotKey} />
+            <WidgetPlotContextProvider key={plotKey} plotKey={plotKey}>
+              <LeftMenuPlotItem active={isView && tabNum === plotKey} />
+            </WidgetPlotContextProvider>
           ))}
         </ul>
       </li>
@@ -257,9 +260,6 @@ export function LeftMenu({ className }: LeftMenuProps) {
           </span>
         </li>
       </LeftMenuItem>
-      {user.developer && devEnabled && promqltestfailed && (
-        <LeftMenuItem icon={SVGLightbulbFill} title="promqltestfailed" className={css.secondDanger}></LeftMenuItem>
-      )}
     </ul>
   );
 }

@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -12,19 +12,18 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mailru/easyjson"
-
-	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/format"
 	"github.com/vkcom/statshouse/internal/promql"
 )
 
-func parseHTTPRequest(r *http.Request, location *time.Location, getDashboardMeta func(dashId int32) *format.DashboardMeta) (seriesRequest, error) {
-	res, err := parseHTTPRequestS(r, 1, location, getDashboardMeta)
+func (r *httpRequestHandler) parseSeriesRequest() (seriesRequest, error) {
+	res, err := r.parseSeriesRequestS(1)
 	if err != nil {
 		return seriesRequest{}, err
 	}
@@ -34,7 +33,7 @@ func parseHTTPRequest(r *http.Request, location *time.Location, getDashboardMeta
 	return res[0], nil
 }
 
-func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, getDashboardMeta func(dashId int32) *format.DashboardMeta) (res []seriesRequest, err error) {
+func (r *httpRequestHandler) parseSeriesRequestS(maxTabs int) (res []seriesRequest, err error) {
 	defer func() {
 		var dummy httpError
 		if err != nil && !errors.As(err, &dummy) {
@@ -43,6 +42,7 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 	}()
 	type seriesRequestEx struct {
 		seriesRequest
+		x             string
 		strFrom       string
 		strTo         string
 		strWidth      string
@@ -51,34 +51,44 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 		strType       string
 		width         int
 		widthKind     int
+
+		sourceOfWhat int
+		sourceOfBy   int
 	}
 	var (
-		dash  DashboardData
-		first = func(s []string) string {
+		source int
+		dash   DashboardData
+		first  = func(s []string) string {
 			if len(s) != 0 {
 				return s[0]
 			}
 			return ""
 		}
 		env   = make(map[string]promql.Variable)
-		tabs  = make([]seriesRequestEx, 0, maxTabs)
-		tabX  = -1
-		tabAt = func(i int) *seriesRequestEx {
-			for j := len(tabs) - 1; j < i; j++ {
-				tabs = append(tabs, seriesRequestEx{seriesRequest: seriesRequest{
-					version: Version2,
-					vars:    env,
-				}})
+		tabs  = make(map[string]*seriesRequestEx)
+		tabX  string
+		ord   []string
+		tabAt = func(i string) *seriesRequestEx {
+			if t := tabs[i]; t != nil {
+				return t
 			}
-			return &tabs[i]
+			t := &seriesRequestEx{
+				x: i,
+				seriesRequest: seriesRequest{
+					vars: env,
+				},
+			}
+			ord = append(ord, i)
+			tabs[i] = t
+			return t
 		}
-		tab0 = tabAt(0)
+		tab0 = tabAt("0")
 	)
 	// parse dashboard
 	if id, err := strconv.Atoi(first(r.Form[paramDashboardID])); err == nil {
 		var v *format.DashboardMeta
 		if v = format.BuiltinDashboardByID[int32(id)]; v == nil {
-			v = getDashboardMeta(int32(id))
+			v = r.metricsStorage.GetDashboardMeta(int32(id))
 		}
 		if v != nil {
 			// Ugly, but there is no other way because "metricsStorage" stores partially parsed dashboard!
@@ -90,14 +100,13 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 	}
 	var n int
 	for i, v := range dash.Plots {
-		tab := tabAt(i)
-		if tab == nil {
-			continue
+		id := v.ID
+		if id == "" {
+			id = strconv.Itoa(i)
 		}
+		tab := tabAt(id)
 		if v.UseV2 {
 			tab.version = Version2
-		} else {
-			tab.version = Version1
 		}
 		tab.numResults = v.NumSeries
 		tab.metricName = v.MetricName
@@ -113,7 +122,7 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 		tab.widthKind = widthLODRes
 		tab.promQL = v.PromQL
 		for _, v := range v.What {
-			if fn, _ := ParseQueryFunc(v, &tab.maxHost); fn.What != data_model.DigestUnspecified {
+			if fn, _ := promql.ParseQueryFunc(v, &tab.maxHost); fn.Digest != promql.DigestUnspecified {
 				tab.what = append(tab.what, fn)
 			}
 		}
@@ -152,12 +161,8 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			if len(link) != 2 {
 				continue
 			}
-			tabX := link[0]
-			if tabX < 0 || len(tabs) <= tabX {
-				continue
-			}
+			tagX, _ := strconv.Atoi(link[1])
 			var (
-				tagX  = link[1]
 				tagID string
 			)
 			if tagX < 0 {
@@ -167,7 +172,7 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			} else {
 				continue
 			}
-			tab := &tabs[tabX]
+			tab := tabs[link[0]]
 			if v.Args.Group {
 				tab.by = append(tab.by, tagID)
 			}
@@ -195,13 +200,13 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 	if n != 0 {
 		switch dash.TimeRange.To {
 		case "ed": // end of day
-			year, month, day := time.Now().In(location).Date()
-			tab0.to = time.Date(year, month, day, 0, 0, 0, 0, location).Add(24 * time.Hour).UTC()
+			year, month, day := time.Now().In(r.location).Date()
+			tab0.to = time.Date(year, month, day, 0, 0, 0, 0, r.location).Add(24 * time.Hour).UTC()
 			tab0.strTo = strconv.FormatInt(tab0.to.Unix(), 10)
 		case "ew": // end of week
 			var (
-				year, month, day = time.Now().In(location).Date()
-				dateNow          = time.Date(year, month, day, 0, 0, 0, 0, location)
+				year, month, day = time.Now().In(r.location).Date()
+				dateNow          = time.Date(year, month, day, 0, 0, 0, 0, r.location)
 				offset           = time.Duration(((time.Sunday - dateNow.Weekday() + 7) % 7) + 1)
 			)
 			tab0.to = dateNow.Add(offset * 24 * time.Hour).UTC()
@@ -219,8 +224,8 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			tab0.strFrom = strconv.FormatInt(dash.TimeRange.From, 10)
 		}
 		tab0.shifts, _ = parseTimeShifts(dash.TimeShifts)
-		for i := 1; i < len(tabs); i++ {
-			tabs[i].shifts = tab0.shifts
+		for _, tab := range tabs {
+			tab.shifts = tab0.shifts
 		}
 	}
 	// parse URL
@@ -228,7 +233,7 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 	type (
 		dashboardVar struct {
 			name string
-			link [][]int
+			link [][2]string
 		}
 		dashboardVarM struct {
 			val    []string
@@ -237,13 +242,6 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 		}
 	)
 	var (
-		parseTabX = func(s string) (int, error) {
-			var i int
-			if i, err = strconv.Atoi(s); err != nil {
-				return 0, fmt.Errorf("invalid tab index %q", s)
-			}
-			return i, nil
-		}
 		vars  []dashboardVar
 		varM  = make(map[string]*dashboardVarM)
 		varAt = func(i int) *dashboardVar {
@@ -259,24 +257,52 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			}
 			return v
 		}
+		sourceOfVars           int
+		ensureSameSourceOfVars = func() {
+			if sourceOfVars == source {
+				return
+			}
+			for _, t := range tabs {
+				t.filterIn = nil
+				t.filterNotIn = nil
+				t.by = t.by[:0]
+				t.sourceOfBy = source
+			}
+			vars = vars[:0]
+			for k := range varM {
+				delete(varM, k)
+			}
+			for k := range env {
+				delete(env, k)
+			}
+			sourceOfVars = source
+		}
 	)
 	for i, v := range dash.Vars {
 		vv := varAt(i)
 		vv.name = v.Name
 		vv.link = append(vv.link, v.Link...)
 	}
+	searchParams := make(url.Values, len(dash.SearchParams))
+	for _, v := range dash.SearchParams {
+		if _, ok := r.Form[v[0]]; !ok {
+			searchParams[v[0]] = append(searchParams[v[0]], v[1])
+		}
+	}
+	for k, v := range searchParams {
+		r.Form[k] = v
+	}
+	source++
 	for k, v := range r.Form {
-		var i int
+		i := "0"
 		if strings.HasPrefix(k, "t") {
 			var dotX int
 			if dotX = strings.Index(k, "."); dotX != -1 {
-				var j int
-				if j, err = parseTabX(k[1:dotX]); err == nil && j > 0 {
-					i = j
-					k = k[dotX+1:]
-				}
+				i = k[1:dotX]
+				k = k[dotX+1:]
 			}
 		} else if len(k) > 1 && k[0] == 'v' { // variables, not version
+			ensureSameSourceOfVars()
 			var dotX int
 			if dotX = strings.Index(k, "."); dotX != -1 {
 				switch dotX {
@@ -302,16 +328,8 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 							vv.name = first(v)
 						case "l":
 							for _, s1 := range strings.Split(first(v), "-") {
-								links := make([]int, 0, 2)
-								for _, s2 := range strings.Split(s1, ".") {
-									if n, err := strconv.Atoi(s2); err == nil {
-										links = append(links, n)
-									} else {
-										break
-									}
-								}
-								if len(links) == 2 {
-									vv.link = append(vv.link, links)
+								if s2 := strings.Split(s1, "."); len(s2) == 2 {
+									vv.link = append(vv.link, [2]string{s2[0], s2[1]})
 								}
 							}
 						}
@@ -326,7 +344,7 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 		}
 		switch k {
 		case paramTabNumber:
-			tabX, err = parseTabX(first(v))
+			tabX = first(v)
 		case ParamAvoidCache:
 			t.avoidCache = true
 		case ParamFromTime:
@@ -344,15 +362,21 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 				if err != nil {
 					return nil, err
 				}
+				ensureSameSourceOfVars()
 				t.by = append(t.by, tid)
 			}
 		case ParamQueryFilter:
+			ensureSameSourceOfVars()
 			t.filterIn, t.filterNotIn, err = parseQueryFilter(v)
 		case ParamQueryVerbose:
 			t.verbose = first(v) == "1"
 		case ParamQueryWhat:
 			for _, what := range v {
-				if fn, _ := ParseQueryFunc(what, &t.maxHost); fn.What != data_model.DigestUnspecified {
+				if fn, _ := promql.ParseQueryFunc(what, &t.maxHost); fn.Digest != promql.DigestUnspecified {
+					if t.sourceOfWhat != source {
+						t.what = t.what[:0]
+						t.sourceOfWhat = source
+					}
 					t.what = append(t.what, fn)
 				}
 			}
@@ -394,6 +418,10 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			t.yh = first(v)
 		case paramCompat:
 			t.compat = first(v) == "1"
+		case "op":
+			ord = strings.Split(first(v), ".")
+		case "live":
+			t.play, _ = strconv.Atoi(first(v))
 		}
 		if err != nil {
 			return nil, err
@@ -417,11 +445,8 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 				continue
 			}
 			tabX := link[0]
-			if tabX < 0 || len(tabs) <= tabX {
-				continue
-			}
+			tagX, _ := strconv.Atoi(link[1])
 			var (
-				tagX  = link[1]
 				tagID string
 			)
 			if tagX < 0 {
@@ -431,7 +456,10 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			} else {
 				continue
 			}
-			tab := &tabs[tabX]
+			tab := tabs[tabX]
+			if tab == nil {
+				continue
+			}
 			if vv.group == "1" {
 				tab.by = append(tab.by, tagID)
 			}
@@ -459,6 +487,7 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 	// parse dependent paramemeters
 	var (
 		finalize = func(t *seriesRequestEx) error {
+			t.version = r.version
 			numResultsMax := maxSeries
 			if len(t.shifts) != 0 {
 				numResultsMax /= len(t.shifts)
@@ -471,7 +500,18 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 					t.numResults = math.MaxInt
 				}
 			}
-			if len(t.strWidth) != 0 || len(t.strWidthAgg) != 0 {
+			if len(t.strWidth) == 0 {
+				if n, err := strconv.Atoi(t.strWidthAgg); err == nil {
+					if n < 0 {
+						t.width = 60 // a minute for "Auto (low)" resolution
+					} else {
+						t.width = n
+					}
+				} else {
+					t.width = 1 // a second for "Auto" resolution
+				}
+				t.widthKind = widthLODRes
+			} else {
 				t.width, t.widthKind, err = parseWidth(t.strWidth, t.strWidthAgg)
 				if err != nil {
 					return err
@@ -482,6 +522,12 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			} else {
 				t.step = int64(t.width)
 			}
+			if len(t.what) == 0 {
+				t.what = append(t.what, promql.SelectorWhat{
+					QueryF: format.ParamQueryFnCountNorm,
+					Digest: promql.DigestCountSec,
+				})
+			}
 			return nil
 		}
 	)
@@ -491,12 +537,7 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 			return nil, err
 		}
 	}
-	err = finalize(tab0)
-	if err != nil {
-		return nil, err
-	}
-	for i := range tabs[1:] {
-		t := &tabs[i+1]
+	for _, t := range tabs {
 		t.from = tab0.from
 		t.to = tab0.to
 		err = finalize(t)
@@ -505,19 +546,20 @@ func parseHTTPRequestS(r *http.Request, maxTabs int, location *time.Location, ge
 		}
 	}
 	// build resulting slice
-	if tabX != -1 && tabX < len(tabs) {
-		if tabs[tabX].strType == "1" {
+	if tab := tabs[tabX]; tab != nil {
+		if tab.strType == "1" {
 			return nil, nil
 		}
-		return []seriesRequest{tabs[tabX].seriesRequest}, nil
+		return []seriesRequest{tab.seriesRequest}, nil
 	}
 	res = make([]seriesRequest, 0, len(tabs))
-	for i := 0; i < len(tabs) && len(res) < maxTabs; i++ {
-		if tabs[i].strType == "1" {
+	for i := 0; i < len(ord) && len(res) < maxTabs; i++ {
+		tab := tabs[ord[i]]
+		if tab.strType == "1" {
 			continue
 		}
-		if len(tabs[i].metricName) != 0 || len(tabs[i].promQL) != 0 {
-			res = append(res, tabs[i].seriesRequest)
+		if len(tab.metricName) != 0 || len(tab.promQL) != 0 {
+			res = append(res, tab.seriesRequest)
 		}
 	}
 	return res, nil

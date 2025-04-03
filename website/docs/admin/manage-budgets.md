@@ -16,8 +16,12 @@ import Weight from '../img/weight.png'
 You can manage budgets for multiple groups of users to fit the needs of your organization.
 
 StatsHouse provides multiple groups of users (tenants) with fair resource sharing.
-If you need to manage the resources manually, you can change the _weight_ for namespaces, groups, or 
-individual metrics.
+If you need to manage the resources manually, you can change the [_weight_](#what-is-weight) for
+* [namespaces](#namespaces),
+* [groups](#groups),
+* or [individual metrics](#editing-weight-for-a-metric).
+
+You can also [enable tag-level budgeting](#enabling-tag-level-budgeting).
 
 ## Namespaces
 
@@ -44,10 +48,6 @@ Find the examples below:
 |------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------|
 | The administrators have created the `foo` namespace for you.     | The `foo:bar` metric belongs to the `foo` namespace.<br/>The `abc` metric belongs to a default namespace. |
 | There is **no** `buz` namespace in your StatsHouse installation. | The `buz:bar` metric belongs to a default namespace.                                                      |
-
-Namespaces allow you to budget the cluster resources. You can allocate the disk space for your namespace so that you
-can send at least N bytes per second and nobody interferes with your data. This kind of budgeting may be crucial when
-you need minimum sampling.
 
 As an administrator, create a namespace using the admin panel in the left StatsHouse menu:
 
@@ -102,3 +102,8 @@ Then scroll down to change the weight for the metric:
 
 This option is for administrators only.
 
+## Enabling tag-level budgeting
+
+[Enable the "Fair key tags" feature](../guides/edit-metrics.md#fair-key-tags) for a tag to allocate metric resources 
+fairly accordingly to the tag values, e.g., different services writing data to the same metric.
+Read more about [tag-level budgeting](../overview/concepts.md#tag-level-budgeting-fair-key-tags).

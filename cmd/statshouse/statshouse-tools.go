@@ -1,4 +1,4 @@
-// Copyright 2022 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,13 +8,15 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
-	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +25,8 @@ import (
 	"go.uber.org/atomic"
 	"pgregory.net/rand"
 
-	"github.com/vkcom/statshouse/internal/aggregator"
+	"github.com/mailru/easyjson"
+
 	"github.com/vkcom/statshouse/internal/data_model"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tl"
 	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
@@ -38,12 +41,9 @@ import (
 	"github.com/vkcom/statshouse/internal/vkgo/rpc"
 )
 
-func mainBenchmarks() {
-	flag.StringVar(&argv.listenAddr, "p", "127.0.0.1:13337", "RAW UDP & RPC TCP write/listen port")
-
-	build.FlagParseShowVersionHelp()
-
+func mainBenchmarks() int {
 	FakeBenchmarkMetricsPerSecond(argv.listenAddr)
+	return 0
 }
 
 type packetPrinter struct {
@@ -59,11 +59,6 @@ func (w *packetPrinter) HandleParseError(pkt []byte, err error) {
 }
 
 func mainTestParser() int {
-	flag.StringVar(&argv.listenAddr, "p", ":13337", "RAW UDP & RPC TCP listen address")
-	flag.IntVar(&argv.bufferSizeUDP, "buffer-size-udp", receiver.DefaultConnBufSize, "UDP receiving buffer size")
-
-	build.FlagParseShowVersionHelp()
-
 	u, err := receiver.ListenUDP("udp", argv.listenAddr, argv.bufferSizeUDP, false, nil, nil, log.Printf)
 	if err != nil {
 		logErr.Printf("ListenUDP: %v", err)
@@ -86,42 +81,22 @@ func mainTestParser() int {
 	return 0
 }
 
-func mainTestMap() {
-	flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
-	flag.StringVar(&argv.aggAddr, "agg-addr", "", "comma-separated list of aggregator addresses to test.")
-	var mapString string
-	flag.StringVar(&mapString, "string", "production", "string to map.")
+func mainTestMap() int {
 	// TODO - we have no such RPC call
 	// var mapInt int
 	// flag.IntVar(&mapInt, "int", 0, "int to map back.")
-
-	build.FlagParseShowVersionHelp()
-
 	client, _ := argvCreateClient()
-	if argv.aggAddr == "" {
-		log.Fatalf("--agg-addr must not be empty")
-	}
-
-	aggregator.TestMapper(strings.Split(argv.aggAddr, ","), mapString, client)
+	metajournal.TestMapper(argv.AggregatorAddresses, argv.mapString, client)
+	return 0
 }
 
-func mainTestLongpoll() {
-	flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
-	flag.StringVar(&argv.aggAddr, "agg-addr", "", "comma-separated list of aggregator addresses to test.")
-
-	build.FlagParseShowVersionHelp()
-
+func mainTestLongpoll() int {
 	client, _ := argvCreateClient()
-	if argv.aggAddr == "" {
-		log.Fatalf("--agg-addr must not be empty")
-	}
-
-	aggregator.TestLongpoll(strings.Split(argv.aggAddr, ","), client, 60)
+	metajournal.TestLongpoll(argv.AggregatorAddresses, client, 60)
+	return 0
 }
 
-func mainSimpleFSyncTest() {
-	build.FlagParseShowVersionHelp()
-
+func mainSimpleFSyncTest() int {
 	const smallName = "fsync.small.test"
 	const bigName = "fsync.big.test"
 	const bigSize = 1 << 30
@@ -155,6 +130,7 @@ func mainSimpleFSyncTest() {
 	_ = big.Close()
 	_ = os.Remove(smallName)
 	_ = os.Remove(bigName)
+	return 0
 }
 
 func simpleFSync(f *os.File) {
@@ -184,8 +160,7 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 		result := &format.MetricMetaValue{
 			MetricID: 1,
 			Name:     "metric1",
-			Tags:     []format.MetricMetaTag{{Name: "env"}, {Name: "k1"}, {Name: "k2"}, {Name: "k3"}, {Name: "k4", Raw: true}, {Name: "k5"}},
-			Visible:  true,
+			Tags:     []format.MetricMetaTag{{Name: "env"}, {Name: "k1"}, {Name: "k2"}, {Name: "k3"}, {Name: "k4", RawKind: "int"}, {Name: "k5"}},
 		}
 		_ = result.RestoreCachedInfo()
 		data, err := result.MarshalBinary()
@@ -250,8 +225,9 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 		}
 		goodMetric.Inc()
 	}
-	metricStorage := metajournal.MakeMetricsStorage("", nil, nil)
-	metricStorage.Journal().Start(nil, nil, dolphinLoader)
+	metricStorage := metajournal.MakeMetricsStorage(nil)
+	journal := metajournal.MakeJournal("", data_model.JournalDDOSProtectionTimeout, nil, []metajournal.ApplyEvent{metricStorage.ApplyEvent})
+	journal.Start(nil, nil, dolphinLoader)
 	mapper := mapping.NewMapper("", pmcLoader, nil, nil, 1000, handleMappedMetric)
 
 	recv, err := receiver.ListenUDP("udp", listenAddr, receiver.DefaultConnBufSize, true, nil, nil, nil)
@@ -341,23 +317,14 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 }
 
 func mainTLClient() int {
-	flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
-
-	var statshouseAddr string
-	var statshouseNet string
-	flag.StringVar(&statshouseNet, "statshouse-net", "tcp4", "statshouse network for tlclient")
-	flag.StringVar(&statshouseAddr, "statshouse-addr", "127.0.0.1:13337", "statshouse address for tlclient")
-
-	build.FlagParseShowVersionHelp()
-
 	client, _ := argvCreateClient()
 
 	// use like this
 	// echo '{"metrics":[{"name":"gbuteyko_investigation","tags":{"env":"dev","1":"I_test_statshouse","2":"1"},"counter":1}]}' | /usr/share/engine/bin/statshouse --new-conveyor=tlclient --statshouse-addr=localhost:13333
 	tlclient := tlstatshouse.Client{
 		Client:  client,
-		Network: statshouseNet,
-		Address: statshouseAddr,
+		Network: argv.statshouseNet,
+		Address: argv.statshouseAddr,
 	}
 	pkt, err := io.ReadAll(os.Stdin)
 	if err != nil && err != io.EOF {
@@ -381,11 +348,19 @@ func mainTLClient() int {
 	return 0
 }
 
-func mainTLClientAPI() {
-	flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
+func mainModules() int {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		log.Printf("Failed to read build info")
+		return 1
+	}
+	for _, dep := range bi.Deps {
+		fmt.Printf("%s %s\n", dep.Path, dep.Version)
+	}
+	return 0
+}
 
-	build.FlagParseShowVersionHelp()
-
+func mainTLClientAPI() int {
 	client, _ := argvCreateClient()
 
 	tlapiclient := tlstatshouseApi.Client{
@@ -454,120 +429,27 @@ func mainTLClientAPI() {
 			log.Printf("ReleaseChunks response: %#v\n\n", cc)
 		}
 	}
+	return 0
 }
 
-func mainSimulator() {
-	argvAddCommonFlags()
-	argvAddAgentFlags(false)
-
-	build.FlagParseShowVersionHelp()
-
-	argv.configAgent.Cluster = argv.cluster
-	argv.configAgent.SampleBudget /= 10
-	if err := argv.configAgent.ValidateConfigSource(); err != nil {
-		log.Fatalf("%s", err)
-	}
-
-	argv.configAgent.AggregatorAddresses = strings.Split(argv.aggAddr, ",")
-
-	metricStorage := metajournal.MakeMetricsStorage("simulator", nil, nil)
-
-	client, cryptoKey := argvCreateClient()
-
-	metaDataClient := &tlmetadata.Client{
-		Client:  client,
-		Network: "tcp4",
-		Address: "127.0.0.1:2442",
-	}
-	loader := metajournal.NewMetricMetaLoader(metaDataClient, metajournal.DefaultMetaTimeout)
-	metricStorage.Journal().Start(nil, nil, loader.LoadJournal)
-	time.Sleep(time.Second) // enough to sync in testing
-
-	for i := 1; i < 20; i++ {
-		m := format.MetricMetaValue{
-			Name:          data_model.SimulatorMetricPrefix + strconv.Itoa(i),
-			Description:   "Simulator metric " + strconv.Itoa(i),
-			Visible:       true,
-			Kind:          format.MetricKindMixed,
-			Resolution:    1,
-			Weight:        1,
-			StringTopName: "stop",
-		}
-		if i == 2 || i == 3 {
-			m.Resolution = 10
-		}
-		if i == 7 || i == 8 {
-			m.Weight = 2
-		}
-		if i == 3 || i == 11 {
-			m.Kind = format.MetricKindMixedPercentiles
-		}
-		for t := 0; t < 10; t++ {
-			m.Tags = append(m.Tags, format.MetricMetaTag{
-				Raw: true,
-			})
-		}
-		if err := m.RestoreCachedInfo(); err != nil {
-			log.Panicf("Simulator metric contains error: %v", err)
-		}
-		metricInfo := metricStorage.GetMetaMetricByName(m.Name)
-		if metricInfo != nil { // will create or update
-			m.MetricID = metricInfo.MetricID
-			m.Version = metricInfo.Version
-		}
-		ms, err := loader.SaveMetric(context.Background(), m, "")
-		if err != nil {
-			log.Panicf("Failed to create simulator metric: %v", err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		if err := metricStorage.Journal().WaitVersion(ctx, ms.Version); err != nil {
-			log.Panicf("Failed to create simulator metric: %v", err)
-		}
-		cancel()
-	}
-
-	for i := 1; i < 10; i++ {
-		go aggregator.RunSimulator(i, metricStorage, argv.cacheDir, cryptoKey, argv.configAgent)
-	}
-	aggregator.RunSimulator(0, metricStorage, argv.cacheDir, cryptoKey, argv.configAgent)
-}
-
-func mainTagMapping() {
-	// Parse command line tags
-	var (
-		metric          string
-		tags            string
-		budget          int
-		metadataNet     string
-		metadataAddr    string
-		metadataActorID int64
-	)
-	flag.StringVar(&metric, "metric", "", "metric name, if specified then strings are considered metric tags")
-	flag.StringVar(&tags, "tag", "", "string to be searched for a int32 mapping")
-	flag.IntVar(&budget, "budget", 0, "mapping budget to set")
-	flag.Int64Var(&metadataActorID, "metadata-actor-id", 0, "")
-	flag.StringVar(&metadataAddr, "metadata-addr", "127.0.0.1:2442", "")
-	flag.StringVar(&metadataNet, "metadata-net", "tcp4", "")
-	flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
-	build.FlagParseShowVersionHelp()
-	flag.Parse()
+func mainTagMapping() int {
 	// Create metadata client
 	var (
 		aesPwd = readAESPwd()
 		client = tlmetadata.Client{
 			Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(aesPwd), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
-			Network: metadataNet,
-			Address: metadataAddr,
-			ActorID: metadataActorID,
+			Network: argv.metadataNet,
+			Address: argv.metadataAddr,
+			ActorID: argv.metadataActorID,
 		}
 	)
 	// Run tag mapping queries
-	for _, tag := range strings.Split(tags, ",") {
+	for _, tag := range strings.Split(argv.tags, ",") {
 		if len(tag) == 0 {
 			continue
 		}
 		var (
-			qry = tlmetadata.GetMapping{Metric: metric, Key: tag}
+			qry = tlmetadata.GetMapping{Metric: argv.metric, Key: tag}
 			ret tlmetadata.GetMappingResponse
 			err = client.GetMapping(context.Background(), qry, nil, &ret)
 		)
@@ -580,52 +462,56 @@ func mainTagMapping() {
 		}
 		fmt.Println()
 	}
-	if budget != 0 {
+	if argv.budget != 0 {
 		var ( // Set mapping budget
-			arg = tlmetadata.ResetFlood2{Metric: metric}
+			arg = tlmetadata.ResetFlood2{Metric: argv.metric}
 			res tlmetadata.ResetFloodResponse2
 		)
-		if budget > 0 {
-			arg.SetValue(int32(budget))
+		if argv.budget > 0 {
+			arg.SetValue(int32(argv.budget))
 		}
 		err := client.ResetFlood2(context.Background(), arg, nil, &res)
 		if err == nil {
-			fmt.Printf("%q set mapping budget %d, was %d, now %d\n", metric, budget, res.BudgetBefore, res.BudgetAfter)
+			fmt.Printf("%q set mapping budget %d, was %d, now %d\n", argv.metric, argv.budget, res.BudgetBefore, res.BudgetAfter)
 		} else {
-			fmt.Printf("%q ERROR <%v> setting mapping budget %d\n", metric, err, budget)
+			fmt.Printf("%q ERROR <%v> setting mapping budget %d\n", argv.metric, err, argv.budget)
 		}
 	}
+	return 0
 }
 
-func mainPublishTagDrafts() {
-	var (
-		metadataNet     string
-		metadataAddr    string
-		metadataActorID int64
-	)
-	flag.Int64Var(&metadataActorID, "metadata-actor-id", 0, "")
-	flag.StringVar(&metadataAddr, "metadata-addr", "127.0.0.1:2442", "")
-	flag.StringVar(&metadataNet, "metadata-net", "tcp4", "")
-	flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
-	build.FlagParseShowVersionHelp()
-	flag.Parse()
+func mainPublishTagDrafts() int {
 	client := tlmetadata.Client{
 		Client: rpc.NewClient(
 			rpc.ClientWithCryptoKey(readAESPwd()),
 			rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
-		Network: metadataNet,
-		Address: metadataAddr,
-		ActorID: metadataActorID,
+		Network: argv.metadataNet,
+		Address: argv.metadataAddr,
+		ActorID: argv.metadataActorID,
 	}
 	loader := metajournal.NewMetricMetaLoader(&client, metajournal.DefaultMetaTimeout)
 	var (
-		config   aggregator.KnownTags
+		config   data_model.KnownTags
 		storage  *metajournal.MetricsStorage
 		workMu   sync.Mutex
 		work     = make(map[int32]map[int32]format.MetricMetaValue)
 		workCond = sync.NewCond(&workMu)
 	)
-	storage = metajournal.MakeMetricsStorage("", nil, nil, func(newEntries []tlmetadata.Event) {
+	applyPromConfig := func(configID int32, configString string) {
+		switch configID {
+		case format.KnownTagsConfigID:
+			v, err := data_model.ParseKnownTags([]byte(configString), storage)
+			fmt.Fprintln(os.Stderr, configString)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				break
+			}
+			workCond.L.Lock()
+			config = v
+			workCond.L.Unlock()
+		}
+	}
+	applyEvents := func(newEntries []tlmetadata.Event) {
 		var n int
 		for _, e := range newEntries {
 			switch e.EventType {
@@ -643,6 +529,7 @@ func mainPublishTagDrafts() {
 				if len(meta.TagsDraft) == 0 {
 					continue
 				}
+				// log.Printf("FOUND tag draft %s\n", meta.Name)
 				workCond.L.Lock()
 				if m := work[meta.NamespaceID]; m != nil {
 					m[meta.MetricID] = meta
@@ -651,27 +538,23 @@ func mainPublishTagDrafts() {
 				}
 				workCond.L.Unlock()
 				n++
-			case format.PromConfigEvent:
-				v, err := aggregator.ParseKnownTags([]byte(e.Data), storage)
-				fmt.Fprintln(os.Stderr, e.Data)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, err)
-					continue
-				}
-				workCond.L.Lock()
-				config = v
-				workCond.L.Unlock()
-				n++
 			}
 		}
 		if n != 0 {
 			workCond.Signal()
 		}
-	})
-	storage.Journal().Start(nil, nil, loader.LoadJournal)
+	}
+	storage = metajournal.MakeMetricsStorage(applyPromConfig)
+	journal := metajournal.MakeJournal("", data_model.JournalDDOSProtectionTimeout, nil,
+		[]metajournal.ApplyEvent{storage.ApplyEvent, applyEvents}) // order important
+	journal.Start(nil, nil, loader.LoadJournal)
 	fmt.Println("Press <Enter> to start publishing tag drafts")
-	bufio.NewReader(os.Stdin).ReadString('\n')
-	fmt.Println("Publishing tag drafts")
+	if argv.dryRun {
+		fmt.Println("DRY RUN!")
+	}
+	fmt.Println()
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	fmt.Println("Start publishing tag drafts!")
 	for {
 		var meta format.MetricMetaValue
 		workCond.L.Lock()
@@ -697,7 +580,7 @@ func mainPublishTagDrafts() {
 		workCond.L.Unlock()
 		v := storage.GetMetaMetric(meta.MetricID)
 		if v == nil {
-			fmt.Fprintf(os.Stderr, "Failed to get metric %q\n", meta.Name)
+			_, _ = fmt.Fprintf(os.Stderr, "Failed to get metric %q\n", meta.Name)
 			continue
 		}
 		meta = *v
@@ -708,15 +591,170 @@ func mainPublishTagDrafts() {
 			continue
 		}
 		fmt.Println(meta.NamespaceID, meta.Name, meta.Version)
+		if argv.dryRun {
+			continue
+		}
+		if err := meta.BeforeSavingCheck(); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+		if err := meta.RestoreCachedInfo(); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+
 		var err error
 		meta, err = loader.SaveMetric(context.Background(), meta, "")
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
+			_, _ = fmt.Fprintln(os.Stderr, err)
 			continue
 		}
-		err = storage.Journal().WaitVersion(context.Background(), meta.Version)
+		err = storage.WaitVersion(context.Background(), meta.Version)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
+}
+
+func massUpdateMetadata() int {
+	client := tlmetadata.Client{
+		Client: rpc.NewClient(
+			rpc.ClientWithCryptoKey(readAESPwd()),
+			rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+		Network: argv.metadataNet,
+		Address: argv.metadataAddr,
+		ActorID: argv.metadataActorID,
+	}
+	loader := metajournal.NewMetricMetaLoader(&client, metajournal.DefaultMetaTimeout)
+	storage := metajournal.MakeMetricsStorage(nil)
+	storage2 := metajournal.MakeMetricsStorage(nil)
+	journal := metajournal.MakeJournalFast(data_model.JournalDDOSProtectionTimeout, true,
+		[]metajournal.ApplyEvent{storage.ApplyEvent})
+	journal.Start(nil, nil, loader.LoadJournal)
+	journalCompact := metajournal.MakeJournalFast(data_model.JournalDDOSProtectionTimeout, true,
+		[]metajournal.ApplyEvent{storage2.ApplyEvent})
+	journalCompact.Start(nil, nil, loader.LoadJournal)
+	fmt.Println("Press <Enter> to start updating metadata")
+	if argv.dryRun {
+		fmt.Println("DRY RUN!")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			v, h := journal.VersionHash()
+			v2, h2 := journalCompact.VersionHash()
+			fmt.Printf("journal version %d/%d hash %s, compact version %d/%d hash %s\n",
+				v, journal.LastKnownVersion(), h, v2, journalCompact.LastKnownVersion(), h2)
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	fmt.Println()
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+	cancel()
+	list := storage.GetMetaMetricList(true)
+	slices.SortFunc(list, func(a, b *format.MetricMetaValue) int {
+		return cmp.Compare(a.MetricID, b.MetricID)
+	})
+	list2 := storage2.GetMetaMetricList(true)
+	slices.SortFunc(list2, func(a, b *format.MetricMetaValue) int {
+		return cmp.Compare(a.MetricID, b.MetricID)
+	})
+	_, _ = fmt.Fprintf(os.Stderr, "Starting list of %d metrics\n", len(list))
+	found := 0
+	//fixMeta := func(meta *format.MetricMetaValue) (shouldUpdate bool) {
+	//	//if meta.Disable != !meta.Visible {
+	//	//	meta.Disable = !meta.Visible
+	//	//	shouldUpdate = true
+	//	//}
+	//	//for i := range meta.Tags {
+	//	//	tag := &meta.Tags[i]
+	//	//	if !tag.Raw && tag.RawKind != "" {
+	//	//		shouldUpdate = true
+	//	//		tag.RawKind = ""
+	//	//	}
+	//	//	if tag.Raw && tag.RawKind == "" {
+	//	//		shouldUpdate = true
+	//	//		tag.RawKind = "int"
+	//	//	}
+	//	//}
+	//	return
+	//}
+	for _, meta := range list {
+		meta2 := storage2.GetMetaMetric(meta.MetricID)
+		if meta2 != nil && format.SameCompactMetric(meta, meta2) {
+			continue
+		}
+		if found >= argv.maxUpdates {
+			break
+		}
+		found++
+		if meta2 == nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Not in compact journal: %d %s\n", meta.MetricID, meta.Name)
+			continue
+		}
+		_, _ = fmt.Fprintf(os.Stderr, "Different in compact journal: %d %s\n", meta.MetricID, meta.Name)
+		metricBytes, _ := easyjson.Marshal(meta)
+		metricBytes2, _ := easyjson.Marshal(meta2)
+		_, _ = fmt.Fprintf(os.Stderr, "\t%s\n", metricBytes)
+		_, _ = fmt.Fprintf(os.Stderr, "\t%s\n", metricBytes2)
+
+		// deep enough copy here
+		//meta2 := *meta
+		//meta2.Tags = append([]format.MetricMetaTag{}, meta2.Tags...)
+		//if !fixMeta(&meta2) {
+		//	continue
+		//}
+		//if found >= argv.maxUpdates {
+		//	break
+		//}
+		//found++
+		//_, _ = fmt.Fprintf(os.Stderr, "%d/%d %d %d %s %d\n", i, len(list), meta.NamespaceID, meta.MetricID, meta.Name, meta.Version)
+		//if err := meta2.BeforeSavingCheck(); err != nil {
+		//	_, _ = fmt.Fprintln(os.Stderr, err)
+		//	continue
+		//}
+		//if err := meta2.RestoreCachedInfo(); err != nil {
+		//	_, _ = fmt.Fprintln(os.Stderr, err)
+		//	continue
+		//}
+		//metricBytes, _ := easyjson.Marshal(meta)
+		//metricBytes2, _ := easyjson.Marshal(meta2)
+		//_, _ = fmt.Fprintf(os.Stderr, "\t%s\n", metricBytes)
+		//_, _ = fmt.Fprintf(os.Stderr, "\t%s\n", metricBytes2)
+		//if !format.SameCompactMetric(&meta2, meta) {
+		//	_, _ = fmt.Fprintf(os.Stderr, "STOP!!! SameCompactMetric returned false\n")
+		//}
+		//if argv.dryRun {
+		//	continue
+		//}
+		////_, _ = fmt.Fprintf(os.Stderr, "SAVING!!!\n")
+		//var err error
+		//meta2, err = loader.SaveMetric(context.Background(), meta2, "")
+		//if err != nil {
+		//	_, _ = fmt.Fprintln(os.Stderr, err)
+		//	continue
+		//}
+		//err = storage.WaitVersion(context.Background(), meta.Version)
+		//if err != nil {
+		//	log.Fatal(err)
+		//}
+	}
+	for _, meta2 := range list2 {
+		meta := storage.GetMetaMetric(meta2.MetricID)
+		if meta != nil {
+			continue
+		}
+		if found >= argv.maxUpdates {
+			break
+		}
+		found++
+		_, _ = fmt.Fprintf(os.Stderr, "Not in normal journal: %d %s\n", meta2.MetricID, meta2.Name)
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "Finished list of %d metrics, %d found of %d --max-updates\n", len(list), found, argv.maxUpdates)
+	journal.Compare(journalCompact)
+	return 0
 }

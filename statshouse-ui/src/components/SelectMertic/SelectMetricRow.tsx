@@ -1,13 +1,19 @@
+// Copyright 2025 V Kontakte LLC
+//
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 import React, { memo } from 'react';
 import { SelectOptionProps, SelectRowEqual, SelectRowProps } from '../UI/Select';
 import { Tooltip } from '../UI';
-import { toggleMetricsFavorite, useFavoriteStore } from 'store2/favoriteStore';
+import { toggleMetricsFavorite, useFavoriteStore } from '@/store2/favoriteStore';
 import cn from 'classnames';
 import { ReactComponent as SVGStar } from 'bootstrap-icons/icons/star.svg';
 import { ReactComponent as SVGStarFill } from 'bootstrap-icons/icons/star-fill.svg';
 import css from '../UI/style.module.css';
 
-export const SelectMetricRow = memo(function _SelectMetricRow<T extends SelectOptionProps>({
+export const SelectMetricRow = memo(function SelectMetricRow<T extends SelectOptionProps>({
   index,
   data: { rows, cursor, onChecked, onHover },
   style,
