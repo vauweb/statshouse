@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	MaxTags      = 16
-	NewMaxTags   = 48
+	MaxTags      = 48
+	MaxTagsV2    = 16 // for backward compatibility we should not query tags from v2 table that are >= MaxTagsV2
 	MaxDraftTags = 128
 	MaxStringLen = 128 // both for normal tags and _s, _h tags (string tops, hostnames)
 
@@ -78,7 +78,7 @@ const (
 	NamespaceSeparatorRune = ':'
 
 	// agents with older commitTs will be declined
-	LeastAllowedAgentCommitTs uint32 = 0
+	LeastAllowedAgentCommitTs uint32 = 1741804412 // Release: v2025.03.0
 
 	StatshouseAgentRemoteConfigMetric      = "statshouse_agent_remote_config"
 	StatshouseJournalDump                  = "statshouse_journal_dump" // journals will be dumped to disk for analysis at each point before this event
@@ -238,6 +238,7 @@ const (
 	ShardByTagsHash = "tags_hash"
 	ShardFixed      = "fixed_shard"
 	ShardByMetric   = "metric_id" // shard = metric_id % num_shards
+	ShardBuiltin    = "builtin"   // for special builtin metrics that are written in all shards (only dist)
 )
 
 // This struct is immutable, it is accessed by mapping code without any locking
@@ -272,6 +273,7 @@ type MetricMetaValue struct {
 	ShardNum             uint32                   `json:"shard_num,omitempty"`
 	PipelineVersion      uint8                    `json:"pipeline_version,omitempty"`
 
+	MetricTagID          uint8                     `json:"-"` // 0 means no metric tag, only for builtin metrics, can be used to determine shard
 	name2Tag             map[string]*MetricMetaTag // Should be restored from Tags after reading
 	EffectiveResolution  int                       `json:"-"` // Should be restored from Tags after reading
 	PreKeyIndex          int                       `json:"-"` // index of tag which goes to 'prekey' column, or <0 if no tag goes
@@ -486,9 +488,9 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 	}
 	m.PreKeyIndex = -1
 	tags := m.Tags
-	if len(tags) > NewMaxTags { // prevent various overflows in code
-		tags = tags[:NewMaxTags]
-		err = multierr.Append(err, fmt.Errorf("too many tags, limit is: %d", NewMaxTags))
+	if len(tags) > MaxTags { // prevent various overflows in code
+		tags = tags[:MaxTags]
+		err = multierr.Append(err, fmt.Errorf("too many tags, limit is: %d", MaxTags))
 	}
 	for name, tag := range m.TagsDraft {
 		// in compact journal we clear tag.Name, so we must restore
@@ -519,7 +521,7 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 		}
 		tag.Raw = tag.RawKind != "" // Raw is serialized for v2 agents only
 		tag.raw64 = IsRaw64Kind(tag.RawKind)
-		if tag.raw64 && tag.Index >= NewMaxTags-1 { // for now, to avoid overflows in v2 and v3 mapping
+		if tag.raw64 && tag.Index >= MaxTags-1 { // for now, to avoid overflows in v2 and v3 mapping
 			err = multierr.Append(err, fmt.Errorf("last tag cannot be raw64 kind %q of tag %d", tag.RawKind, i))
 			tag.raw64 = false
 		}
@@ -671,6 +673,32 @@ func (m *MetricMetaValue) GroupBy(groupBy []string) (res []int) {
 		}
 	}
 	return res
+}
+
+func (metric *MetricMetaValue) NewSharding(timestamp, newShardingStart int64) bool {
+	if metric == nil {
+		return false
+	}
+	switch metric.ShardStrategy {
+	case ShardFixed, ShardByMetric, "":
+		return newShardingStart != 0 && timestamp >= newShardingStart
+	default:
+		return false
+	}
+}
+
+func (m *MetricMetaValue) Shard(numShards int) int {
+	if m == nil {
+		return -1
+	}
+	switch m.ShardStrategy {
+	case ShardFixed:
+		return int(m.ShardNum)
+	case ShardByMetric, "":
+		return int(uint32(m.MetricID) % uint32(numShards))
+	default:
+		return -1
+	}
 }
 
 // Always restores maximum info, if error is returned, group is non-canonical and should not be saved
@@ -1262,7 +1290,7 @@ func SameCompactMetric(a, b *MetricMetaValue) bool {
 		a.RoundSampleFactors != b.RoundSampleFactors {
 		return false
 	}
-	for i := 0; i < NewMaxTags; i++ {
+	for i := 0; i < MaxTags; i++ {
 		ta := a.Name2Tag(TagID(i))
 		tb := b.Name2Tag(TagID(i))
 		if !SameCompactTag(ta, tb) {

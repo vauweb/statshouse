@@ -25,17 +25,17 @@ import (
 
 	"pgregory.net/rand"
 
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/metajournal"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/util"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/semaphore"
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/metajournal"
+	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/util"
+	"github.com/VKCOM/statshouse/internal/vkgo/build"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/vkgo/semaphore"
 )
 
 type (
@@ -145,7 +145,7 @@ func (b *aggregatorBucket) CancelHijack(hctx *rpc.HandlerContext) {
 }
 
 // aggregator is also run in this method
-func MakeAggregator(dc *pcache.DiskCache, fj *os.File, fjCompact *os.File, mappingsCache *pcache.MappingsCache,
+func MakeAggregator(dc pcache.DiskCache, fj *os.File, fjCompact *os.File, mappingsCache *pcache.MappingsCache,
 	cacheDir string, listenAddr string, aesPwd string, config ConfigAggregator, hostName string, logTrace bool) (*Aggregator, error) {
 	localAddresses := strings.Split(listenAddr, ",")
 	if len(localAddresses) != 1 {
@@ -319,7 +319,7 @@ func MakeAggregator(dc *pcache.DiskCache, fj *os.File, fjCompact *os.File, mappi
 		format.TagValueIDComponentAggregator,
 		a.metricStorage, mappingsCache,
 		a.journal.VersionHash, a.journalFast.VersionHash, a.journalCompact.VersionHash,
-		log.Printf, a.agentBeforeFlushBucketFunc, &getConfigResult, nil)
+		log.Printf, a.agentBeforeFlushBucketFunc, &getConfigResult, nil, false)
 	if err != nil {
 		return nil, fmt.Errorf("built-in agent failed to start: %v", err)
 	}
@@ -363,20 +363,14 @@ func MakeAggregator(dc *pcache.DiskCache, fj *os.File, fjCompact *os.File, mappi
 
 	sh2.Run(a.aggregatorHost, a.shardKey, a.replicaKey)
 
-	go func() {
-		for {
-			time.Sleep(time.Hour) // arbitrary
-			_ = mappingsCache.Save()
-			a.SaveJournals()
-		}
-	}()
+	mappingsCache.StartPeriodicSaving()
 
 	return a, nil
 }
 
 func (a *Aggregator) SaveJournals() {
-	_ = a.journalFast.Save()
-	_ = a.journalCompact.Save()
+	_, _, _ = a.journalFast.Save()
+	_, _, _ = a.journalCompact.Save()
 }
 
 func (a *Aggregator) Agent() *agent.Agent {
@@ -413,7 +407,7 @@ func (a *Aggregator) WaitRPCServer(timeout time.Duration) {
 	}
 }
 
-func loadBoostrap(dc *pcache.DiskCache, client *tlmetadata.Client) ([]byte, error) {
+func loadBoostrap(dc pcache.DiskCache, client *tlmetadata.Client) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // TODO - timeout
 	defer cancel()
 	args := tlmetadata.GetTagMappingBootstrap{}

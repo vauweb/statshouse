@@ -11,8 +11,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 )
 
 type UDP struct {
@@ -125,7 +125,7 @@ func (u *UDP) Serve(h Handler) error {
 			_, _ = u.mirrorUdpConn.Write(pkt) // we intentionally ignore errors here
 		}
 
-		_ = u.parse(h, nil, nil, nil, pkt, &batch, &scratch) // ignore errors and read the next packet
+		_ = u.parse(h, nil, pkt, &batch, &scratch) // ignore errors and read the next packet
 	}
 }
 

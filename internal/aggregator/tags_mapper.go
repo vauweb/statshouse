@@ -15,14 +15,14 @@ import (
 
 	"go4.org/mem"
 
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/mapping"
-	"github.com/vkcom/statshouse/internal/metajournal"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/mapping"
+	"github.com/VKCOM/statshouse/internal/metajournal"
+	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 type TagsMapper struct {
@@ -38,7 +38,7 @@ type TagsMapper struct {
 	tagValue *pcache.Cache
 }
 
-func NewTagsMapper(agg *Aggregator, sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, dc *pcache.DiskCache, loader *metajournal.MetricMetaLoader, suffix string) *TagsMapper {
+func NewTagsMapper(agg *Aggregator, sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, dc pcache.DiskCache, loader *metajournal.MetricMetaLoader, suffix string) *TagsMapper {
 	ms := &TagsMapper{agg: agg, sh2: sh2, metricStorage: metricStorage, clientList: map[*rpc.HandlerContext]*bool{}}
 	ms.tagValue = mapping.NewTagsCache(func(ctx context.Context, askedKey string, extra2 interface{}) (pcache.Value, time.Duration, error) {
 		extra, _ := extra2.(format.CreateMappingExtra)

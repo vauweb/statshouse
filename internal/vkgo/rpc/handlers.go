@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -20,13 +21,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/vkgo/basictl"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc/internal/gen/constants"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc/internal/gen/tl"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc/internal/gen/tlengine"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc/internal/gen/tlgo"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
-	"github.com/vkcom/statshouse/internal/vkgo/tlpprof" // TODO - modernize pprof package, it is very old
+	"github.com/VKCOM/statshouse/internal/vkgo/basictl"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc/internal/gen/constants"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc/internal/gen/tl"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc/internal/gen/tlengine"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc/internal/gen/tlgo"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/vkgo/tlpprof" // TODO - modernize pprof package, it is very old
 )
 
 func (s *Server) collectStats(localAddr net.Addr) map[string]string {
@@ -129,6 +130,9 @@ func readCommandLine() string {
 }
 
 func (s *Server) handleEnginePID(hctx *HandlerContext) (err error) {
+	if s.opts.DebugUdpRPC >= 1 && hctx.protocolID == protocolUDP {
+		log.Printf("udp ping recieved")
+	}
 	req := tlengine.Pid{}
 	if _, err := req.ReadBoxed(hctx.Request); err != nil {
 		return err

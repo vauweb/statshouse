@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/vkcom/statshouse/internal/format"
 )
 
 type QueryFilter struct {
@@ -22,7 +22,7 @@ type QueryFilter struct {
 
 type TagFilters struct {
 	Metrics []*format.MetricMetaValue
-	Tags    [format.NewMaxTags]TagFilter
+	Tags    [format.MaxTags]TagFilter
 }
 
 type TagFilter struct {

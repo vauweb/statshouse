@@ -20,14 +20,16 @@ import (
 
 	"github.com/google/btree"
 	"github.com/mailru/easyjson"
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/vkgo/basictl"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
 	"github.com/zeebo/xxh3"
+	"pgregory.net/rand"
+
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/vkgo/basictl"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 type journalEvent struct {
@@ -68,6 +70,10 @@ type JournalFast struct {
 	compact        bool // never changed, not protected by mu
 	dumpPathPrefix string
 
+	// periodic saving
+	lastSavedVersion     int64
+	periodicSaveInterval time.Duration // we run between one and two times this interval
+
 	BuiltinLongPollImmediateOK    data_model.ItemValue
 	BuiltinLongPollImmediateError data_model.ItemValue
 	BuiltinLongPollEnqueue        data_model.ItemValue
@@ -106,6 +112,7 @@ func journalOrderLess(a, b journalOrder) bool {
 
 func MakeJournalFast(journalRequestDelay time.Duration, compact bool, applyEvent []ApplyEvent) *JournalFast {
 	return &JournalFast{
+		periodicSaveInterval:   time.Hour,
 		journalRequestDelay:    journalRequestDelay,
 		journal:                map[journalEventID]journalEvent{},
 		order:                  btree.NewG[journalOrder](32, journalOrderLess), // degree selected by running benchmarks
@@ -203,7 +210,7 @@ func (ms *JournalFast) loadImpl(fileSize int64, readAt func(b []byte, offset int
 	return src, nil
 }
 
-func (ms *JournalFast) Save() error {
+func (ms *JournalFast) Save() (bool, int64, error) {
 	// We exclude writers so that they do not block on Lock() while code below runs in RLock().
 	// If we allow this, all new readers (GetValue) block on RLock(), effectively waiting for Save to finish.
 	ms.modifyMu.Lock()
@@ -212,11 +219,20 @@ func (ms *JournalFast) Save() error {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 
+	// If the journal is not changed, do not save it
+	if ms.lastSavedVersion == ms.currentVersion {
+		return false, ms.currentVersion, nil
+	}
 	saver := data_model.ChunkedStorageSaver{
 		WriteAt:  ms.writeAt,
 		Truncate: ms.truncate,
 	}
-	return ms.save(&saver, 0)
+	err := ms.save(&saver, 0)
+	if err != nil {
+		return false, ms.currentVersion, err
+	}
+	ms.lastSavedVersion = ms.currentVersion
+	return true, ms.currentVersion, nil
 }
 
 func (ms *JournalFast) save(saver *data_model.ChunkedStorageSaver, maxChunkSize int) error {
@@ -547,5 +563,22 @@ func (ms *JournalFast) goUpdateMetrics(aggLog AggLog) {
 		backoffTimeout = data_model.NextBackoffDuration(backoffTimeout)
 		log.Printf("Failed to update metrics from sqliteengine, will retry: %v", err)
 		time.Sleep(backoffTimeout)
+	}
+}
+
+func (ms *JournalFast) StartPeriodicSaving() {
+	go ms.goPeriodicSaving()
+}
+
+func (ms *JournalFast) goPeriodicSaving() {
+	for {
+		sleepDuration := ms.periodicSaveInterval + time.Duration(rand.Intn(int(ms.periodicSaveInterval)))
+		time.Sleep(sleepDuration)
+		ok, version, err := ms.Save()
+		if err != nil {
+			log.Printf("Periodic journal save failed: %v", err)
+		} else if ok {
+			log.Printf("Periodic journal save completed, new version %d", version)
+		}
 	}
 }

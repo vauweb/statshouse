@@ -3,12 +3,12 @@ package stats
 import (
 	"strconv"
 
-	"github.com/vkcom/statshouse-go"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tl"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/env"
-	"github.com/vkcom/statshouse/internal/receiver"
+	"github.com/VKCOM/statshouse-go"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tl"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/env"
+	"github.com/VKCOM/statshouse/internal/receiver"
 )
 
 type MetricWriter interface {
@@ -184,7 +184,7 @@ func (p *MetricWriterSHImpl) WriteSystemMetricValue(nowUnix int64, name string, 
 	m := p.metric
 	fillCommonMetric(p, m, true, name, nowUnix, tagsList...)
 	m.Value = append(m.Value, value)
-	_, _ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
+	_ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
 }
 
 func (p *MetricWriterSHImpl) WriteSystemMetricCountValue(nowUnix int64, name string, count, value float64, tagsList ...int32) {
@@ -192,14 +192,14 @@ func (p *MetricWriterSHImpl) WriteSystemMetricCountValue(nowUnix int64, name str
 	fillCommonMetric(p, m, true, name, nowUnix, tagsList...)
 	m.Counter = count
 	m.Value = append(m.Value, value)
-	_, _ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
+	_ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
 }
 
 func (p *MetricWriterSHImpl) WriteSystemMetricValueWithoutHost(nowUnix int64, name string, value float64, tagsList ...int32) {
 	m := p.metric
 	fillCommonMetric(p, m, false, name, nowUnix, tagsList...)
 	m.Value = append(m.Value, value)
-	_, _ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
+	_ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
 }
 
 func (p *MetricWriterSHImpl) WriteSystemMetricCountValueWithoutHost(nowUnix int64, name string, count, value float64, tagsList ...int32) {
@@ -207,14 +207,14 @@ func (p *MetricWriterSHImpl) WriteSystemMetricCountValueWithoutHost(nowUnix int6
 	fillCommonMetric(p, m, false, name, nowUnix, tagsList...)
 	m.Counter = count
 	m.Value = append(m.Value, value)
-	_, _ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
+	_ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
 }
 
 func (p *MetricWriterSHImpl) WriteSystemMetricCount(nowUnix int64, name string, count float64, tagsList ...int32) {
 	m := p.metric
 	fillCommonMetric(p, m, true, name, nowUnix, tagsList...)
 	m.Counter = count
-	_, _ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
+	_ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
 }
 
 func (p *MetricWriterSHImpl) WriteSystemMetricCountValueExtendedTag(nowUnix int64, name string, count, value float64, tagsList ...Tag) {
@@ -222,12 +222,12 @@ func (p *MetricWriterSHImpl) WriteSystemMetricCountValueExtendedTag(nowUnix int6
 	fillCommonMetric(p, m, true, name, nowUnix, tagsList...)
 	m.Counter = count
 	m.Value = append(m.Value, value)
-	_, _ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
+	_ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
 }
 
 func (p *MetricWriterSHImpl) WriteSystemMetricCountExtendedTag(nowUnix int64, name string, count float64, tagsList ...Tag) {
 	m := p.metric
 	fillCommonMetric(p, m, true, name, nowUnix, tagsList...)
 	m.Counter = count
-	_, _ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
+	_ = p.handler.HandleMetrics(data_model.HandlerArgs{MetricBytes: m})
 }

@@ -11,9 +11,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/data_model/gen2/internal"
-	"github.com/vkcom/statshouse/internal/vkgo/basictl"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/internal"
+	"github.com/VKCOM/statshouse/internal/vkgo/basictl"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 type (
@@ -82,7 +82,7 @@ type (
 )
 
 type Client struct {
-	Client  *rpc.Client
+	Client  rpc.Client
 	Network string // should be either "tcp4" or "unix"
 	Address string
 	ActorID int64         // should be >0 for routing via rpc-proxy

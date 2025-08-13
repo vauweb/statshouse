@@ -13,23 +13,17 @@ import (
 
 	"go4.org/mem"
 
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/mapping"
-	"github.com/vkcom/statshouse/internal/metajournal"
-	"github.com/vkcom/statshouse/internal/pcache"
-)
-
-const (
-	metricMapQueueSize = 1000
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/mapping"
+	"github.com/VKCOM/statshouse/internal/metajournal"
 )
 
 type worker struct {
 	sh2           *agent.Agent
 	metricStorage *metajournal.MetricsStorage
-	mapper        *mapping.Mapper
 	autoCreate    *data_model.AutoCreate
 	logPackets    func(format string, args ...interface{})
 
@@ -37,18 +31,17 @@ type worker struct {
 	floodTimeHandlePkgFail time.Time
 }
 
-func startWorker(sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, pmcLoader pcache.LoaderFunc, dc *pcache.DiskCache, ac *data_model.AutoCreate, suffix string, logPackets func(format string, args ...interface{})) *worker {
+func startWorker(sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, ac *data_model.AutoCreate, logPackets func(format string, args ...interface{})) *worker {
 	w := &worker{
 		sh2:           sh2,
 		metricStorage: metricStorage,
 		autoCreate:    ac,
 		logPackets:    logPackets,
 	}
-	w.mapper = mapping.NewMapper(suffix, pmcLoader, dc, ac, metricMapQueueSize, w.handleMappedMetricUnlocked)
 	return w
 }
 
-func (w *worker) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader, done bool) {
+func (w *worker) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader) {
 	if w.logPackets != nil {
 		w.logPackets("Parsed metric: %s\n", args.MetricBytes.String())
 	}
@@ -69,30 +62,17 @@ func (w *worker) HandleMetrics(args data_model.HandlerArgs) (h data_model.Mapped
 	}
 	w.fillTime(args, &h)
 	metaOk := w.fillMetricMeta(args, &h)
-	conveyorV3 := w.sh2.UseConveyorV3() || (h.MetricMeta != nil && h.MetricMeta.PipelineVersion == 3)
-	if conveyorV3 {
-		if metaOk {
-			w.sh2.Map(args, &h, w.autoCreate, false)
-		} else {
-			w.sh2.MapEnvironment(args.MetricBytes, &h)
-		}
-		done = true
+	if metaOk {
+		w.sh2.Map(args, &h, w.autoCreate, false)
 	} else {
-		if metaOk {
-			done = w.mapper.Map(args, h.MetricMeta, &h)
-		} else {
-			w.mapper.MapEnvironment(args.MetricBytes, &h)
-			done = true
-		}
+		w.sh2.MapEnvironment(args.MetricBytes, &h)
 	}
-	if done {
-		if w.logPackets != nil {
-			w.printMetric("cached", *args.MetricBytes, h)
-		}
-		w.sh2.TimingsMapping.AddValueCounter(time.Since(h.ReceiveTime).Seconds(), 1)
-		w.sh2.ApplyMetric(*args.MetricBytes, h, format.TagValueIDSrcIngestionStatusOKCached, args.Scratch)
+	if w.logPackets != nil {
+		w.printMetric("cached", *args.MetricBytes, h)
 	}
-	return h, done
+	w.sh2.TimingsMapping.AddValueCounter(time.Since(h.ReceiveTime).Seconds(), 1)
+	w.sh2.ApplyMetric(*args.MetricBytes, h, format.TagValueIDSrcIngestionStatusOKCached, args.Scratch)
+	return h
 }
 
 func (w *worker) fillTime(args data_model.HandlerArgs, h *data_model.MappedMetricHeader) {
@@ -145,14 +125,6 @@ func (w *worker) fillMetricMeta(args data_model.HandlerArgs, h *data_model.Mappe
 	h.InvalidString = metric.Name
 	h.IngestionStatus = format.TagValueIDSrcIngestionStatusErrMetricNameEncoding
 	return false
-}
-
-func (w *worker) handleMappedMetricUnlocked(m tlstatshouse.MetricBytes, h data_model.MappedMetricHeader) {
-	if w.logPackets != nil {
-		w.printMetric("uncached", m, h)
-	}
-	w.sh2.TimingsMappingSlow.AddValueCounter(time.Since(h.ReceiveTime).Seconds(), 1)
-	w.sh2.ApplyMetric(m, h, format.TagValueIDSrcIngestionStatusOKUncached, nil) // will be allocation for resolution hash, but this is slow path
 }
 
 func (w *worker) HandleParseError(pkt []byte, err error) {

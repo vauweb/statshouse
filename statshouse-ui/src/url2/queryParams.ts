@@ -17,12 +17,21 @@ export type PlotKey = string;
 
 export type GroupKey = string;
 
+export type GroupAutoSize = 'l' | 'm' | 's';
+export type GroupSize = '1' | '2' | '3' | '4' | '6' | GroupAutoSize;
+
 export type GroupInfo = {
   id: GroupKey;
   name: string;
   show: boolean;
-  count: number;
-  size: string;
+  /**
+   * @deprecated
+   */
+  count?: number;
+  /**
+   * @deprecated
+   */
+  size?: string;
   description: string;
 };
 
@@ -54,6 +63,13 @@ export type VariableParams = {
 
 export type FilterTag = Partial<Record<TagKey, string[]>>;
 
+export type LayoutInfo = {
+  x: number;
+  y: number;
+  h: number;
+  w: number;
+};
+
 export type PlotParams = {
   id: PlotKey;
   metricName: string;
@@ -82,6 +98,8 @@ export type PlotParams = {
   logScale: boolean;
   timeShifts: number[];
   prometheusCompat: boolean;
+  group?: GroupKey;
+  layout?: LayoutInfo;
 };
 
 export type TimeRange = {
@@ -93,6 +111,7 @@ export type TimeRange = {
 };
 
 export type QueryParams = {
+  version?: string;
   live: boolean;
   theme?: string;
   dashboardId?: string;
@@ -105,7 +124,8 @@ export type QueryParams = {
   timeShifts: number[];
   tabNum: string;
   plots: Partial<Record<PlotKey, PlotParams>>;
-  orderPlot: PlotKey[];
+  /** @deprecated */
+  orderPlot?: PlotKey[];
   variables: Partial<Record<VariableKey, VariableParams>>;
   orderVariables: VariableKey[];
   groups: Partial<Record<GroupKey, GroupInfo>>;

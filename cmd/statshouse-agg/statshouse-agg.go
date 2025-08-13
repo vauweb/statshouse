@@ -21,16 +21,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/aggregator"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/pcache/sqlitecache"
+	"github.com/VKCOM/statshouse/internal/vkgo/build"
+	"github.com/VKCOM/statshouse/internal/vkgo/platform"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 	_ "github.com/prometheus/prometheus/discovery/consul" // spawns service discovery goroutines
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/aggregator"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/platform"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
 )
 
 const defaultPathToPwd = `/etc/engine/pass`
@@ -107,7 +108,7 @@ func mainAggregator() int {
 		return 1
 	}
 	_ = os.Mkdir(argv.cacheDir, os.ModePerm) // create dir, but not parent dirs
-	dc, err := pcache.OpenDiskCache(filepath.Join(argv.cacheDir, "mapping_cache.sqlite3"), pcache.DefaultTxDuration)
+	dc, err := sqlitecache.OpenSqliteDiskCache(filepath.Join(argv.cacheDir, "mapping_cache.sqlite3"), sqlitecache.DefaultTxDuration)
 	if err != nil {
 		log.Printf("failed to open disk cache: %v", err)
 		return 1
@@ -173,8 +174,13 @@ main_loop:
 	log.Printf("4. Waiting RPC clients to receive responses and disconnect...")
 	agg.WaitRPCServer(10 * time.Second)
 	shutdownInfo.StopRPCServer = agent.ShutdownInfoDuration(&now).Nanoseconds()
-	log.Printf("5. Saving mappings...")
-	_ = mappingsCache.Save()
+	log.Printf("5. Saving mappings cache...")
+	ok, err := mappingsCache.Save()
+	if ok {
+		log.Printf("5. Mappings cache saved")
+	} else if err != nil {
+		log.Printf("5. Failed to save mappings cache: %v", err)
+	}
 	shutdownInfo.SaveMappings = agent.ShutdownInfoDuration(&now).Nanoseconds()
 	log.Printf("6. Saving journals...")
 	agg.SaveJournals()

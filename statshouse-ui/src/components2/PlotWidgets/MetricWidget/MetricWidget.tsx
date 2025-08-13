@@ -19,7 +19,7 @@ import {
   UPlotWrapperPropsOpts,
   UPlotWrapperPropsScales,
 } from '@/components/UPlotWrapper';
-import type { PlotData, PlotValues } from '@/store2/plotDataStore';
+import type { PlotValues } from '@/store2/plotDataStore';
 import { setLiveMode } from '@/store2/liveModeStore';
 import { formatByMetricType, getMetricType } from '@/common/formatByMetricType';
 import { dataIdxNearest } from '@/common/dataIdxNearest';
@@ -43,7 +43,6 @@ import { rightPad, syncGroup, unFocusAlfa, yLockDefault } from '@/components2/Pl
 import { useMetricName } from '@/hooks/useMetricName';
 import { useMetricMeta } from '@/hooks/useMetricMeta';
 import { useMetricData } from '@/hooks/useMetricData';
-import { produce } from 'immer';
 import { resetZoom, setPlotYLock, setTimeRange } from '@/store2/methods';
 import { PlotBox } from '@/components2/Plot/PlotView/PlotBox';
 
@@ -312,16 +311,17 @@ export function MetricWidget({ className, isDashboard, isEmbed, fixRatio }: Plot
   const onLegendShow = useCallback(
     (index: number, show: boolean, single: boolean) => {
       const idx = index - 1;
-      setData(
-        produce<PlotData>((d) => {
-          if (single) {
-            const otherShow = d.seriesShow.some((_show, indexSeries) => (indexSeries === idx ? false : _show));
-            d.seriesShow = d.seriesShow.map((_, indexSeries) => (indexSeries === idx ? true : !otherShow));
-          } else {
-            d.seriesShow[idx] = show ?? !d.seriesShow[idx];
-          }
-        })
-      );
+      setData((d) => {
+        if (single) {
+          const otherShow = d.seriesShow.some((_show, indexSeries) => (indexSeries === idx ? false : _show));
+          d.seriesShow = d.seriesShow.map((_, indexSeries) => (indexSeries === idx ? true : !otherShow));
+        } else {
+          d.seriesShow[idx] = show ?? !d.seriesShow[idx];
+        }
+        if (d.seriesShow.every((i) => !i)) {
+          d.seriesShow.fill(true);
+        }
+      });
     },
     [setData]
   );
@@ -433,12 +433,13 @@ export function MetricWidget({ className, isDashboard, isEmbed, fixRatio }: Plot
         {!error403 && (
           <div className="plot-legend">
             <PlotLegend
-              plotKey={id}
               legend={legend}
               onLegendShow={onLegendShow}
               onLegendFocus={onLegendFocus}
               compact={compact && !(fixHeight > 0 && isDashboard)}
               unit={metricType}
+              visible={visibleBool || iconVisible}
+              priority={visibleBool ? (isDashboard ? 2 : 1) : 3}
             />
             {topInfo && (!compact || (fixHeight > 0 && isDashboard)) && (
               <div className="pb-3">

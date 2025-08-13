@@ -10,16 +10,19 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/vkgo/basictl"
 	"pgregory.net/rand"
+
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/vkgo/basictl"
 )
 
 type MappingPair = tlstatshouse.Mapping
@@ -74,6 +77,11 @@ type MappingsCache struct {
 	evicts               atomic.Int64
 	adds                 atomic.Int64
 
+	// periodic saving
+	version              uint64 // accessed under modifyMu
+	lastSavedVersion     uint64 // accessed under modifyMu
+	periodicSaveInterval time.Duration
+
 	// custom FS
 	writeAt  func(offset int64, data []byte) error
 	truncate func(offset int64) error
@@ -85,11 +93,12 @@ func elementSizeMem(s string) int64 {
 
 func NewMappingsCache(maxSize int64, maxTTL int) *MappingsCache {
 	c := &MappingsCache{
-		cache:        map[string]cacheValue{},
-		rnd:          rand.New(),
-		accessTSGran: 1, // seconds
-		writeAt:      func(offset int64, data []byte) error { return nil },
-		truncate:     func(offset int64) error { return nil },
+		cache:                map[string]cacheValue{},
+		rnd:                  rand.New(),
+		accessTSGran:         1, // seconds
+		periodicSaveInterval: time.Hour,
+		writeAt:              func(offset int64, data []byte) error { return nil },
+		truncate:             func(offset int64) error { return nil },
 	}
 	c.maxSize.Store(maxSize)
 	c.maxTTL.Store(int64(maxTTL))
@@ -320,6 +329,7 @@ func (c *MappingsCache) AddValues(nowUnix uint32, pairs []MappingPair) {
 		for _, p := range pairs {
 			c.addItem(p.Str, p.Value, nowUnix)
 		}
+		c.version += 1
 		return
 	}
 	removeSize := c.sumSize + newItemsSizeMem - maxSize
@@ -383,6 +393,7 @@ func (c *MappingsCache) AddValues(nowUnix uint32, pairs []MappingPair) {
 		c.addItem(p.Str, p.Value, nowUnix)
 		// ins++
 	}
+	c.version += 1
 	// d4 := time.Since(a)
 	// fmt.Printf("addPairsLocked len(pairs) len(items) dels ins: %d %d %d %d %v %v %v %v %v\n", len(pairs), len(items), dels, ins, d0, d1-d0, d2-d1, d3-d2, d4-d3)
 	// 1024 2048 1023 1024 104.589µs 54.722µs 459.022µs 74.654µs 93.05µs
@@ -423,7 +434,7 @@ func elementSizeDisk(k string) int64 { // max, can be less if short string, requ
 	return 4 + int64(len(k)) + 3 + 4 + 4 // strlen, string, padding, value accessTS
 }
 
-func (c *MappingsCache) Save() error {
+func (c *MappingsCache) Save() (bool, error) {
 	// We exclude writers so that they do not block on Lock() while code below runs in RLock().
 	// If we allow this, all new readers (GetValue) block on RLock(), effectively waiting for Save to finish.
 	c.modifyMu.Lock()
@@ -431,6 +442,10 @@ func (c *MappingsCache) Save() error {
 
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
+	if c.version == c.lastSavedVersion {
+		return false, nil
+	}
 
 	saver := data_model.ChunkedStorageSaver{
 		WriteAt:  c.writeAt,
@@ -461,17 +476,22 @@ func (c *MappingsCache) Save() error {
 		})
 		for _, p := range items {
 			if err := appendItem(p.str, p.val.value, p.val.accessTS); err != nil {
-				return err
+				return false, err
 			}
 		}
 	} else {
 		for k, p := range c.cache {
 			if err := appendItem(k, p.value, p.accessTS); err != nil {
-				return err
+				return false, err
 			}
 		}
 	}
-	return saver.FinishWrite(chunk)
+	err := saver.FinishWrite(chunk)
+	if err != nil {
+		return false, err
+	}
+	c.lastSavedVersion = c.version
+	return true, nil
 }
 
 // callers are expected to ignore error from this method
@@ -515,4 +535,22 @@ func (c *MappingsCache) load(fileSize int64, readAt func(b []byte, offset int64)
 		}
 	}
 	return nil
+}
+
+func (c *MappingsCache) StartPeriodicSaving() {
+	go c.goPeriodicSaving()
+}
+
+func (c *MappingsCache) goPeriodicSaving() {
+	for {
+		sleepDuration := c.periodicSaveInterval + time.Duration(rand.Intn(int(c.periodicSaveInterval)))
+		time.Sleep(sleepDuration)
+
+		ok, err := c.Save()
+		if err != nil {
+			log.Printf("Periodic mappings cache save failed: %v", err)
+		} else if ok {
+			log.Printf("Periodic mappings cache save completed")
+		}
+	}
 }

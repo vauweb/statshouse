@@ -8,7 +8,6 @@ import uPlot from 'uplot';
 import type { MetricType, QueryWhat } from '@/api/enum';
 import type { PlotKey, PlotParams, TimeRange } from '@/url2';
 import type { QuerySeriesMeta } from '@/api/query';
-import type { SelectOptionProps } from '@/components/Select';
 import { createStore } from '@/store2/createStore';
 import { ProduceUpdate } from '@/store2/helpers';
 import { produce } from 'immer';
@@ -19,16 +18,8 @@ import { useStatsHouse } from '@/store2';
 export type PlotValues = {
   rawValue: number | null;
   value: string;
-  metricName: string;
-  label: string;
-  baseLabel: string;
-  timeShift: number;
-  max_host: string;
-  total: number;
-  percent: string;
-  max_host_percent: string;
-  top_max_host: string;
-  top_max_host_percent: string;
+  seriesIdx: number;
+  idx: number | null;
 };
 
 export type TopInfo = {
@@ -37,11 +28,15 @@ export type TopInfo = {
   info: string;
 };
 
+export type PlotDataSeries = uPlot.Series & {
+  label: string | undefined;
+};
+
 export type PlotData = {
   data: uPlot.AlignedData;
   dataView: uPlot.AlignedData;
   bands?: uPlot.Band[];
-  series: uPlot.Series[];
+  series: PlotDataSeries[];
   seriesShow: boolean[];
   promQL: string;
   metricName: string;
@@ -72,7 +67,6 @@ export type PlotData = {
   legendMaxHostWidth: number;
   legendMaxHostPercentWidth: number;
   topInfo?: TopInfo;
-  maxHostLists: SelectOptionProps[][];
   promqltestfailed?: boolean;
   promqlExpand: boolean;
 };

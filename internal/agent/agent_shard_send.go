@@ -16,15 +16,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/compress"
-	"github.com/vkcom/statshouse/internal/vkgo/basictl"
+	"github.com/VKCOM/statshouse/internal/compress"
+	"github.com/VKCOM/statshouse/internal/vkgo/basictl"
 
-	"github.com/vkcom/statshouse/internal/vkgo/semaphore"
+	"github.com/VKCOM/statshouse/internal/vkgo/semaphore"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 
 	"pgregory.net/rand"
 )
@@ -342,6 +342,9 @@ func (s *Shard) sampleBucket(bucket *data_model.MetricsBucket, buffers data_mode
 
 func (s *Shard) sendToSenders(bucket *data_model.MetricsBucket, sampleFactors []tlstatshouse.SampleFactor, scratch []byte) []byte {
 	version := uint8(3)
+	if s.sendSourceBucket2 {
+		version = 2
+	}
 	data, scratch, err := s.compressBucket(bucket, sampleFactors, version, scratch)
 	cbd := compressedBucketData{time: bucket.Time, data: data, version: version} // No id as not saved to disk yet
 	if err != nil {

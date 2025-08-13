@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
 )
 
 type (
@@ -30,11 +30,9 @@ type (
 )
 
 type loadPointsFunc func(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD, avoidCache bool) ([][]tsSelectRow, error)
-type maybeAddQuerySeriesTagValue func(m map[string]SeriesMetaTag, metricMeta *format.MetricMetaValue, version string, by []string, tagIndex int, id int64) bool
 
 func (h *requestHandler) getTableFromLODs(ctx context.Context, lods []data_model.LOD, tableReqParams tableReqParams,
-	loadPoints loadPointsFunc,
-	maybeAddQuerySeriesTagValue maybeAddQuerySeriesTagValue) (_ []queryTableRow, hasMore bool, _ error) {
+	loadPoints loadPointsFunc) (_ []queryTableRow, hasMore bool, _ error) {
 	req := tableReqParams.req
 	metricMeta := tableReqParams.metricMeta
 	rowsIdx := make(map[tableRowKey]int)
@@ -60,26 +58,28 @@ func (h *requestHandler) getTableFromLODs(ctx context.Context, lods []data_model
 				continue
 			}
 			pq := queryBuilder{
-				version:     h.version,
-				user:        tableReqParams.user,
-				metric:      metricMeta,
-				what:        q.qry,
-				by:          metricMeta.GroupBy(req.by),
-				filterIn:    tableReqParams.mappedFilterIn,
-				filterNotIn: tableReqParams.mappedFilterNotIn,
-				sort:        req.tableSort(),
-				strcmpOff:   h.Version3StrcmpOff.Load(),
-				utcOffset:   h.utcOffset,
+				version:          h.version,
+				user:             tableReqParams.user,
+				metric:           metricMeta,
+				what:             q.qry,
+				by:               metricMeta.GroupBy(req.by),
+				filterIn:         tableReqParams.mappedFilterIn,
+				filterNotIn:      tableReqParams.mappedFilterNotIn,
+				sort:             req.tableSort(),
+				strcmpOff:        h.Version3StrcmpOff.Load(),
+				utcOffset:        h.utcOffset,
+				newShardingStart: h.NewShardingStart.Load(),
 			}
 			m, err := loadPoints(ctx, h, &pq, data_model.LOD{
-				FromSec:    shiftTimestamp(lod.FromSec, lod.StepSec, 0, lod.Location),
-				ToSec:      shiftTimestamp(lod.ToSec, lod.StepSec, 0, lod.Location),
-				StepSec:    lod.StepSec,
-				Version:    lod.Version,
-				Table:      lod.Table,
-				HasPreKey:  lod.HasPreKey,
-				PreKeyOnly: lod.PreKeyOnly,
-				Location:   tableReqParams.location,
+				FromSec:     shiftTimestamp(lod.FromSec, lod.StepSec, 0, lod.Location),
+				ToSec:       shiftTimestamp(lod.ToSec, lod.StepSec, 0, lod.Location),
+				StepSec:     lod.StepSec,
+				Version:     lod.Version,
+				Metric:      pq.metric,
+				NewSharding: h.newSharding(metricMeta, lod.FromSec),
+				HasPreKey:   lod.HasPreKey,
+				PreKeyOnly:  lod.PreKeyOnly,
+				Location:    tableReqParams.location,
 			}, req.avoidCache)
 			if err != nil {
 				return nil, false, err
@@ -96,7 +96,7 @@ func (h *requestHandler) getTableFromLODs(ctx context.Context, lods []data_model
 				tags := &rows[i].tsTags
 				kvs := make(map[string]SeriesMetaTag, 16)
 				for j := 0; j < format.MaxTags; j++ {
-					wasAdded := maybeAddQuerySeriesTagValue(kvs, metricMeta, req.version, req.by, j, tags.tag[j])
+					wasAdded := h.maybeAddQuerySeriesTagValue(kvs, metricMeta, req.version, req.by, j, tags)
 					if wasAdded {
 						rowRepr.Tags = append(rowRepr.Tags, RawTag{
 							Index: j,
@@ -155,6 +155,10 @@ func (h *requestHandler) getTableFromLODs(ctx context.Context, lods []data_model
 		sort.Sort(queryRows)
 	}
 	return queryRows, hasMore, nil
+}
+
+func (h *Handler) newSharding(metric *format.MetricMetaValue, timestamp int64) bool {
+	return metric.NewSharding(timestamp, h.NewShardingStart.Load())
 }
 
 func limitQueries(rowsByTime [][]tsSelectRow, from, to RowMarker, fromEnd bool, limit int) (res []tsSelectRow, hasMore bool) {

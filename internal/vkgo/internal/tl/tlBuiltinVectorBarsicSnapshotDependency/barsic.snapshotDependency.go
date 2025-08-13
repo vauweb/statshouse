@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -8,9 +8,9 @@
 package tlBuiltinVectorBarsicSnapshotDependency
 
 import (
-	"github.com/vkcom/statshouse/internal/vkgo/basictl"
-	"github.com/vkcom/statshouse/internal/vkgo/internal"
-	"github.com/vkcom/statshouse/internal/vkgo/internal/tlbarsic/tlBarsicSnapshotDependency"
+	"github.com/VKCOM/statshouse/internal/vkgo/basictl"
+	"github.com/VKCOM/statshouse/internal/vkgo/internal"
+	"github.com/VKCOM/statshouse/internal/vkgo/internal/tlbarsic/tlBarsicSnapshotDependency"
 )
 
 var _ = basictl.NatWrite
@@ -52,6 +52,10 @@ func BuiltinVectorBarsicSnapshotDependencyWrite(w []byte, vec []tlBarsicSnapshot
 		w = elem.Write(w)
 	}
 	return w
+}
+
+func BuiltinVectorBarsicSnapshotDependencyInternalReadTL2(r []byte, vec *[]tlBarsicSnapshotDependency.BarsicSnapshotDependency) (_ []byte, err error) {
+	return r, internal.ErrorTL2SerializersNotGenerated("[]tlBarsicSnapshotDependency.BarsicSnapshotDependency")
 }
 
 func BuiltinVectorBarsicSnapshotDependencyReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]tlBarsicSnapshotDependency.BarsicSnapshotDependency) error {
@@ -130,6 +134,10 @@ func BuiltinVectorBarsicSnapshotDependencyBytesWrite(w []byte, vec []tlBarsicSna
 		w = elem.Write(w)
 	}
 	return w
+}
+
+func BuiltinVectorBarsicSnapshotDependencyBytesInternalReadTL2(r []byte, vec *[]tlBarsicSnapshotDependency.BarsicSnapshotDependencyBytes) (_ []byte, err error) {
+	return r, internal.ErrorTL2SerializersNotGenerated("[]tlBarsicSnapshotDependency.BarsicSnapshotDependencyBytes")
 }
 
 func BuiltinVectorBarsicSnapshotDependencyBytesReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]tlBarsicSnapshotDependency.BarsicSnapshotDependencyBytes) error {

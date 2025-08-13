@@ -4,12 +4,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { QueryParams } from '../queryParams';
-import { getDefaultParams } from '../getDefault';
-import { metricEncode } from './metric';
-import { GET_PARAMS, PLOT_TYPE } from '../../api/enum';
-import { orderPlotSplitter, removeValueChar } from '../constants';
+import { getDefaultParams, metricEncode, orderPlotSplitter, QueryParams, removeValueChar } from '@/url2';
+import { GET_PARAMS, PLOT_TYPE } from '@/api/enum';
 import { dequal } from 'dequal/lite';
+import { getFullDashSave } from '@/common/migrate/migrate3to4';
 
 export function widgetsParamsEncode(
   params: QueryParams,
@@ -35,8 +33,10 @@ export function widgetsParamsEncode(
       }
     });
   }
-  if (!dequal(defaultParams.orderPlot, params.orderPlot)) {
-    paramArr.push([GET_PARAMS.orderPlot, params.orderPlot.join(orderPlotSplitter)]);
+  if (getFullDashSave()) {
+    if (params.orderPlot != null && !dequal(defaultParams.orderPlot, params.orderPlot)) {
+      paramArr.push([GET_PARAMS.orderPlot, params.orderPlot.join(orderPlotSplitter)]);
+    }
   }
   return paramArr;
 }

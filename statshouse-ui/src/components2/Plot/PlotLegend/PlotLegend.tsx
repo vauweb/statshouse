@@ -9,35 +9,55 @@ import cn from 'classnames';
 
 import css from './style.module.css';
 import { AlignByDot } from './AlignByDot';
-import { PlotLegendMaxHost } from './PlotLegendMaxHost';
 import { PlotValueUnit } from './PlotValueUnit';
 import { METRIC_TYPE, MetricType } from '@/api/enum';
-import type { PlotValues } from '@/store2/plotDataStore';
-import type { PlotKey } from '@/url2';
+import { PlotValues, usePlotsDataStore } from '@/store2/plotDataStore';
 import { useResizeObserver } from '@/hooks/useResizeObserver';
-import { secondsRangeToString, timeShiftDesc } from '@/view/utils2';
+import { formatPercent, secondsRangeToString, timeShiftDesc } from '@/view/utils2';
 import { LegendItem } from '@/components/UPlotWrapper';
 import { Tooltip } from '@/components/UI';
+import { useWidgetPlotContext } from '@/contexts/useWidgetPlotContext';
+import { useShallow } from 'zustand/react/shallow';
+import { emptyArray } from '@/common/helpers';
+import { PlotLegendMaxHost } from '@/components2/Plot/PlotLegend/PlotLegendMaxHost';
+import { pxPerChar } from '@/common/settings';
 
 type PlotLegendProps = {
-  plotKey: PlotKey;
   legend: LegendItem<PlotValues>[];
   compact?: boolean;
   onLegendFocus?: (index: number, focus: boolean) => void;
   onLegendShow?: (index: number, show: boolean, single: boolean) => void;
   className?: string;
   unit?: MetricType;
+  visible?: boolean;
+  priority?: number;
 };
 
 export const PlotLegend = memo(function PlotLegend({
-  plotKey,
   legend,
   onLegendShow,
   onLegendFocus,
   className,
   compact,
   unit = METRIC_TYPE.none,
+  visible = false,
+  priority = 2,
 }: PlotLegendProps) {
+  const {
+    plot: { id, maxHost },
+  } = useWidgetPlotContext();
+  const { seriesTimeShift, data } = usePlotsDataStore(
+    useShallow(
+      useCallback(
+        ({ plotsData }) => ({
+          seriesTimeShift: plotsData[id]?.seriesTimeShift,
+          data: plotsData[id]?.data ?? emptyArray,
+        }),
+        [id]
+      )
+    )
+  );
+  // const [maxHostLists, maxHostValues, legendMaxHostWidth] = useMaxHosts();
   const refDiv = useRef<HTMLDivElement>(null);
   const { width } = useResizeObserver(refDiv);
   const onFocus = useCallback(
@@ -50,6 +70,21 @@ export const PlotLegend = memo(function PlotLegend({
     },
     [onLegendFocus]
   );
+
+  const totalLine = useMemo(
+    () =>
+      data?.[0]?.map((_, index) => {
+        let s = 0;
+        for (let i = 1; i < data.length; i++) {
+          if (data[i][index] != null && seriesTimeShift && seriesTimeShift[i - 1] <= 0) {
+            s += data[i][index] ?? 0;
+          }
+        }
+        return s;
+      }) ?? [],
+    [data, seriesTimeShift]
+  );
+
   const onShow = useCallback(
     (event: React.MouseEvent) => {
       const index = parseInt(event.currentTarget.getAttribute('data-index') ?? '') || null;
@@ -62,25 +97,57 @@ export const PlotLegend = memo(function PlotLegend({
   );
   const min = useMemo<number>(() => {
     const v = legend.some((l) => l.values?.value);
-    const h = legend.some((l) => l.values?.max_host);
-    if (v && h) {
+    if (v && maxHost) {
       return 0.3;
     } else if (v) {
       return 0.5;
     }
     return 0.8;
-  }, [legend]);
+  }, [legend, maxHost]);
 
   const legendWidth = useMemo(
-    () => Math.min((Math.max(...legend.map((l) => l.label?.length ?? 0)) + 2) * 8, width * min),
-    [min, legend, width]
+    () =>
+      Math.min(
+        (Math.max(
+          ...legend.map((l, index) => {
+            const tsw = timeShiftDesc(seriesTimeShift?.[index - 1] ?? 0).length;
+            return (l.label?.length ?? 0) + tsw;
+          })
+        ) +
+          2) *
+          pxPerChar,
+        width * min
+      ),
+    [legend, width, min, seriesTimeShift]
+  );
+
+  const legendRows = useMemo(
+    () =>
+      legend.map((l, indexL) => {
+        const idx = l.values?.idx;
+        const rawValue = l.values?.rawValue;
+        const percent = (idx != null && rawValue != null && formatPercent(rawValue / totalLine[idx])) || '';
+        let timeShift = '';
+        let baseLabel = l.label;
+        if (seriesTimeShift && indexL && seriesTimeShift[indexL - 1] < 0) {
+          timeShift = timeShiftDesc(seriesTimeShift[indexL - 1]);
+          baseLabel = l.label.replace(timeShift + ' ', '');
+        }
+        return {
+          ...l,
+          percent,
+          baseLabel,
+          timeShift,
+        };
+      }),
+    [legend, seriesTimeShift, totalLine]
   );
 
   return (
     <div ref={refDiv} className={cn(css.legend, compact && css.compact, className)}>
       {compact ? (
         <div className={css.innerLegendCompact}>
-          {legend.slice(1).map((l, index) => (
+          {legendRows.slice(1).map((l, index) => (
             <div
               key={index}
               className={cn(css.labelOuter, !l.show && css.hide)}
@@ -93,8 +160,8 @@ export const PlotLegend = memo(function PlotLegend({
                 className={css.marker}
                 style={{ border: l.stroke && `${l.width}px solid ${l.stroke}`, background: l.fill }}
               ></div>
-              <Tooltip className={css.labelCompact} title={l.label}>
-                {l.label}
+              <Tooltip className={css.labelCompact} title={l.baseLabel}>
+                {l.baseLabel}
               </Tooltip>
             </div>
           ))}
@@ -102,7 +169,7 @@ export const PlotLegend = memo(function PlotLegend({
       ) : (
         <table className={css.innerLegend}>
           <tbody>
-            {legend.map((l, index) => (
+            {legendRows.map((l, index) => (
               <tr
                 key={index}
                 data-index={index}
@@ -133,13 +200,11 @@ export const PlotLegend = memo(function PlotLegend({
                       {index !== 0 ? (
                         l.values ? (
                           <>
-                            {!!l.values.timeShift && (
-                              <span className="text-secondary">{timeShiftDesc(l.values.timeShift)} </span>
-                            )}
-                            <span>{l.values.baseLabel}</span>
+                            {l.timeShift && <span className="text-secondary">{l.timeShift} </span>}
+                            <span>{l.baseLabel}</span>
                           </>
                         ) : (
-                          l.label
+                          l.baseLabel
                         )
                       ) : (
                         l.value || ' '
@@ -162,27 +227,20 @@ export const PlotLegend = memo(function PlotLegend({
                     <td className={css.percent}>
                       <div className="d-flex justify-content-end w-100">
                         <div className="w-0 flex-grow-1">
-                          <AlignByDot
-                            className={css.percentSuffix}
-                            title={l.values?.percent}
-                            value={l.values?.percent ?? ''}
-                            unit="%"
-                          />
+                          <AlignByDot className={css.percentSuffix} title={l.percent} value={l.percent} unit="%" />
                         </div>
                       </div>
                     </td>
-                    {l.values?.max_host && (
+                    {maxHost && (
                       <td className={css.maxHost}>
-                        <PlotLegendMaxHost
-                          value={l.noFocus ? l.values.top_max_host : l.values.max_host}
-                          placeholder={
-                            l.noFocus
-                              ? l.values.top_max_host_percent
-                              : `${l.values.max_host}: ${l.values.max_host_percent}`
-                          }
-                          plotKey={plotKey}
-                          idx={index}
-                        />
+                        {!!seriesTimeShift && seriesTimeShift[index - 1] <= 0 && !!l.values?.rawValue && (
+                          <PlotLegendMaxHost
+                            seriesIdx={index - 1}
+                            idx={l.noFocus ? undefined : l.values?.idx}
+                            visible={visible}
+                            priority={priority}
+                          />
+                        )}
                       </td>
                     )}
                     <td className={css.timeShift}>

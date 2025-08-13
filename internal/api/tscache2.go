@@ -9,10 +9,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/vkcom/statshouse-go"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse-go"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 )
 
 const timeDay = 24 * time.Hour
@@ -220,11 +220,15 @@ func newCache2(h *Handler, chunkSize int, loader tsLoadFunc) *cache2 {
 }
 
 func (c *cache2) Get(ctx context.Context, h *requestHandler, q *queryBuilder, lod data_model.LOD, forceLoad bool) (res cache2Data, err error) {
+	startCacheGet := time.Now()
 	var lodSize int
 	lodSize, err = lod.IndexOf(lod.ToSec)
 	if err != nil || lodSize == 0 {
 		return nil, err
 	}
+	defer func() {
+		h.endpointStat.reportTiming("cache-total", time.Since(startCacheGet))
+	}()
 	shard := c.shards[time.Duration(lod.StepSec)*time.Second]
 	if h.cacheDisabled() {
 		c.tryNotExceedMemoryHardLimit()
@@ -553,6 +557,10 @@ func (l *cache2Loader) init(info *cache2UpdateInfo) {
 }
 
 func (l *cache2Loader) run(ctx context.Context) (cache2Data, error) {
+	start := time.Now()
+	defer func() {
+		l.handler.endpointStat.reportTiming("cache-load-all-chunks", time.Since(start))
+	}()
 	if len(l.chunks) != 0 {
 		if l.waitC == nil {
 			l.waitC = make(chan error)
@@ -629,27 +637,38 @@ func (l *cache2Loader) awaitCopyChunks(s []cache2LoaderChunk, info *cache2Update
 }
 
 func (l *cache2Loader) loadChunks() {
+	startLoadChunks := time.Now()
+	defer func() {
+		l.handler.endpointStat.reportTiming("cache-load-chunks", time.Since(startLoadChunks))
+	}()
 	chunks := l.chunks
 	first := chunks[0]
 	last := chunks[len(chunks)-1]
 	lod := data_model.LOD{
-		FromSec:    first.chunk.start / int64(time.Second), // nanoseconds from seconds
-		ToSec:      last.chunk.end / int64(time.Second),    // nanoseconds from seconds
-		StepSec:    l.lod.StepSec,
-		Version:    l.lod.Version,
-		Table:      l.lod.Table,
-		HasPreKey:  l.lod.HasPreKey,
-		PreKeyOnly: l.lod.PreKeyOnly,
-		Location:   l.lod.Location,
+		FromSec:     first.chunk.start / int64(time.Second), // nanoseconds from seconds
+		ToSec:       last.chunk.end / int64(time.Second),    // nanoseconds from seconds
+		StepSec:     l.lod.StepSec,
+		Version:     l.lod.Version,
+		Metric:      l.lod.Metric,
+		NewSharding: l.lod.NewSharding,
+		HasPreKey:   l.lod.HasPreKey,
+		PreKeyOnly:  l.lod.PreKeyOnly,
+		Location:    l.lod.Location,
 	}
 	h, q := l.handler, l.query
 	c, b := l.cache, l.bucket
 	data := l.data[first.chunkStart:last.chunkEnd]
 	_, err := c.loader(context.Background(), h, q, lod, data, 0)
 	if err == nil {
+		startMapTags := time.Now()
 		cache2MapStringTags(h, q, data)
+		l.handler.endpointStat.reportTiming("cache-map-tags", time.Since(startMapTags))
 	}
 	l.waitC <- err
+	startPostLoad := time.Now()
+	defer func() {
+		l.handler.endpointStat.reportTiming("cache-post-load", time.Since(startPostLoad))
+	}()
 	start, end := first.chunkStart, first.chunkEnd
 	info := cache2UpdateInfo{}
 	defer c.updateRuntimeInfo(l.shard.stepS, b.fau, &info)

@@ -1,4 +1,4 @@
-// Copyright 2024 V Kontakte LLC
+// Copyright 2025 V Kontakte LLC
 //
 // This Source Code Form is subject to the terms of the Mozilla Public
 // License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -10,13 +10,22 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/tlbarsic"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/vkgo/tlbarsic"
 )
 
 type StartCmd = tlbarsic.Start
 
-const BarsicNotAMasterRPCError = -2011 // TODO - move to better place
+const (
+	BarsicNotAMasterRPCError = -2011 // TODO - move to better place
+
+	// names of parameters in engine.Stat
+	StatClusterName     = "barsic-cluster"
+	StatShardName       = "barsic-shard"
+	StatSwitchStatus    = "barsic-status"        // TODO: remove this stats after full switch to barsic
+	StatUseCommonHeader = "barsic-common-header" // TODO: remove this stats after full switch to barsic
+	StatRunUnderBarsic  = "barsic-exec"
+)
 
 var (
 	// ErrorUnknownMagic mean engine encounter unknown magic number.

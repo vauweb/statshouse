@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { invertObj, isEnum, toEnum, toNumber } from '../common/helpers';
+import { invertObj, isEnum, toEnum, toNumber } from '@/common/helpers';
 
 export type Enum<T> = T[keyof T];
 
@@ -12,6 +12,9 @@ export const GET_PARAMS = {
   numResults: 'n',
   version: 'v',
   metricName: 's',
+  metricId: 'id',
+  metricApiVersion: 'ver',
+  metricUrlVersion: 'mv',
   metricCustomName: 'cn',
   /**
    * metric unit
@@ -36,6 +39,8 @@ export const GET_PARAMS = {
   metricMaxHost: 'mh',
   metricAgg: 'g',
   metricPromQL: 'q',
+  metricGroupKey: 'dg',
+  metricLayout: 'dl',
   /**
    * widget type
    */
@@ -57,6 +62,7 @@ export const GET_PARAMS = {
   dashboardName: 'dn',
   dashboardDescription: 'dd',
   dashboardVersion: 'dv',
+  dashboardSchemeVersion: 'ver',
   metricsGroupID: 'id',
   metricsNamespacesID: 'id',
   metricsListAndDisabled: 'sd',
@@ -188,6 +194,21 @@ export const TAG_KEY = {
   _29: '29',
   _30: '30',
   _31: '31',
+  _32: '32',
+  _33: '33',
+  _34: '34',
+  _35: '35',
+  _36: '36',
+  _37: '37',
+  _38: '38',
+  _39: '39',
+  _40: '40',
+  _41: '41',
+  _42: '42',
+  _43: '43',
+  _44: '44',
+  _45: '45',
+  _46: '46',
 } as const;
 export type TagKey = Enum<typeof TAG_KEY>;
 
@@ -202,6 +223,7 @@ export const METRIC_META_KIND = {
 export type MetricMetaKind = Enum<typeof METRIC_META_KIND>;
 
 export const METRIC_META_TAG_RAW_KIND = {
+  int: 'int',
   uint: 'uint',
   hex: 'hex',
   hexBswap: 'hex_bswap',
@@ -210,9 +232,16 @@ export const METRIC_META_TAG_RAW_KIND = {
   ip: 'ip',
   ipBswap: 'ip_bswap',
   lexencFloat: 'lexenc_float',
+  int64: 'int64',
+  uint64: 'uint64',
+  hex64: 'hex64',
+  hex64_bswap: 'hex64_bswap',
+  /** @deprecated 'float' raw value kind */
   float: 'float',
 } as const;
 export type MetricMetaTagRawKind = Enum<typeof METRIC_META_TAG_RAW_KIND>;
+export const isMetricMetaTagRawKind = isEnum<MetricMetaTagRawKind>(METRIC_META_TAG_RAW_KIND);
+export const toMetricMetaTagRawKind = toEnum(isMetricMetaTagRawKind);
 
 export const API_FETCH_OPT_METHODS = {
   get: 'GET',

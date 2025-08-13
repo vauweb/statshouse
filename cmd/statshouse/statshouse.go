@@ -24,20 +24,20 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/env"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/metajournal"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/receiver"
-	"github.com/vkcom/statshouse/internal/stats"
-	"github.com/vkcom/statshouse/internal/util"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/platform"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/env"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/metajournal"
+	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/receiver"
+	"github.com/VKCOM/statshouse/internal/stats"
+	"github.com/VKCOM/statshouse/internal/util"
+	"github.com/VKCOM/statshouse/internal/vkgo/build"
+	"github.com/VKCOM/statshouse/internal/vkgo/platform"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 )
 
 const defaultPathToPwd = `/etc/engine/pass`
@@ -70,8 +70,9 @@ var argv struct {
 	mapString string
 
 	// tlclient mode
-	statshouseAddr string
-	statshouseNet  string
+	statshouseAddr  string
+	statshouseNet   string
+	tlclientTimeout time.Duration
 
 	// tag_mapping mode
 	metric          string
@@ -87,24 +88,23 @@ var argv struct {
 
 	// for old mode
 	historicStorageDir string
-	diskCacheFilename  string
 
 	agent.Config
 }
 
 type mainAgent struct {
-	agent           *agent.Agent
-	diskCache       *pcache.DiskCache
-	worker          *worker
-	mirrorUdpConn   net.Conn
-	receiverHTTP    *receiver.HTTP
-	receiverTCP     *receiver.TCP
-	receiversUDP    []*receiver.UDP
-	hijackHTTP      *rpc.HijackListener
-	hijackTCP       *rpc.HijackListener
-	receiversWG     sync.WaitGroup
-	logPackets      func(format string, args ...interface{})
-	hardwareMetrics *stats.CollectorManager
+	agent             *agent.Agent
+	worker            *worker
+	mirrorUdpConn     net.Conn
+	receiverHTTP      *receiver.HTTP
+	receiverTCP       *receiver.TCP
+	receiversUDP      []*receiver.UDP
+	hijackHTTP        *rpc.HijackListener
+	hijackTCP         *rpc.HijackListener
+	receiversWG       sync.WaitGroup
+	logPackets        func(format string, args ...interface{})
+	hardwareMetrics   *stats.CollectorManager
+	mappingsCachePath string
 }
 
 var (
@@ -166,26 +166,23 @@ func run() int {
 	var fpmc *os.File
 	if argv.cacheDir != "" { // we support working without touching disk (on readonly filesystems, in stateless containers, etc)
 		var err error
-		if main.diskCache, err = pcache.OpenDiskCache(filepath.Join(argv.cacheDir, "mapping_cache.sqlite3"), pcache.DefaultTxDuration); err != nil {
-			logErr.Printf("failed to open disk cache: %v", err)
-			return 1
-		}
-		// we do not want to delay shutdown for saving cache
-		// defer func() {
-		//	if err := dc.Close(); err != nil {
-		//		logErr.Printf("failed to close disk cache: %v", err)
-		//	}
-		// }()
-
 		// we do not want to confuse mappings from different clusters, this would be a disaster
-		fpmc, err = os.OpenFile(filepath.Join(argv.cacheDir, fmt.Sprintf("mappings-%s.cache", argv.Cluster)), os.O_CREATE|os.O_RDWR, 0666)
+		main.mappingsCachePath = filepath.Join(argv.cacheDir, fmt.Sprintf("mappings-%s.cache", argv.Cluster))
+		fpmc, err = os.OpenFile(main.mappingsCachePath, os.O_CREATE|os.O_RDWR, 0666)
 		if err != nil {
 			logErr.Printf("failed to open agent mappings cache: %v", err)
 			return 1
 		}
 		defer fpmc.Close()
 	}
+	mappingsCacheEmpty := true
+	if fpmc != nil {
+		if s, err := fpmc.Stat(); err == nil {
+			mappingsCacheEmpty = s.Size() == 0
+		}
+	}
 	mappingsCache, _ := pcache.LoadMappingsCacheFile(fpmc, argv.MappingCacheSize, argv.MappingCacheTTL) // we ignore error because cache can be damaged
+	mappingsCache.StartPeriodicSaving()
 
 	startDiscCacheTime := time.Now() // we only have disk cache before. Be carefull when redesigning
 	if argv.maxCores > 0 {
@@ -235,7 +232,8 @@ func run() int {
 		log.Printf,
 		main.beforeFlushBucket,
 		nil,
-		envLoader)
+		envLoader,
+		false)
 	if err != nil {
 		logErr.Printf("error creating Agent instance: %v", err)
 		return 1
@@ -278,6 +276,7 @@ func run() int {
 	main.agent.Run(0, 0, 0)
 
 	journalFast.Start(main.agent, nil, main.agent.LoadMetaMetricJournal)
+	journalFast.StartPeriodicSaving()
 
 	var ac *data_model.AutoCreate
 	if argv.AutoCreate {
@@ -285,14 +284,7 @@ func run() int {
 		defer ac.Shutdown()
 	}
 
-	main.worker = startWorker(main.agent,
-		metricStorage,
-		main.agent.LoadOrCreateMapping,
-		main.diskCache,
-		ac,
-		argv.Cluster,
-		main.logPackets,
-	)
+	main.worker = startWorker(main.agent, metricStorage, ac, main.logPackets)
 	//code to populate cache for test below
 	//for i := 0; i != 10000000; i++ {
 	//	v := "hren_test_" + strconv.Itoa(i)
@@ -311,21 +303,17 @@ func run() int {
 	//		log.Printf("Get() took %v error %v", time.Since(slowNow), err)
 	//	}
 	//}()
-	tagsCacheEmpty := main.worker.mapper.TagValueDiskCacheEmpty()
-	if !tagsCacheEmpty {
+
+	if !mappingsCacheEmpty {
 		logOk.Printf("Tag Value cache not empty")
 	} else {
 		logOk.Printf("Tag Value cache empty, loading boostrap...")
-		mappings, ttl, err := main.agent.GetTagMappingBootstrap(context.Background())
+		mappings, _, err := main.agent.GetTagMappingBootstrap(context.Background())
 		if err != nil {
 			logErr.Printf("failed to load boostrap mappings: %v", err)
 		} else {
 			now := time.Now()
-			for _, ma := range mappings {
-				if err := main.worker.mapper.SetBootstrapValue(now, ma.Str, pcache.Int32ToValue(ma.Value), ttl); err != nil {
-					logErr.Printf("failed to set boostrap mapping %q <-> %d: %v", ma.Str, ma.Value, err)
-				}
-			}
+			mappingsCache.AddValues(uint32(now.Unix()), mappings)
 			logOk.Printf("Loaded and set %d boostrap mappings", len(mappings))
 		}
 	}
@@ -367,7 +355,7 @@ func run() int {
 		rpc.ServerWithVersion(build.Info()),
 		rpc.ServerWithCryptoKeys([]string{aesPwd}),
 		rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
-		rpc.ServerWithHandler(handlerRPC.Handle),
+		rpc.ServerWithSyncHandler(handlerRPC.Handle),
 		rpc.ServerWithStatsHandler(statsHandler{receiversUDP: main.receiversUDP, receiverRPC: receiverRPC, sh2: main.agent, journal: journalFast}.handleStats),
 		metrics.ServerWithMetrics,
 	}
@@ -432,11 +420,21 @@ loop:
 	logOk.Printf("7. Waiting preprocessor to save %d buckets of historic data...", nonEmpty)
 	main.agent.WaitPreprocessor()
 	shutdownInfo.StopPreprocessor = agent.ShutdownInfoDuration(&now).Nanoseconds()
-	logOk.Printf("8. Saving mappings...")
-	_ = mappingsCache.Save()
+	logOk.Printf("8. Saving mappings cache...")
+	ok, err := mappingsCache.Save()
+	if ok {
+		logOk.Printf("8. Mappings cache saved")
+	} else if err != nil {
+		logErr.Printf("8. Failed to save mappings cache: %v", err)
+	}
 	shutdownInfo.SaveMappings = agent.ShutdownInfoDuration(&now).Nanoseconds()
 	logOk.Printf("9. Saving journal...")
-	_ = journalFast.Save()
+	ok, version, err := journalFast.Save()
+	if ok {
+		logOk.Printf("9. Journal saved, new version %d", version)
+	} else if err != nil {
+		logErr.Printf("9. Failed to save journal: %v", err)
+	}
 	shutdownInfo.SaveJournal = agent.ShutdownInfoDuration(&now).Nanoseconds()
 	shutdownInfo.FinishShutdownTime = now.UnixNano()
 	agent.ShutdownInfoSave(argv.cacheDir, shutdownInfo)
@@ -509,11 +507,11 @@ func (main *mainAgent) beforeFlushBucket(a *agent.Agent, unixNow uint32) {
 		a.AddValueCounter(unixNow, format.BuiltinMetricMetaAgentUDPReceiveBufferSize,
 			[]int32{}, v, 1)
 	}
-	if main.diskCache != nil {
-		s, err := main.diskCache.DiskSizeBytes()
-		if err == nil {
+	if main.mappingsCachePath != "" {
+		fi, err := os.Stat(main.mappingsCachePath)
+		if err == nil && fi != nil {
 			a.AddValueCounter(unixNow, format.BuiltinMetricMetaAgentDiskCacheSize,
-				[]int32{0, 0, 0, 0, a.ComponentTag()}, float64(s), 1)
+				[]int32{0, 0, 0, 0, a.ComponentTag()}, float64(fi.Size()), 1)
 		}
 	}
 }
@@ -560,7 +558,7 @@ func readAESPwd() string {
 	return string(aesPwd)
 }
 
-func argvCreateClient() (*rpc.Client, string) {
+func argvCreateClient() (rpc.Client, string) {
 	cryptoKey := readAESPwd()
 	return rpc.NewClient(
 		rpc.ClientWithLogf(logErr.Printf), rpc.ClientWithCryptoKey(cryptoKey), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())), cryptoKey
@@ -634,7 +632,6 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		flag.IntVar(&sampleFactor, "sample-factor", 1, "Deprecated - If 2, 50% of stats will be throw away, if 10, 90% of stats will be thrown away. If <= 1, keep all stats.")
 		flag.Uint64Var(&maxMemLimit, "m", 0, "Deprecated - max memory usage limit")
 		flag.StringVar(&argv.historicStorageDir, "historic-storage", "", "Data that cannot be immediately sent will be stored here together with metric cache.")
-		flag.StringVar(&argv.diskCacheFilename, "disk-cache-filename", "", "disk cache file name")
 
 		build.FlagParseShowVersionHelp()
 		parseListenAddress()
@@ -642,9 +639,6 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		// TODO: legacy mode options, to be removed
 		if argv.cacheDir == "" && argv.historicStorageDir != "" {
 			argv.cacheDir = argv.historicStorageDir
-		}
-		if argv.cacheDir == "" && argv.diskCacheFilename != "" {
-			argv.cacheDir = filepath.Dir(argv.diskCacheFilename)
 		}
 
 		argv.AggregatorAddresses = strings.Split(argv.aggAddr, ",")
@@ -697,6 +691,7 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.statshouseAddr, "statshouse-addr", "127.0.0.1:13337", "statshouse address for tlclient")
 		flag.StringVar(&argv.statshouseNet, "statshouse-net", "tcp4", "statshouse network for tlclient")
+		flag.DurationVar(&argv.tlclientTimeout, "timeout", 2*time.Second, "timeout of RPC call to agent")
 		build.FlagParseShowVersionHelp()
 		return mainTLClient, nil
 	case "tlclient.api":
@@ -713,6 +708,13 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		flag.StringVar(&argv.tags, "tag", "", "string to be searched for a int32 mapping")
 		build.FlagParseShowVersionHelp()
 		return mainTagMapping, nil
+	case "put_tag_bootstrap":
+		flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "")
+		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
+		flag.StringVar(&argv.metadataAddr, "metadata-addr", "127.0.0.1:2442", "")
+		flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "")
+		build.FlagParseShowVersionHelp()
+		return mainPutTagBootstrap, nil
 	case "publish_tag_drafts":
 		flag.BoolVar(&argv.dryRun, "dry-run", true, "do not publish changes")
 		flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "")

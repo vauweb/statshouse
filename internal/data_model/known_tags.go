@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/vkcom/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/format"
 )
 
 type KnownTags map[int32][]SelectorTags // by namespace ID
@@ -62,7 +62,7 @@ func publishDraftTags(meta *format.MetricMetaValue, knownTags []KnownTag) int {
 						// pass
 					}
 				}
-				if x < 1 || format.NewMaxTags <= x || (x < len(meta.Tags) && meta.Tags[x].Name != "") {
+				if x < 1 || format.MaxTags <= x || (x < len(meta.Tags) && meta.Tags[x].Name != "") {
 					continue
 				}
 				draftTag.Name = knownTag.Name

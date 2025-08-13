@@ -5,11 +5,13 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 import * as React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { IMetric } from '../models/metric';
-import { saveMetric } from '../api/saveMetric';
-import { maxTagsSize } from '../../common/settings';
+import { mapEditToMetric } from '../api/saveMetric';
+import { maxTagsSize } from '@/common/settings';
 import { getDefaultTag } from '../storages/MetricFormValues/reducer';
+import { useMetricMeta } from '@/hooks/useMetricMeta';
+import { useMutationMetricMeta } from '@/api/metric';
 
 export function CreatePage(props: { yAxisSize: number }) {
   const { yAxisSize } = props;
@@ -64,7 +66,9 @@ export function EditFormCreate() {
             <span className="visually-hidden">Loading...</span>
           </div>
         ) : error ? (
-          <span className="text-danger">{error}</span>
+          <span className="text-danger">
+            {error} <MetricInfo metricName={name} />
+          </span>
         ) : success ? (
           <span className="text-success">{success}</span>
         ) : null}
@@ -78,7 +82,8 @@ function useSubmitCreate(name: string) {
   const [isRunning, setRunning] = React.useState<boolean>(false);
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<string | null>(null);
-
+  const mutationMetricMeta = useMutationMetricMeta();
+  const createMetric = mutationMetricMeta.mutateAsync;
   const onSubmit = React.useCallback(() => {
     setError(null);
     setSuccess(null);
@@ -103,17 +108,22 @@ function useSubmitCreate(name: string) {
       tags_draft: [],
       tagsSize: maxTagsSize,
     };
-    saveMetric(values)
-      .then(() => {
+
+    createMetric(mapEditToMetric(values), {
+      onSuccess: () => {
         setSuccess('Saved');
         setRunning(false);
         navigate(`/view?s=${name}`, { replace: true });
-      })
-      .catch((err) => {
-        setError(err.message);
+      },
+      onError: (error) => {
+        setError(error.message);
         setRunning(false);
-      });
-  }, [name, navigate]);
+      },
+      onSettled: () => {
+        setRunning(false);
+      },
+    });
+  }, [createMetric, name, navigate]);
 
   return {
     isRunning,
@@ -121,4 +131,19 @@ function useSubmitCreate(name: string) {
     error,
     success,
   };
+}
+
+type MetricInfoProps = { metricName: string };
+
+function MetricInfo({ metricName }: MetricInfoProps) {
+  const meta = useMetricMeta(metricName, true);
+  if (!meta) {
+    return null;
+  }
+  return (
+    <span>
+      {meta.disable && <span>and disabled. </span>}
+      <Link to={`/admin/edit/${metricName}`}>Edit</Link> <Link to={`/view?s=${metricName}`}>View</Link>
+    </span>
+  );
 }

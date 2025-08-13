@@ -21,23 +21,26 @@ import (
 
 	"pgregory.net/rand"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/metajournal"
-	"github.com/vkcom/statshouse/internal/vkgo/rowbinary"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/chutil"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/metajournal"
+	"github.com/VKCOM/statshouse/internal/vkgo/rowbinary"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 )
+
+const legacyMaxTags = 16
 
 func getTableDesc(v3Format bool) string {
 	if v3Format {
-		keysFieldsNamesVec := make([]string, format.NewMaxTags)
-		for i := 0; i < format.NewMaxTags; i++ {
+		keysFieldsNamesVec := make([]string, format.MaxTags)
+		for i := 0; i < format.MaxTags; i++ {
 			keysFieldsNamesVec[i] = fmt.Sprintf(`tag%d,stag%d`, i, i)
 		}
 		return `statshouse_v3_incoming(index_type,metric,time,` + strings.Join(keysFieldsNamesVec, `,`) + `,count,min,max,sum,sumsquare,percentiles,uniq_state,min_host_legacy,max_host_legacy,min_host,max_host)`
 	}
-	keysFieldsNamesVec := make([]string, format.MaxTags)
-	for i := 0; i < format.MaxTags; i++ {
+	keysFieldsNamesVec := make([]string, legacyMaxTags)
+	for i := 0; i < legacyMaxTags; i++ {
 		keysFieldsNamesVec[i] = fmt.Sprintf(`key%d`, i)
 	}
 	return `statshouse_value_incoming_prekey3(metric,prekey,prekey_set,time,` + strings.Join(keysFieldsNamesVec, `,`) + `,count,min,max,sum,sumsquare,percentiles,uniq_state,skey,min_host,max_host)`
@@ -142,8 +145,7 @@ func appendKeys(res []byte, k *data_model.Key, metricCache *metricIndexCache, v3
 		res = append(res, byte(0))
 	}
 	res = binary.LittleEndian.AppendUint32(res, k.Timestamp)
-	tagsN := format.MaxTags
-	for ki := 0; ki < tagsN; ki++ {
+	for ki := 0; ki < legacyMaxTags; ki++ {
 		res = appendTag(res, uint32(k.Tags[ki]))
 	}
 	return res
@@ -151,11 +153,6 @@ func appendKeys(res []byte, k *data_model.Key, metricCache *metricIndexCache, v3
 
 func appendKeysNewFormat(res []byte, k *data_model.Key, metricCache *metricIndexCache, top data_model.TagUnion, bufferedInsert bool) []byte {
 	appendTag := func(res []byte, k *data_model.Key, i int) []byte {
-		if i >= len(k.Tags) { // temporary while we in transition between 16 and 48 tags
-			res = binary.LittleEndian.AppendUint32(res, 0)
-			res = rowbinary.AppendString(res, "")
-			return res
-		}
 		if len(k.GetSTag(i)) > 0 {
 			res = binary.LittleEndian.AppendUint32(res, 0)
 			res = rowbinary.AppendString(res, k.GetSTag(i))
@@ -174,7 +171,7 @@ func appendKeysNewFormat(res []byte, k *data_model.Key, metricCache *metricIndex
 	// TODO write pretags
 	_ = metricCache
 	res = binary.LittleEndian.AppendUint32(res, k.Timestamp)
-	for ki := 0; ki < format.NewMaxTags; ki++ {
+	for ki := 0; ki < format.MaxTags; ki++ {
 		if ki == format.StringTopTagIndexV3 {
 			continue
 		}
@@ -727,11 +724,11 @@ func appendArgMinMaxTag(res []byte, tag data_model.TagUnionBytes, value float32)
 	if tag.I != 0 {
 		res = append(res, 0)
 		res = binary.LittleEndian.AppendUint32(res, uint32(tag.I))
-		res = rowbinary.AppendArgMinMaxBytesFloat32(res[:wasLen], res[wasLen+4:], value)
+		res = chutil.AppendArgMinMaxBytesFloat32(res[:wasLen], res[wasLen+4:], value)
 		return res
 	}
 	res = append(res, 1)
 	res = append(res, tag.S...)
-	res = rowbinary.AppendArgMinMaxBytesFloat32(res[:wasLen], res[wasLen+4:], value)
+	res = chutil.AppendArgMinMaxBytesFloat32(res[:wasLen], res[wasLen+4:], value)
 	return res
 }

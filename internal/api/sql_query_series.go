@@ -6,8 +6,9 @@ import (
 	"strings"
 
 	"github.com/ClickHouse/ch-go/proto"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
+
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
 )
 
 const operatorIn = " IN "
@@ -16,7 +17,7 @@ const operatorNotIn = " NOT IN "
 type filterOperator [2]string // operator at [0], separator at [1]
 var filterOperatorIn = filterOperator{operatorIn, " OR "}
 var filterOperatorNotIn = filterOperator{operatorNotIn, " AND "}
-var escapeReplacer = strings.NewReplacer(`'`, `\'`)
+var escapeReplacer = strings.NewReplacer(`'`, `\'`, `\`, `\\`)
 
 func (b *queryBuilder) buildSeriesQuery(lod data_model.LOD) (*seriesQuery, error) {
 	q := &seriesQuery{
@@ -249,14 +250,18 @@ func (q *seriesQuery) writeSelectTagsV3(sb *strings.Builder, lod *data_model.LOD
 
 func (q *seriesQuery) writeSelectTagsV2(sb *strings.Builder, lod *data_model.LOD, comma *listItemSeparator) {
 	for _, x := range q.by {
-		comma.maybeWrite(sb)
 		switch x {
 		case format.ShardTagIndex:
+			comma.maybeWrite(sb)
 			q.writeSelectShardNum(sb)
-		case format.StringTopTagIndexV3:
+		case format.StringTopTagIndex, format.StringTopTagIndexV3:
+			comma.maybeWrite(sb)
 			q.writeSelectStr(sb, x, lod)
 		default:
-			q.writeSelectInt(sb, x, lod)
+			if x < format.MaxTagsV2 {
+				comma.maybeWrite(sb)
+				q.writeSelectInt(sb, x, lod)
+			}
 		}
 	}
 }
@@ -264,11 +269,13 @@ func (q *seriesQuery) writeSelectTagsV2(sb *strings.Builder, lod *data_model.LOD
 func (q *seriesQuery) writeSelectTagsV1(sb *strings.Builder, lod *data_model.LOD, comma *listItemSeparator) {
 	for _, x := range q.by {
 		switch x {
-		case 0, format.StringTopTagIndexV3, format.ShardTagIndex:
+		case 0, format.StringTopTagIndex, format.StringTopTagIndexV3, format.ShardTagIndex:
 			// pass
 		default:
-			comma.maybeWrite(sb)
-			q.writeSelectInt(sb, x, lod)
+			if x < format.MaxTagsV2 {
+				comma.maybeWrite(sb)
+				q.writeSelectInt(sb, x, lod)
+			}
 		}
 	}
 }
@@ -287,9 +294,6 @@ func (b *queryBuilder) writeWhere(sb *strings.Builder, lod *data_model.LOD, mode
 	case Version1:
 		b.writeDateFilterV1(sb, lod)
 	case Version3:
-		if mode == buildSeriesQuery {
-			sb.WriteString(" AND index_type=0")
-		}
 	}
 	b.writeMetricFilter(sb, b.metricID(), b.filterIn.Metrics, b.filterNotIn.Metrics, lod)
 	b.writeTagFilter(sb, lod, b.filterIn, filterOperatorIn, mode)
@@ -581,14 +585,18 @@ func (q *queryBuilder) writeByTagsV3(sb *strings.Builder, lod *data_model.LOD) {
 
 func (q *queryBuilder) writeByTagsV2(sb *strings.Builder, lod *data_model.LOD) {
 	for _, x := range q.by {
-		sb.WriteString(",")
 		switch x {
 		case format.ShardTagIndex:
+			sb.WriteString(",")
 			sb.WriteString("_shard_num")
 		case format.StringTopTagIndex, format.StringTopTagIndexV3:
+			sb.WriteString(",")
 			sb.WriteString("skey")
 		default:
-			sb.WriteString(q.colIntV2(x, lod))
+			if x < format.MaxTagsV2 {
+				sb.WriteString(",")
+				sb.WriteString(q.colIntV2(x, lod))
+			}
 		}
 	}
 }

@@ -319,3 +319,13 @@ code {
   --bs-spinner-height: 0.9em;
   --bs-spinner-border-width: 0.2em;
 }
+
+.modal{
+  overflow: hidden;
+}
+
+@media screen and (max-width: 879.98px) {
+  .mobile-hidden{
+    display: none;
+  }
+}

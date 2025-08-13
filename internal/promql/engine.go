@@ -12,21 +12,21 @@ import (
 	"hash"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/VKCOM/statshouse-go"
 	"github.com/gogo/protobuf/sortkeys"
 	"github.com/prometheus/prometheus/model/labels"
-	"github.com/vkcom/statshouse-go"
-	"github.com/vkcom/statshouse/internal/chutil"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/promql/parser"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
 	"golang.org/x/sync/errgroup"
 	"pgregory.net/rand"
+
+	"github.com/VKCOM/statshouse/internal/chutil"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/promql/parser"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 )
 
 const (
@@ -75,6 +75,7 @@ type Options struct {
 	Play             int
 	Rand             *rand.Rand
 	Vars             map[string]Variable
+	NewShardingStart int64
 
 	ExprQueriesSingleMetricCallback MetricMetaValueCallback
 }
@@ -268,18 +269,19 @@ func (ng Engine) NewEvaluator(ctx context.Context, h Handler, qry Query) (evalua
 	}
 	// init timescale
 	ev.t, err = data_model.GetTimescale(data_model.GetTimescaleArgs{
-		QueryStat:     ev.QueryStat,
-		Version:       qry.Options.Version,
-		Version3Start: qry.Options.Version3Start,
-		Start:         qry.Start,
-		End:           qry.End,
-		Step:          qry.Step,
-		TimeNow:       qry.Options.TimeNow,
-		ScreenWidth:   qry.Options.ScreenWidth,
-		Mode:          qry.Options.Mode,
-		Extend:        qry.Options.Extend,
-		Location:      ng.location,
-		UTCOffset:     ng.utcOffset,
+		QueryStat:        ev.QueryStat,
+		Version:          qry.Options.Version,
+		Version3Start:    qry.Options.Version3Start,
+		Start:            qry.Start,
+		End:              qry.End,
+		Step:             qry.Step,
+		TimeNow:          qry.Options.TimeNow,
+		ScreenWidth:      qry.Options.ScreenWidth,
+		Mode:             qry.Options.Mode,
+		Extend:           qry.Options.Extend,
+		Location:         ng.location,
+		UTCOffset:        ng.utcOffset,
+		NewShardingStart: qry.Options.NewShardingStart,
 	})
 	if err != nil {
 		return evaluator{}, Error{what: err}
@@ -731,6 +733,7 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 					on:         expr.VectorMatching.On,
 					tags:       expr.VectorMatching.MatchingLabels,
 					stags:      rhs.Meta.STags,
+					stags2:     lhs.Meta.STags,
 					listUnused: true,
 				})
 				if err != nil {
@@ -738,9 +741,10 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 				}
 				var rhsM map[uint64]hashMeta
 				rhsM, err = rhs.hash(ev, hashOptions{
-					on:    expr.VectorMatching.On,
-					tags:  expr.VectorMatching.MatchingLabels,
-					stags: lhs.Meta.STags,
+					on:     expr.VectorMatching.On,
+					tags:   expr.VectorMatching.MatchingLabels,
+					stags:  lhs.Meta.STags,
+					stags2: rhs.Meta.STags,
 				})
 				if err != nil {
 					return nil, err
@@ -768,18 +772,20 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 		case parser.CardOneToMany:
 			var lhsM map[uint64]hashMeta
 			lhsM, err = lhs.hash(ev, hashOptions{
-				on:    expr.VectorMatching.On,
-				tags:  expr.VectorMatching.MatchingLabels,
-				stags: rhs.Meta.STags,
+				on:     expr.VectorMatching.On,
+				tags:   expr.VectorMatching.MatchingLabels,
+				stags:  rhs.Meta.STags,
+				stags2: lhs.Meta.STags,
 			})
 			if err != nil {
 				return nil, err
 			}
 			var rhsM map[uint64][]int
 			rhsM, _, err = rhs.group(ev, hashOptions{
-				on:    expr.VectorMatching.On,
-				tags:  expr.VectorMatching.MatchingLabels,
-				stags: lhs.Meta.STags,
+				on:     expr.VectorMatching.On,
+				tags:   expr.VectorMatching.MatchingLabels,
+				stags:  lhs.Meta.STags,
+				stags2: rhs.Meta.STags,
 			})
 			if err != nil {
 				return nil, err
@@ -811,9 +817,10 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 		case parser.CardManyToMany:
 			var lhsM map[uint64][]int
 			lhsM, _, err = lhs.group(ev, hashOptions{
-				on:    expr.VectorMatching.On,
-				tags:  expr.VectorMatching.MatchingLabels,
-				stags: rhs.Meta.STags,
+				on:     expr.VectorMatching.On,
+				tags:   expr.VectorMatching.MatchingLabels,
+				stags:  rhs.Meta.STags,
+				stags2: lhs.Meta.STags,
 			})
 			if err != nil {
 				return nil, err
@@ -822,9 +829,10 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 			case parser.LAND:
 				var rhsM map[uint64][]int
 				rhsM, _, err = rhs.group(ev, hashOptions{
-					on:    expr.VectorMatching.On,
-					tags:  expr.VectorMatching.MatchingLabels,
-					stags: lhs.Meta.STags,
+					on:     expr.VectorMatching.On,
+					tags:   expr.VectorMatching.MatchingLabels,
+					stags:  lhs.Meta.STags,
+					stags2: rhs.Meta.STags,
 				})
 				if err != nil {
 					return nil, err
@@ -850,9 +858,10 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 				} else {
 					var rhsM map[uint64]hashMeta
 					rhsM, err = rhs.hash(ev, hashOptions{
-						on:    expr.VectorMatching.On,
-						tags:  expr.VectorMatching.MatchingLabels,
-						stags: lhs.Meta.STags,
+						on:     expr.VectorMatching.On,
+						tags:   expr.VectorMatching.MatchingLabels,
+						stags:  lhs.Meta.STags,
+						stags2: rhs.Meta.STags,
 					})
 					if err != nil {
 						return nil, err
@@ -874,9 +883,10 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 				} else {
 					var rhsM map[uint64][]int
 					rhsM, _, err = rhs.group(ev, hashOptions{
-						on:    expr.VectorMatching.On,
-						tags:  expr.VectorMatching.MatchingLabels,
-						stags: lhs.Meta.STags,
+						on:     expr.VectorMatching.On,
+						tags:   expr.VectorMatching.MatchingLabels,
+						stags:  lhs.Meta.STags,
+						stags2: rhs.Meta.STags,
 					})
 					if err != nil {
 						return nil, err
@@ -907,9 +917,10 @@ func (ev *evaluator) evalBinary(expr *parser.BinaryExpr) ([]Series, error) {
 			case parser.LUNLESS:
 				var rhsM map[uint64][]int
 				rhsM, _, err = rhs.group(ev, hashOptions{
-					on:    expr.VectorMatching.On,
-					tags:  expr.VectorMatching.MatchingLabels,
-					stags: lhs.Meta.STags,
+					on:     expr.VectorMatching.On,
+					tags:   expr.VectorMatching.MatchingLabels,
+					stags:  lhs.Meta.STags,
+					stags2: rhs.Meta.STags,
 				})
 				if err != nil {
 					return nil, err
@@ -1100,7 +1111,6 @@ func (ev *evaluator) buildSeriesQuery(ctx context.Context, sel *parser.VectorSel
 			for i := 0; i < format.MaxTags; i++ {
 				groupBy = append(groupBy, i)
 			}
-			groupBy = append(groupBy, format.StringTopTagIndex)
 		}
 	} else if sel.GroupWithout {
 		skip := make(map[int]bool)
@@ -1131,7 +1141,7 @@ func (ev *evaluator) buildSeriesQuery(ctx context.Context, sel *parser.VectorSel
 	}
 	// filtering
 	var (
-		emptyCount [format.NewMaxTags]int // number of "MatchEqual" or "MatchRegexp" filters which are guaranteed to yield empty response
+		emptyCount [format.MaxTags]int // number of "MatchEqual" or "MatchRegexp" filters which are guaranteed to yield empty response
 	)
 	for _, matcher := range sel.LabelMatchers {
 		if strings.HasPrefix(matcher.Name, "__") {
@@ -1147,13 +1157,13 @@ func (ev *evaluator) buildSeriesQuery(ctx context.Context, sel *parser.VectorSel
 		}
 		switch matcher.Type {
 		case labels.MatchEqual:
-			if v, err := ev.getTagValue(metric, i, matcher.Value); err == nil {
+			if v, err := ev.GetTagFilter(metric, i, matcher.Value); err == nil {
 				sel.FilterIn.Append(i, v)
 			} else {
 				return SeriesQuery{}, fmt.Errorf("failed to map string %q: %v", matcher.Value, err)
 			}
 		case labels.MatchNotEqual:
-			if v, err := ev.getTagValue(metric, i, matcher.Value); err == nil {
+			if v, err := ev.GetTagFilter(metric, i, matcher.Value); err == nil {
 				sel.FilterNotIn.Append(i, v)
 			} else {
 				return SeriesQuery{}, fmt.Errorf("failed to map string %q: %v", matcher.Value, err)
@@ -1292,65 +1302,6 @@ func (ev *evaluator) getTagValues(ctx context.Context, metric *format.MetricMeta
 	}
 	m2[offset] = res
 	return res, nil
-}
-
-func (ev *evaluator) getTagValue(metric *format.MetricMetaValue, tagX int, tagV string) (data_model.TagValue, error) {
-	if tagV == "" {
-		return data_model.NewTagValue("", 0), nil
-	}
-	if format.HasRawValuePrefix(tagV) {
-		v, err := format.ParseCodeTagValue(tagV)
-		if err != nil {
-			return data_model.TagValue{}, err
-		}
-		if v != 0 {
-			return data_model.NewTagValueM(v), nil
-		} else {
-			return data_model.NewTagValue("", 0), nil
-		}
-	}
-	var t format.MetricMetaTag
-	if 0 <= tagX && tagX < len(metric.Tags) {
-		t = metric.Tags[tagX]
-		if t.Raw {
-			// histogram bucket label
-			if t.Name == labels.BucketLabel {
-				if v, err := strconv.ParseFloat(tagV, 32); err == nil {
-					return data_model.NewTagValueM(int64(statshouse.LexEncode(float32(v)))), nil
-				}
-			}
-			// mapping from raw value comments
-			var s string
-			for k, v := range t.ValueComments {
-				if v == tagV {
-					if s != "" {
-						return data_model.TagValue{}, fmt.Errorf("ambiguous comment to value mapping")
-					}
-					s = k
-				}
-			}
-			if s != "" {
-				v, err := format.ParseCodeTagValue(s)
-				if err != nil {
-					return data_model.TagValue{}, err
-				}
-				return data_model.NewTagValueM(v), nil
-			}
-		}
-	}
-	v, err := ev.GetTagValueID(TagValueIDQuery{
-		Version:  ev.opt.Version,
-		Tag:      t,
-		TagValue: tagV,
-	})
-	switch err {
-	case nil:
-		return data_model.NewTagValue(tagV, v), nil
-	case ErrNotFound:
-		return data_model.NewTagValue(tagV, format.TagValueIDDoesNotExist), nil
-	default:
-		return data_model.TagValue{}, err
-	}
 }
 
 func (ev *evaluator) weight(ds []SeriesData) []float64 {

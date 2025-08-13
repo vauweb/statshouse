@@ -23,15 +23,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/constants"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/constants"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/vkgo/build"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 	"go.uber.org/atomic"
 )
 
@@ -45,6 +45,9 @@ const (
 	rpcServerWantsFinTLTag  = 0xa8ddbc46
 	rpcClientWantsFinTLTag  = 0x0b73429e
 	rpcPingTLTag            = 0xa677ee41
+	// packetConn buffers - 24KB per connection
+	ingressRequestBufSize  = 16384 // 16 KB
+	ingressResponseBufSize = 8192  // 8 KB
 )
 
 type ConfigIngressProxy struct {
@@ -57,6 +60,7 @@ type ConfigIngressProxy struct {
 	ResponseMemoryLimit   int
 	Version               string
 	ConfigAgent           agent.Config
+	Debug                 bool
 }
 
 type ingressProxy struct {
@@ -76,6 +80,7 @@ type ingressProxy struct {
 	// logging
 	rareLogLast time.Time
 	rareLogMu   sync.Mutex
+	debug       bool
 
 	firstClientConn   map[string]bool
 	firstClientConnMu sync.Mutex
@@ -138,6 +143,7 @@ func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd stri
 		serverKeys:      config.IngressKeys,
 		startTime:       uint32(time.Now().Unix()),
 		firstClientConn: make(map[string]bool),
+		debug:           config.Debug,
 	}
 	restart := make(chan int)
 	if config.UpstreamAddr != "" {
@@ -182,7 +188,7 @@ func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd stri
 				s.AddValueCounter(nowUnix, format.BuiltinMetricMetaProxyHeapInuse,
 					tags, 1, float64(memStats.HeapInuse))
 			},
-			nil, nil)
+			nil, nil, config.ConfigAgent.SendSourceBucket2)
 		if err != nil {
 			log.Fatalf("error creating agent: %v", err)
 		}
@@ -254,6 +260,10 @@ func (p *ingressProxy) newProxyServer(network string) proxyServer {
 }
 
 func (p *ingressProxy) rareLog(format string, args ...any) {
+	if p.debug {
+		log.Printf(format, args...)
+		return
+	}
 	now := time.Now()
 	p.rareLogMu.Lock()
 	defer p.rareLogMu.Unlock()
@@ -306,6 +316,7 @@ func (p *proxyServer) listen(addr string, externalAddr []string, version string)
 		return err
 	}
 	// build external address and listen
+	s := make([]string, 0, len(p.agent.GetConfigResult.Addresses))
 	if version == "2" {
 		externalTCPAddr := make([]*net.TCPAddr, len(externalAddr))
 		for i := range externalAddr {
@@ -322,6 +333,10 @@ func (p *proxyServer) listen(addr string, externalAddr []string, version string)
 				return err
 			}
 			listenAddr.Port++
+			for j := range externalTCPAddr {
+				s = append(s, externalTCPAddr[j].String())
+				externalTCPAddr[j].Port++
+			}
 		}
 	} else {
 		log.Printf("Listen addr %v\n", listenAddr)
@@ -330,12 +345,10 @@ func (p *proxyServer) listen(addr string, externalAddr []string, version string)
 		if err != nil {
 			return err
 		}
-	}
-	n := len(p.agent.GetConfigResult.Addresses)
-	s := make([]string, 0, n)
-	for len(s) < n {
-		for i := 0; i < len(externalAddr) && len(s) < n; i++ {
-			s = append(s, externalAddr[i])
+		for len(s) < len(p.agent.GetConfigResult.Addresses) {
+			for i := 0; i < len(externalAddr) && len(s) < len(p.agent.GetConfigResult.Addresses); i++ {
+				s = append(s, externalAddr[i])
+			}
 		}
 	}
 	p.config2.Addresses = s
@@ -395,7 +408,7 @@ func (p *proxyServer) newProxyConn(c net.Conn) *proxyConn {
 			clientAddr[i] = binary.BigEndian.Uint32(addr.IP[j:])
 		}
 	}
-	clientConn := rpc.NewPacketConn(c, rpc.DefaultServerRequestBufSize, rpc.DefaultServerResponseBufSize)
+	clientConn := rpc.NewPacketConn(c, ingressRequestBufSize, ingressResponseBufSize)
 	p.group.Add(1)
 	return &proxyConn{
 		proxyServer: p,
@@ -428,10 +441,11 @@ func (p *proxyConn) run() {
 			return // server shutdown
 		}
 		if firstReq.tip == rpcInvokeReqHeaderTLTag {
-			if firstReq.RequestTag() == constants.StatshouseGetConfig3 {
-				// GetConfig3 does not send shardReplica
+			switch firstReq.RequestTag() {
+			case constants.StatshouseGetConfig2, constants.StatshouseGetConfig3:
+				// GetConfigX does not send shardReplica
 				if res := firstReq.process(p); res.Error() != nil {
-					return // failed serve GetConfig3 request
+					return // failed to serve GetConfigX request
 				}
 				continue
 			}
@@ -449,7 +463,7 @@ func (p *proxyConn) run() {
 		return
 	}
 	defer upstreamConn.Close()
-	p.upstreamConn = rpc.NewPacketConn(upstreamConn, rpc.DefaultClientConnReadBufSize, rpc.DefaultClientConnWriteBufSize)
+	p.upstreamConn = rpc.NewPacketConn(upstreamConn, ingressResponseBufSize, ingressRequestBufSize)
 	err = p.upstreamConn.HandshakeClient(p.clientOpts.CryptoKey, p.clientOpts.TrustedSubnetGroups, false, p.uniqueStartTime.Dec(), 0, rpc.DefaultPacketTimeout, rpc.LatestProtocolVersion)
 	if err != nil {
 		p.logUpstreamError("handshake", err, rpc.PacketHeaderCircularBuffer{})

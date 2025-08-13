@@ -19,11 +19,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/agent"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/platform"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
+	_ "net/http/pprof"
+
+	"github.com/VKCOM/statshouse/internal/agent"
+	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/vkgo/build"
+	"github.com/VKCOM/statshouse/internal/vkgo/platform"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 )
 
 const defaultPathToPwd = `/etc/engine/pass`
@@ -151,8 +153,8 @@ func parseCommandLine() error {
 	}
 	var dummyVerb bool
 	flag.BoolVar(&dummyVerb, conveyorName, false, "not used, you can safely remote it")
-	var dummyVersion, dummyConveyor, dummyHostname, dummyMetadataAddr string
-	flag.StringVar(&dummyVersion, "ingress-version", "", "not used, you can safely remote it")
+	var dummyConveyor, dummyHostname, dummyMetadataAddr string
+	flag.StringVar(&argv.Version, "ingress-version", "", "ingress version")
 	flag.StringVar(&dummyConveyor, "new-conveyor", "", "not used, you can safely remote it")
 	flag.StringVar(&dummyHostname, "hostname", "", "not used, you can safely remote it")
 	flag.StringVar(&dummyMetadataAddr, "metadata-addr", "", "not used, you can safely remote it")
@@ -175,6 +177,7 @@ func parseCommandLine() error {
 	flag.StringVar(&argv.ingressExtAddrIPv6, "ingress-external-addr-ipv6", "", "Comma-separate list of IPv6 external addresses of ingress proxies.")
 	flag.StringVar(&argv.ingressPwdDir, "ingress-pwd-dir", "", "path to AES passwords dir for clients of ingress proxy.")
 	flag.StringVar(&argv.UpstreamAddr, "ingress-upstream-addr", "", "Upstream server address (for debug purpose, do not use in production).")
+	flag.BoolVar(&argv.Debug, "debug", false, "enable debug logging")
 	argv.ConfigAgent.Bind(flag.CommandLine, agent.DefaultConfig())
 	build.FlagParseShowVersionHelp()
 

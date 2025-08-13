@@ -4,10 +4,10 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import React, { memo, ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import uPlot from 'uplot';
 import { debug } from '@/common/debug';
-import { deepClone } from '@/common/helpers';
+import { deepClone, labelAsString } from '@/common/helpers';
 import { useResizeObserver } from '@/hooks/useResizeObserver';
 
 export type LegendItem<T = Record<string, unknown>> = {
@@ -91,7 +91,7 @@ function readLegend<LV = Record<string, unknown>>(u: uPlot): LegendItem<LV>[] {
           .replace('--', '') ?? ''; // replace '--' uplot
     }
     return {
-      label: s.label ?? '',
+      label: labelAsString(s.label) ?? '',
       width:
         (u.legend.markers?.width instanceof Function ? u.legend.markers?.width(u, index) : u.legend.markers?.width) ??
         1,
@@ -206,13 +206,14 @@ function UPlotWrapperNoMemo<LV = Record<string, unknown>>({
         uRef.current.batch((u: uPlot) => {
           const show: Record<string, boolean | undefined> = {};
           for (let i = u.series.length - 1; i > 0; i--) {
-            show[u.series[i].label!] = u.series[i].show;
+            show[labelAsString(u.series[i].label)!] = u.series[i].show;
             u.delSeries(i);
           }
 
           let nextSeries = series.map((s) => ({
             ...s,
-            show: typeof show[s.label!] !== 'undefined' ? show[s.label!] : (s.show ?? true),
+            show:
+              typeof show[labelAsString(s.label)!] !== 'undefined' ? show[labelAsString(s.label)!] : (s.show ?? true),
           }));
 
           if (nextSeries.every((s) => !s.show)) {
@@ -346,7 +347,7 @@ function UPlotWrapperNoMemo<LV = Record<string, unknown>>({
     onUpdateLegend?.(legendF);
   }, [legend, seriesFocus, onUpdateLegend]);
 
-  useLayoutEffect(
+  useEffect(
     () => () => {
       if (uRef.current) {
         debug.log('%cUPlotWrapper destroy', 'color:blue;');
@@ -357,7 +358,7 @@ function UPlotWrapperNoMemo<LV = Record<string, unknown>>({
     [opts]
   );
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     if (width === 0 || uRef.current) {
       return;
     }
@@ -403,8 +404,23 @@ function UPlotWrapperNoMemo<LV = Record<string, unknown>>({
     };
   }, []);
 
-  useLayoutEffect(() => {
-    uRef.current?.setSize({ width, height });
+  useEffect(() => {
+    if (width > 0) {
+      if (uRef.current) {
+        const uWrap = uRef.current.root.querySelector<HTMLDivElement>('.u-wrap');
+        if (uWrap) {
+          uWrap.setAttribute('data-s', '1');
+          uWrap.style.width = `${width}px`;
+          uWrap.style.height = `${height}px`;
+        }
+        const timeout = setTimeout(() => {
+          uRef.current?.setSize({ width, height });
+        }, 100);
+        return () => {
+          clearTimeout(timeout);
+        };
+      }
+    }
   }, [height, width]);
 
   useEffect(() => {
@@ -425,11 +441,17 @@ function UPlotWrapperNoMemo<LV = Record<string, unknown>>({
 
   useEffect(() => {
     if (uRef.current) {
-      microTask(() => {
-        if (uRef.current) {
-          onUpdatePreview?.(uRef.current);
-        }
-      });
+      const timeout = setTimeout(() => {
+        microTask(() => {
+          if (uRef.current) {
+            onUpdatePreview?.(uRef.current);
+          }
+        });
+      }, 200);
+
+      return () => {
+        clearTimeout(timeout);
+      };
     }
   }, [series, data, scales, width, height, onUpdatePreview]);
 

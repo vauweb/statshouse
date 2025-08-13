@@ -22,20 +22,21 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/VKCOM/statshouse-go"
 	"github.com/cloudflare/tableflip"
 	"github.com/gorilla/handlers"
-	"github.com/vkcom/statshouse-go"
-	"github.com/vkcom/statshouse/internal/api"
-	"github.com/vkcom/statshouse/internal/chutil"
-	"github.com/vkcom/statshouse/internal/config"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/util"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
-	"github.com/vkcom/statshouse/internal/vkgo/vkuth"
+
+	"github.com/VKCOM/statshouse/internal/api"
+	"github.com/VKCOM/statshouse/internal/chutil"
+	"github.com/VKCOM/statshouse/internal/config"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/pcache/sqlitecache"
+	"github.com/VKCOM/statshouse/internal/util"
+	"github.com/VKCOM/statshouse/internal/vkgo/build"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/vkgo/vkuth"
 )
 
 const (
@@ -206,7 +207,7 @@ func run() int {
 	c := rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups()))
 	defer func() { _ = c.Close() }()
 
-	dc, err := pcache.OpenDiskCache(argv.diskCache, diskCacheTxDuration)
+	dc, err := sqlitecache.OpenSqliteDiskCache(argv.diskCache, diskCacheTxDuration)
 	if err != nil {
 		log.Printf("failed to open disk cache: %v", err)
 		return 1
@@ -327,6 +328,7 @@ func run() int {
 	a.Path("/" + api.EndpointKnownTags).Methods("GET").HandlerFunc(api.HandleGetKnownTags)
 	a.Path("/" + api.EndpointStatistics).Methods("POST").HandlerFunc(api.HandleFrontendStat)
 	a.Path("/" + api.EndpointHistory).Methods("GET").HandlerFunc(api.HandleGetHistory)
+	a.Path("/" + api.EndpointHealthcheck).Methods("GET").HandlerFunc(api.HandleGetHealthcheck)
 	m.Path("/prom/api/v1/query").Methods("GET").HandlerFunc(api.HandleInstantQuery)
 	m.Path("/prom/api/v1/query").Methods("POST").HandlerFunc(api.HandleInstantQuery)
 	m.Path("/prom/api/v1/query_range").Methods("GET").HandlerFunc(api.HandleRangeQuery)

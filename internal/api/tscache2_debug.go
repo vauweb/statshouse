@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
 )
 
 type cache2DebugLogMessage struct {
@@ -17,7 +17,7 @@ type cache2DebugLogMessage struct {
 
 func DebugCacheLog(r *httpRequestHandler) {
 	w := r.Response()
-	if ok := r.accessInfo.insecureMode || r.accessInfo.bitAdmin; !ok {
+	if !r.accessInfo.bitAdmin {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -46,28 +46,18 @@ func DebugCacheLog(r *httpRequestHandler) {
 
 func DebugCacheReset(r *httpRequestHandler) {
 	w := r.Response()
-	if ok := r.accessInfo.insecureMode || r.accessInfo.bitAdmin; !ok {
+	if !r.accessInfo.bitAdmin {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	switch r.FormValue("v") {
-	case "1":
-		r.cache.reset()
-		w.Write([]byte("Version 1 cache is now empty!"))
-	case "2":
-		r.getCache2().reset()
-		w.Write([]byte("Version 2 cache is now empty!"))
-	default:
-		r.cache.reset()
-		r.getCache2().reset()
-		w.Write([]byte("All cache versions are now empty!"))
-	}
+	r.getCache2().reset()
+	w.Write([]byte("All cache versions are now empty!"))
 }
 
 func DebugCacheInfo(r *httpRequestHandler) {
 	w := r.Response()
-	if ok := r.accessInfo.insecureMode || r.accessInfo.bitAdmin; !ok {
+	if !r.accessInfo.bitAdmin {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -120,7 +110,7 @@ func DebugCacheInfo(r *httpRequestHandler) {
 
 func DebugCacheCreateMetrics(r *httpRequestHandler) {
 	w := r.Response()
-	if ok := r.accessInfo.insecureMode || r.accessInfo.bitAdmin; !ok {
+	if !r.accessInfo.bitAdmin {
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -252,7 +242,7 @@ func debugCacheCreateMetric(r *httpRequestHandler, metric format.MetricMetaValue
 		metric.MetricID = v.MetricID
 		metric.Version = v.Version
 	}
-	if _, err := r.handlePostMetric(context.Background(), accessInfo{insecureMode: true}, "", metric); err != nil {
+	if _, err := r.handlePostMetric(context.Background(), r.accessInfo, "", metric); err != nil {
 		w.Write([]byte(err.Error()))
 	} else {
 		w.Write([]byte("OK"))
@@ -261,29 +251,11 @@ func debugCacheCreateMetric(r *httpRequestHandler, metric format.MetricMetaValue
 }
 
 func cacheGet(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD, avoidCache bool) ([][]tsSelectRow, error) {
-	if h.CacheVersion.Load() == 2 {
-		return h.getCache2().Get(ctx, h, pq, lod, avoidCache)
-	} else {
-		return h.cache.Get(ctx, h, pq, lod, avoidCache)
-	}
+	return h.getCache2().Get(ctx, h, pq, lod, avoidCache)
 }
 
 func cacheInvalidate(h *Handler, times []int64, stepSec int64) {
-	if h.CacheVersion.Load() == 2 {
-		h.getCache2().invalidate(times, stepSec)
-	} else {
-		h.cache.Invalidate(stepSec, times)
-	}
-}
-
-func (h *Handler) setCacheVersion(cacheVersion int32) {
-	if prev := h.CacheVersion.Swap(cacheVersion); prev != cacheVersion {
-		if cacheVersion == 2 {
-			h.cache.reset()
-		} else {
-			h.getCache2().reset()
-		}
-	}
+	h.getCache2().invalidate(times, stepSec)
 }
 
 func (h *Handler) getCache2() *cache2 {
@@ -317,19 +289,4 @@ func (c *cache2) debugLog() [100]cache2DebugLogMessage {
 	c.debugLogMu.Lock()
 	defer c.debugLogMu.Unlock()
 	return c.debugLogS
-}
-
-func (g *tsCacheGroup) reset() {
-	for _, v := range g.pointCaches {
-		for _, c := range v {
-			c.reset()
-		}
-	}
-}
-
-func (c *tsCache) reset() {
-	c.cacheMu.Lock()
-	defer c.cacheMu.Unlock()
-	c.cache = map[string]*tsEntry{}
-	c.invalidatedAtNano = map[int64]int64{}
 }

@@ -13,8 +13,8 @@ import (
 	"go.uber.org/atomic"
 	"pgregory.net/rand"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
 )
 
 // we start sending at the end of the minute, plus we need to spread metric around the next 60 seconds
@@ -25,10 +25,11 @@ type (
 	// Shard gets data after initial hashing and shard number
 	Shard struct {
 		// Never change, so do not require protection
-		agent    *Agent
-		ShardNum int
-		ShardKey int32
-		rng      *rand.Rand
+		agent             *Agent
+		ShardNum          int
+		ShardKey          int32
+		rng               *rand.Rand
+		sendSourceBucket2 bool
 
 		mu                                   sync.Mutex
 		config                               Config       // can change if remotely updated

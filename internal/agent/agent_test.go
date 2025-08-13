@@ -16,11 +16,11 @@ import (
 
 	"pgregory.net/rand"
 
-	"github.com/vkcom/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/pcache"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
 )
 
 var sideEffect uint64
@@ -63,17 +63,6 @@ func Benchmark_Original_Marshal(b *testing.B) {
 		binary.LittleEndian.PutUint32(m.OriginalTagValues[14], uint32(i))
 		scratch = m.OriginalMarshalAppend(scratch[:0])
 		sideEffect += uint64(len(scratch))
-	}
-}
-
-func Benchmark_Hash(b *testing.B) {
-	var k data_model.Key
-	var result uint64
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		k.Tags[14]++
-		k.Tags[0] = int32(i)
-		result += k.Hash()
 	}
 }
 
@@ -143,6 +132,7 @@ func Test_AgentQueue(t *testing.T) {
 		config:                            config,
 		logF:                              func(f string, a ...any) { fmt.Printf(f, a...) },
 		mappingsCache:                     pcache.NewMappingsCache(1024*1024, 86400),
+		shardByMetricCount:                1,
 		builtinMetricMetaUsageCPU:         *format.BuiltinMetricMetaUsageCPU,
 		builtinMetricMetaUsageMemory:      *format.BuiltinMetricMetaUsageMemory,
 		builtinMetricMetaHeartbeatVersion: *format.BuiltinMetricMetaHeartbeatVersion,

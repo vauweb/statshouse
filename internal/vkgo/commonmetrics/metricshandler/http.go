@@ -13,9 +13,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vkcom/statshouse-go"
-	"github.com/vkcom/statshouse/internal/vkgo/commonmetrics"
-	"github.com/vkcom/statshouse/internal/vkgo/commonmetrics/internal"
+	"github.com/VKCOM/statshouse-go"
+	"github.com/VKCOM/statshouse/internal/vkgo/commonmetrics"
+	"github.com/VKCOM/statshouse/internal/vkgo/commonmetrics/internal"
 )
 
 var (

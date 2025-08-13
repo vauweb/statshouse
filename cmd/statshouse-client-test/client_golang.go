@@ -9,7 +9,7 @@ func (*golang) libMain() string {
 }
 
 func (*golang) gitURL() string {
-	return "git@github.com:VKCOM/statshouse-go.git"
+	return "https://github.com/VKCOM/statshouse-go.git"
 }
 
 func (*golang) testMain() string {
@@ -24,7 +24,7 @@ func (client *golang) configure(text string, data any) error {
 		return err
 	}
 	if err := client.exec("go", "mod", "edit",
-		fmt.Sprintf("-replace=github.com/vkcom/statshouse-go=%s", client.library.rootDir)); err != nil {
+		fmt.Sprintf("-replace=github.com/VKCOM/statshouse-go=%s", client.library.rootDir)); err != nil {
 		return err
 	}
 	return client.exec("go", "get")

@@ -8,15 +8,15 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/receiver"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/receiver"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 type series map[tags]map[uint32]*value
 type tag [2]string // name, value
-type tags [17]tag  // metric name + 16 tags
+type tags [49]tag  // metric name + tags
 
 type value struct {
 	counter float64
@@ -28,9 +28,9 @@ type handler struct {
 	sink func(*tlstatshouse.MetricBytes)
 }
 
-func (h handler) HandleMetrics(args data_model.HandlerArgs) (data_model.MappedMetricHeader, bool) {
+func (h handler) HandleMetrics(args data_model.HandlerArgs) data_model.MappedMetricHeader {
 	h.sink(args.MetricBytes)
-	return data_model.MappedMetricHeader{}, false
+	return data_model.MappedMetricHeader{}
 }
 
 func (handler) HandleParseError(pkt []byte, err error) {

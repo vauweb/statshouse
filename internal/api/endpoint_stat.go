@@ -13,12 +13,14 @@ import (
 	"time"
 
 	"github.com/ClickHouse/ch-go/proto"
-	"github.com/vkcom/statshouse/internal/chutil"
 
-	"github.com/vkcom/statshouse-go"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
-	"github.com/vkcom/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/chutil"
+
+	"github.com/VKCOM/statshouse-go"
+
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 )
 
 const (
@@ -44,6 +46,7 @@ const (
 	EndpointStatistics          = "stat"
 	endpointChunk               = "chunk"
 	EndpointHistory             = "history"
+	EndpointHealthcheck         = "healthcheck"
 
 	userTokenName = "user"
 )
@@ -100,6 +103,8 @@ func (es *endpointStat) setMetricMeta(metricMeta *format.MetricMetaValue) {
 
 func (es *endpointStat) report(code int, metric string) {
 	v := time.Since(es.timestamp).Seconds()
+	es.laneMutex.Lock()
+	defer es.laneMutex.Unlock()
 	t := statshouse.Tags{
 		1:  es.endpoint,
 		2:  strconv.Itoa(es.protocol),
@@ -145,10 +150,14 @@ func CurrentChunksCount(brs *BigResponseStorage) func(*statshouse.Client) {
 	}
 }
 
-func ChSelectMetricDuration(duration time.Duration, metricID int32, user, table, kind string, isFast, isLight, isHardware bool, err error) {
+func ChSelectMetricDuration(duration time.Duration, metric *format.MetricMetaValue, user, table, kind string, isFast, isLight, isHardware bool, err error) {
 	ok := "ok"
 	if err != nil {
 		ok = "error"
+	}
+	var metricID int32
+	if metric != nil {
+		metricID = metric.MetricID
 	}
 	statshouse.Value(
 		format.BuiltinMetricMetaAPISelectDuration.Name,
@@ -163,6 +172,22 @@ func ChSelectMetricDuration(duration time.Duration, metricID int32, user, table,
 			8: strconv.Itoa(int(uint32(metricID) % 16)), // experimental to see load distribution if we shard data by metricID
 		},
 		duration.Seconds())
+}
+
+func ChRequestsMetric(shard int, aggHost string, table string, ok bool) {
+	status := "1"
+	if !ok {
+		status = "2"
+	}
+	statshouse.Count(
+		format.BuiltinMetricMetaApiChRequests.Name,
+		statshouse.Tags{
+			1: srvfunc.HostnameForStatshouse(),
+			2: strconv.Itoa(shard),
+			3: aggHost,
+			4: table,
+			5: status,
+		}, 1)
 }
 
 func ChSelectProfile(isFast, isLight, isHardware bool, info proto.Profile, err error) {

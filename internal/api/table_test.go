@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/promql"
 	"github.com/stretchr/testify/assert"
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/promql"
 )
 
 // TODO add general CH mock
@@ -30,7 +30,6 @@ func Test_getTableFromLODs(t *testing.T) {
 		FromSec:  1,
 		ToSec:    10,
 		StepSec:  1,
-		Table:    "",
 		Location: l,
 	}
 	_ = queryTableRow{
@@ -42,9 +41,6 @@ func Test_getTableFromLODs(t *testing.T) {
 	}
 	rows := []tsSelectRow{genRow(1), genRow(2), genRow(3), genRow(4), genRow(5), genRow(6), genRow(7), genRow(8)}
 	var rowsByTime [][]tsSelectRow
-	nop := func(m map[string]SeriesMetaTag, metricMeta *format.MetricMetaValue, version string, by []string, tagIndex int, id int64) bool {
-		return false
-	}
 	load := func(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD, avoidCache bool) ([][]tsSelectRow, error) {
 		return rowsByTime, nil
 	}
@@ -73,7 +69,7 @@ func Test_getTableFromLODs(t *testing.T) {
 				i := row.time - 1
 				rowsByTime[i] = append(rowsByTime[i], row)
 			}
-			gotRes, gotHasMore, err := h.getTableFromLODs(context.Background(), []data_model.LOD{lod}, p, load, nop)
+			gotRes, gotHasMore, err := h.getTableFromLODs(context.Background(), []data_model.LOD{lod}, p, load)
 			assert.Equalf(t, tt.wantRes, gotRes, "limitQueries(%v, %v, %v, %v, %v)", tt.args.rows, tt.args.from, tt.args.to, tt.args.fromEnd, tt.args.limit)
 			assert.Equalf(t, tt.wantHasMore, gotHasMore, "limitQueries(%v, %v, %v, %v, %v)", tt.args.rows, tt.args.from, tt.args.to, tt.args.fromEnd, tt.args.limit)
 			assert.NoError(t, err)

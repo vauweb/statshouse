@@ -10,8 +10,8 @@ import (
 	"encoding/binary"
 	"time"
 
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/zeebo/xxh3"
 )
 
@@ -19,7 +19,6 @@ type HandlerArgs struct {
 	MetricBytes    *tlstatshouse.MetricBytes
 	Description    string
 	ScrapeInterval int
-	MapCallback    MapCallbackFunc
 	Scratch        *[]byte
 }
 
@@ -35,7 +34,7 @@ type MappedMetricHeader struct {
 	CheckedTagIndex int  // we check tags one by one, remembering position here, between invocations of mapTags
 	ValuesChecked   bool // infs, nans, etc. This might be expensive, so done only once
 
-	OriginalTagValues [format.NewMaxTags][]byte
+	OriginalTagValues [format.MaxTags][]byte
 	// original strings values as sent by user. Hash of those is stable between agents independent of
 	// mappings, so used as a resolution hash to deterministically place same rows into same resolution buckets
 

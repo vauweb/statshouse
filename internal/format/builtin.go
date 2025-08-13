@@ -102,7 +102,7 @@ var (
 		-81:                                     BuiltinMetricMetaAggSamplingMetricCount,
 		-82:                                     BuiltinMetricMetaSrcSamplingSizeBytes,
 		-83:                                     BuiltinMetricMetaAggSamplingSizeBytes,
-		-84:                                     BuiltinMetricMetaUIErrors,
+		BuiltinMetricIDMetaUIErrors:             BuiltinMetricMetaUIErrors, // to explicitly set env
 		-85:                                     BuiltinMetricMetaStatsHouseErrors,
 		-86:                                     BuiltinMetricMetaSrcSamplingBudget,
 		-87:                                     BuiltinMetricMetaAggSamplingBudget,
@@ -156,6 +156,7 @@ var (
 		-137:                                    BuiltinMetricMetaAgentTimings,
 		-138:                                    BuiltinMetricMetaAggInsertSize,
 		-139:                                    BuiltinMetricMetaAggOldMetrics,
+		-140:                                    BuiltinMetricMetaApiChRequests,
 	}
 
 	// BuiltInGroupDefault can be overridden by journal, don't use directly
@@ -217,7 +218,7 @@ func init() {
 		// v.WithAgentEnvRouteArch = false
 		// v.WithAggregatorID = false
 	}
-	for i := 0; i < NewMaxTags; i++ {
+	for i := 0; i < MaxTags; i++ {
 		name := strconv.Itoa(i)
 		legacyName := legacyTagIDPrefix + name
 		tagIDsLegacy = append(tagIDsLegacy, legacyName)
@@ -249,7 +250,7 @@ func init() {
 
 		BuiltinMetricByName[m.Name] = m
 
-		if id == BuiltinMetricIDIngestionStatus || id == BuiltinMetricIDAggMappingCreated {
+		if id == BuiltinMetricIDIngestionStatus || id == BuiltinMetricIDAggMappingCreated || id == BuiltinMetricIDMetaUIErrors {
 			m.Tags = append([]MetricMetaTag{{Description: "environment"}}, m.Tags...)
 		} else {
 			m.Tags = append([]MetricMetaTag{{Description: "-"}}, m.Tags...)

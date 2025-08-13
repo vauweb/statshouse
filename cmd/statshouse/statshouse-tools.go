@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -27,18 +28,16 @@ import (
 
 	"github.com/mailru/easyjson"
 
-	"github.com/vkcom/statshouse/internal/data_model"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tl"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlmetadata"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/vkcom/statshouse/internal/data_model/gen2/tlstatshouseApi"
-	"github.com/vkcom/statshouse/internal/format"
-	"github.com/vkcom/statshouse/internal/mapping"
-	"github.com/vkcom/statshouse/internal/metajournal"
-	"github.com/vkcom/statshouse/internal/pcache"
-	"github.com/vkcom/statshouse/internal/receiver"
-	"github.com/vkcom/statshouse/internal/vkgo/build"
-	"github.com/vkcom/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tl"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouseApi"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/metajournal"
+	"github.com/VKCOM/statshouse/internal/receiver"
+	"github.com/VKCOM/statshouse/internal/vkgo/build"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 func mainBenchmarks() int {
@@ -49,9 +48,9 @@ func mainBenchmarks() int {
 type packetPrinter struct {
 }
 
-func (w *packetPrinter) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader, done bool) {
+func (w *packetPrinter) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader) {
 	log.Printf("Parsed metric: %s\n", args.MetricBytes.String())
-	return h, true
+	return h
 }
 
 func (w *packetPrinter) HandleParseError(pkt []byte, err error) {
@@ -145,6 +144,8 @@ func simpleFSync(f *os.File) {
 }
 
 func FakeBenchmarkMetricsPerSecond(listenAddr string) {
+	// Not sure if this function still works and gives some useful data.
+	// When you need it next time, please fix.
 	const almostReceiveOnly = false // do not spend time on mapping
 	const testFastPath = true       // or slow path
 	const keyPrefix = "__benchmark"
@@ -174,14 +175,14 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 			Data:       string(data),
 		}}, 1, err
 	}
-	pmcLoader := func(ctxParent context.Context, key string, floodLimitKey interface{}) (pcache.Value, time.Duration, error) {
-		key = strings.TrimPrefix(key, keyPrefix)
-		i, err := strconv.Atoi(key)
-		if err != nil {
-			return nil, time.Second * 1000, err
-		}
-		return pcache.Int32ToValue(int32(i)), time.Second * 1000, nil
-	}
+	//pmcLoader := func(ctxParent context.Context, key string, floodLimitKey interface{}) (pcache.Value, time.Duration, error) {
+	//	key = strings.TrimPrefix(key, keyPrefix)
+	//	i, err := strconv.Atoi(key)
+	//	if err != nil {
+	//		return nil, time.Second * 1000, err
+	//	}
+	//	return pcache.Int32ToValue(int32(i)), time.Second * 1000, nil
+	//}
 
 	var wrongID atomic.Int64
 	var wrongTag1 atomic.Int64
@@ -209,26 +210,26 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 			mapError.Store(0)
 		}
 	}()
-
-	handleMappedMetric := func(m tlstatshouse.MetricBytes, h data_model.MappedMetricHeader) {
-		if h.IngestionStatus != 0 {
-			mapError.Inc()
-			return
+	/*
+		handleMappedMetric := func(m tlstatshouse.MetricBytes, h data_model.MappedMetricHeader) {
+			if h.IngestionStatus != 0 {
+				mapError.Inc()
+				return
+			}
+			if h.Key.Metric != 1 {
+				wrongID.Inc()
+				return
+			}
+			if testFastPath && h.Key.Tags[1] != 1 {
+				wrongTag1.Inc()
+				return
+			}
+			goodMetric.Inc()
 		}
-		if h.Key.Metric != 1 {
-			wrongID.Inc()
-			return
-		}
-		if testFastPath && h.Key.Tags[1] != 1 {
-			wrongTag1.Inc()
-			return
-		}
-		goodMetric.Inc()
-	}
+	*/
 	metricStorage := metajournal.MakeMetricsStorage(nil)
 	journal := metajournal.MakeJournal("", data_model.JournalDDOSProtectionTimeout, nil, []metajournal.ApplyEvent{metricStorage.ApplyEvent})
 	journal.Start(nil, nil, dolphinLoader)
-	mapper := mapping.NewMapper("", pmcLoader, nil, nil, 1000, handleMappedMetric)
 
 	recv, err := receiver.ListenUDP("udp", listenAddr, receiver.DefaultConnBufSize, true, nil, nil, nil)
 	if err != nil {
@@ -288,16 +289,12 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 	// go writeFunc()
 	serveFunc := func(u *receiver.UDP, rm *atomic.Int64) error {
 		return u.Serve(receiver.CallbackHandler{
-			Metrics: func(m *tlstatshouse.MetricBytes, cb data_model.MapCallbackFunc) (h data_model.MappedMetricHeader, done bool) {
+			Metrics: func(m *tlstatshouse.MetricBytes) (h data_model.MappedMetricHeader) {
 				r := rm.Inc()
 				if almostReceiveOnly && r%1024 != 0 {
-					return h, true
+					return h
 				}
-				done = mapper.Map(data_model.HandlerArgs{MetricBytes: m, MapCallback: cb}, metricStorage.GetMetaMetricByNameBytes(m.Name), &h)
-				if done {
-					handleMappedMetric(*m, h)
-				}
-				return h, done
+				return h
 			},
 			ParseError: func(pkt []byte, err error) {
 				parseErrors.Inc()
@@ -338,7 +335,7 @@ func mainTLClient() int {
 	}
 	var ret tl.True
 	extra := rpc.InvokeReqExtra{FailIfNoConnection: true}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5) // TODO - option to set timeout
+	ctx, cancel := context.WithTimeout(context.Background(), argv.tlclientTimeout)
 	defer cancel()
 	if err := tlclient.AddMetricsBatchBytes(ctx, batch, &extra, &ret); err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "addMetricsBatch failed - %v", err)
@@ -477,6 +474,43 @@ func mainTagMapping() int {
 			fmt.Printf("%q ERROR <%v> setting mapping budget %d\n", argv.metric, err, argv.budget)
 		}
 	}
+	return 0
+}
+
+func mainPutTagBootstrap() int {
+	// Accept JSON from stdin: [{"str": "tag1", "value": 123}, ...]
+	var input []struct {
+		Str   string `json:"str"`
+		Value int32  `json:"value"`
+	}
+	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to decode input: %v\n", err)
+		return 1
+	}
+
+	aesPwd := readAESPwd()
+	client := tlmetadata.Client{
+		Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(aesPwd), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+		Network: argv.metadataNet,
+		Address: argv.metadataAddr,
+		ActorID: argv.metadataActorID,
+	}
+
+	mappings := make([]tlstatshouse.Mapping, 0, len(input))
+	for _, pair := range input {
+		mappings = append(mappings, tlstatshouse.Mapping{Str: pair.Str, Value: pair.Value})
+	}
+
+	args := tlmetadata.PutTagMappingBootstrap{
+		Mappings: mappings,
+	}
+	var ret tlstatshouse.PutTagMappingBootstrapResult
+	err := client.PutTagMappingBootstrap(context.Background(), args, nil, &ret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "PutTagMappingBootstrap error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("Inserted %d mappings\n", ret.CountInserted)
 	return 0
 }
 
