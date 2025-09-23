@@ -143,7 +143,6 @@ var (
 		-124:                                    BuiltinMetricMetaApiHeapIdle,
 		-125:                                    BuiltinMetricMetaApiHeapInuse,
 		-126:                                    BuiltinMetricMetaClientWriteError,
-		-127:                                    BuiltinMetricMetaAgentTimingsLegacy,
 		-128:                                    BuiltinMetricMetaAggBucketInfo,
 		-129:                                    BuiltinMetricMetaBudgetOwner,
 		-130:                                    BuiltinMetricMetaMappingCacheElements,
@@ -157,6 +156,7 @@ var (
 		-138:                                    BuiltinMetricMetaAggInsertSize,
 		-139:                                    BuiltinMetricMetaAggOldMetrics,
 		-140:                                    BuiltinMetricMetaApiChRequests,
+		BuiltinMetricIDMigrationLog:             BuiltinMetricMetaMigrationLog,
 	}
 
 	// BuiltInGroupDefault can be overridden by journal, don't use directly
@@ -292,9 +292,6 @@ func init() {
 			t := &m.Tags[i]
 			if t.Description == "" && t.Name == "" {
 				t.Description = "-" // remove unused tags from UI
-			}
-			if t.Raw {
-				panic("for built-in metric definitions please set only raw_kind, not raw flag")
 			}
 			if i == 0 { // env is not raw
 				continue

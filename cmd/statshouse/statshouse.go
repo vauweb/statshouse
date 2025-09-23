@@ -228,12 +228,11 @@ func run() int {
 		argv.customHostName,
 		format.TagValueIDComponentAgent,
 		metricStorage, mappingsCache,
-		nil, nil, journalFast.VersionHash,
+		nil, journalFast.VersionHash,
 		log.Printf,
 		main.beforeFlushBucket,
 		nil,
-		envLoader,
-		false)
+		envLoader)
 	if err != nil {
 		logErr.Printf("error creating Agent instance: %v", err)
 		return 1
@@ -308,6 +307,9 @@ func run() int {
 		logOk.Printf("Tag Value cache not empty")
 	} else {
 		logOk.Printf("Tag Value cache empty, loading boostrap...")
+		// TODO - remove? There is no more long stall on agent side if agent knows no mappings.
+		// the only problem is larger sampling factor for the first 5-10 seconds, when
+		// more strings are sent instead of integers.
 		mappings, _, err := main.agent.GetTagMappingBootstrap(context.Background())
 		if err != nil {
 			logErr.Printf("failed to load boostrap mappings: %v", err)

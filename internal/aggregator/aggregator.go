@@ -114,7 +114,6 @@ type (
 		configMu sync.RWMutex
 
 		metricStorage  *metajournal.MetricsStorage
-		journal        *metajournal.Journal
 		journalFast    *metajournal.JournalFast
 		journalCompact *metajournal.JournalFast
 		testConnection *TestConnection
@@ -124,6 +123,13 @@ type (
 
 		scrape     *scrapeServer
 		autoCreate *autoCreate
+
+		// migration stats
+		lastErrorTs    uint32
+		insertTimeEWMA float64 // exponential weighted moving average in seconds
+
+		// migration configuration
+		migrationConfig *MigrationConfig
 	}
 	BuiltInStatRecord struct {
 		Key  data_model.Key
@@ -138,7 +144,7 @@ func (b *aggregatorBucket) CancelHijack(hctx *rpc.HandlerContext) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	// we cannot remove merged data or merged set, so data remains in buckets
-	// cancels are rare, so we simply remove from all 3 maps, we do not know in which map hctx is
+	// cancels are rare, so we simply remove from all maps, we do not know in which map hctx is
 	delete(b.contributors, hctx)
 	delete(b.contributors3, hctx)
 	delete(b.contributorsSimulatedErrors, hctx)
@@ -236,10 +242,10 @@ func MakeAggregator(dc pcache.DiskCache, fj *os.File, fjCompact *os.File, mappin
 		addresses:                   addresses,
 		tagMappingBootstrapResponse: tagMappingBootstrapResponse,
 		mappingsCache:               mappingsCache,
+		migrationConfig:             NewDefaultMigrationConfig(),
 	}
 	errNoAutoCreate := &rpc.Error{Code: data_model.RPCErrorNoAutoCreate}
 	a.h = tlstatshouse.Handler{
-		GetConfig2: a.handleGetConfig2,
 		RawGetConfig3: func(ctx context.Context, hctx *rpc.HandlerContext) error {
 			return a.handleGetConfig3(ctx, hctx)
 		},
@@ -253,7 +259,6 @@ func MakeAggregator(dc pcache.DiskCache, fj *os.File, fjCompact *os.File, mappin
 		},
 		RawSendKeepAlive2:    a.handleSendKeepAlive2,
 		RawSendKeepAlive3:    a.handleSendKeepAlive3,
-		RawSendSourceBucket2: a.handleSendSourceBucket2,
 		RawSendSourceBucket3: a.handleSendSourceBucket3,
 		RawTestConnection2: func(ctx context.Context, hctx *rpc.HandlerContext) error {
 			return a.testConnection.handleTestConnection(ctx, hctx)
@@ -302,11 +307,9 @@ func MakeAggregator(dc pcache.DiskCache, fj *os.File, fjCompact *os.File, mappin
 			a.autoCreate.applyConfig(configID, configS)
 		}
 	})
-	a.journal = metajournal.MakeJournal(a.config.Cluster, data_model.JournalDDOSProtectionTimeout, dc,
-		[]metajournal.ApplyEvent{a.metricStorage.ApplyEvent})
 	// we ignore errors because cache can be damaged
 	a.journalFast, _ = metajournal.LoadJournalFastFile(fj, data_model.JournalDDOSProtectionTimeout, false,
-		nil)
+		[]metajournal.ApplyEvent{a.metricStorage.ApplyEvent})
 	a.journalFast.SetDumpPathPrefix(filepath.Join(cacheDir, fmt.Sprintf("journal-%s", config.Cluster)))
 	a.journalCompact, _ = metajournal.LoadJournalFastFile(fjCompact, data_model.JournalDDOSProtectionTimeout, true,
 		nil)
@@ -318,8 +321,8 @@ func MakeAggregator(dc pcache.DiskCache, fj *os.File, fjCompact *os.File, mappin
 	sh2, err := agent.MakeAgent("tcp4", cacheDir, aesPwd, agentConfig, hostName,
 		format.TagValueIDComponentAggregator,
 		a.metricStorage, mappingsCache,
-		a.journal.VersionHash, a.journalFast.VersionHash, a.journalCompact.VersionHash,
-		log.Printf, a.agentBeforeFlushBucketFunc, &getConfigResult, nil, false)
+		a.journalFast.VersionHash, a.journalCompact.VersionHash,
+		log.Printf, a.agentBeforeFlushBucketFunc, &getConfigResult, nil)
 	if err != nil {
 		return nil, fmt.Errorf("built-in agent failed to start: %v", err)
 	}
@@ -328,7 +331,6 @@ func MakeAggregator(dc pcache.DiskCache, fj *os.File, fjCompact *os.File, mappin
 	if a.autoCreate != nil {
 		a.autoCreate.run(a.metricStorage)
 	}
-	a.journal.Start(a.sh2, a.appendInternalLog, metricMetaLoader.LoadJournal)
 	a.journalFast.Start(a.sh2, a.appendInternalLog, metricMetaLoader.LoadJournal)
 	a.journalCompact.Start(a.sh2, a.appendInternalLog, metricMetaLoader.LoadJournal)
 
@@ -355,6 +357,7 @@ func MakeAggregator(dc pcache.DiskCache, fj *os.File, fjCompact *os.File, mappin
 	for i := 0; i < a.config.RecentInserters; i++ {
 		go a.goInsert(a.insertsSema, a.cancelInsertsCtx, a.bucketsToSend, i)
 	}
+	go a.goMigrate(a.cancelInsertsCtx)
 	go a.goInternalLog()
 
 	go func() { // before sh2.Run because agent will also connect to local aggregator
@@ -733,8 +736,8 @@ func (a *Aggregator) goInsert(insertsSema *semaphore.Weighted, cancelCtx context
 					hctx.Response, _ = ssb3.WriteResult(hctx.Response, resp)
 					hctx.SendHijackedResponse(nil)
 				}
-				clear(b.contributors) // safeguard against sending more than once
-				clear(b.contributors3)
+				clear(b.contributors)
+				clear(b.contributors3) // safeguard against sending more than once
 				historicHosts := b.historicHosts
 				b.mu.Unlock()
 				a.mu.Lock()
@@ -784,6 +787,17 @@ func (a *Aggregator) goInsert(insertsSema *semaphore.Weighted, cancelCtx context
 			settings = v3InsertSettings
 		}
 		status, exception, dur, sendErr := sendToClickhouse(ctx, httpClient, a.config.KHAddr, a.config.KHUser, a.config.KHPassword, getTableDesc(writeToV3First), bodyStorage, settings)
+
+		if sendErr != nil {
+			a.lastErrorTs = nowUnix
+		}
+		// EWMA update: alpha=0.2
+		alpha := 0.2
+		if a.insertTimeEWMA == 0 {
+			a.insertTimeEWMA = dur.Seconds()
+		} else {
+			a.insertTimeEWMA = alpha*dur.Seconds() + (1-alpha)*a.insertTimeEWMA
+		}
 		// if we are mirriring that will happen after second ch write
 		if !mirrorChWrite {
 			cancelSendToCh()
@@ -823,8 +837,8 @@ func (a *Aggregator) goInsert(insertsSema *semaphore.Weighted, cancelCtx context
 				hctx.Response, _ = ssb3.WriteResult(hctx.Response, resp)
 				hctx.SendHijackedResponse(nil)
 			}
-			clear(b.contributors) // safeguard against sending more than once
-			clear(b.contributors3)
+			clear(b.contributors)
+			clear(b.contributors3) // safeguard against sending more than once
 			historicHosts := b.historicHosts
 			b.mu.Unlock()
 			a.mu.Lock()
@@ -1028,7 +1042,7 @@ func (a *Aggregator) goTicker() {
 			// Here we have exclusive access to bucket, without locks
 			if aggBucket.time%3 != uint32(a.replicaKey-1) { // must be empty
 				if len(aggBucket.contributors) != 0 || len(aggBucket.contributors3) != 0 || len(aggBucket.contributorsSimulatedErrors) != 0 {
-					log.Panicf("not our (%d) bucket %d has %d (%d) contributors", a.replicaKey, aggBucket.time, len(aggBucket.contributors), len(aggBucket.contributorsSimulatedErrors))
+					log.Panicf("not our (%d) bucket %d has %d (%d, %d) contributors", a.replicaKey, aggBucket.time, len(aggBucket.contributors), len(aggBucket.contributors3), len(aggBucket.contributorsSimulatedErrors))
 				}
 				continue
 			}
@@ -1058,8 +1072,8 @@ func (a *Aggregator) goTicker() {
 					hctx.Response, _ = ssb3.WriteResult(hctx.Response, resp)
 					hctx.SendHijackedResponse(nil)
 				}
-				clear(aggBucket.contributors) // safeguard against sending more than once
-				clear(aggBucket.contributors3)
+				clear(aggBucket.contributors)
+				clear(aggBucket.contributors3) // safeguard against sending more than once
 				aggBucket.mu.Unlock()
 			}
 		}

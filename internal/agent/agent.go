@@ -80,7 +80,6 @@ type Agent struct {
 	mappingsCache *pcache.MappingsCache
 	metricStorage format.MetaStorageInterface
 
-	journalHV        func() (int64, string, string)
 	journalFastHV    func() (int64, string)
 	journalCompactHV func() (int64, string)
 
@@ -145,9 +144,9 @@ func stagingLevel(statsHouseEnv string) int {
 // All shard aggregators must be on the same network
 func MakeAgent(network string, cacheDir string, aesPwd string, config Config, hostName string, componentTag int32, metricStorage format.MetaStorageInterface,
 	mappingsCache *pcache.MappingsCache,
-	journalHV func() (int64, string, string), journalFastHV func() (int64, string), journalCompactHV func() (int64, string),
+	journalFastHV func() (int64, string), journalCompactHV func() (int64, string),
 	logF func(format string, args ...interface{}),
-	beforeFlushBucketFunc func(s *Agent, nowUnix uint32), getConfigResult *tlstatshouse.GetConfigResult3, envLoader *env.Loader, sendSourceBucket2 bool) (*Agent, error) {
+	beforeFlushBucketFunc func(s *Agent, nowUnix uint32), getConfigResult *tlstatshouse.GetConfigResult3, envLoader *env.Loader) (*Agent, error) {
 	newClient := func() rpc.Client {
 		return rpc.NewClient(
 			rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
@@ -181,7 +180,6 @@ func MakeAgent(network string, cacheDir string, aesPwd string, config Config, ho
 		logF:                              logF,
 		buildArchTag:                      format.GetBuildArchKey(runtime.GOARCH),
 		mappingsCache:                     mappingsCache,
-		journalHV:                         journalHV,
 		journalFastHV:                     journalFastHV,
 		journalCompactHV:                  journalCompactHV,
 		metricStorage:                     metricStorage,
@@ -244,7 +242,6 @@ func MakeAgent(network string, cacheDir string, aesPwd string, config Config, ho
 			rng:                 rnd,
 			CurrentTime:         nowUnix,
 			SendTime:            nowUnix - 2, // accept previous seconds at the start of the agent
-			sendSourceBucket2:   sendSourceBucket2,
 		}
 		shard.hardwareMetricResolutionResolved.Store(int32(config.HardwareMetricResolution))
 		shard.hardwareSlowMetricResolutionResolved.Store(int32(config.HardwareSlowMetricResolution))
@@ -256,7 +253,6 @@ func MakeAgent(network string, cacheDir string, aesPwd string, config Config, ho
 
 		// If we write seconds to disk when goSendRecent() receives error, seconds will end up being slightly not in order
 		// We correct for this by looking forward in the disk cache
-		// TODO - make historic queue strict queue instead (?)
 		for j := 0; j < data_model.MaxConveyorDelay*2; j++ {
 			shard.readHistoricSecondLocked() // not actually locked here, but we have exclusive access
 		}
@@ -331,7 +327,6 @@ func (s *Agent) initBuiltInMetrics() {
 		[]int32{0, format.TagValueIDAgentTimingGroupSend, format.TagValueIDAgentTimingSendRecent, int32(build.CommitTimestamp()), int32(build.CommitTag())})
 	s.TimingsSendHistoric = s.CreateBuiltInItemValue(format.BuiltinMetricMetaAgentTimings,
 		[]int32{0, format.TagValueIDAgentTimingGroupSend, format.TagValueIDAgentTimingSendHistoric, int32(build.CommitTimestamp()), int32(build.CommitTag())})
-
 }
 
 // Idea behind this semaphore is
@@ -431,7 +426,7 @@ func (s *Agent) NumShards() int {
 
 // if first one is nil, second one is also nil
 func (s *Agent) getRandomLiveShardReplicas() (*ShardReplica, *ShardReplica) {
-	var liveShardReplicas []*ShardReplica // TODO - do not alloc
+	liveShardReplicas := make([]*ShardReplica, 0, 64*3) // no allocation for up to 64 shards.
 	for _, shardReplica := range s.ShardReplicas {
 		if shardReplica.alive.Load() {
 			liveShardReplicas = append(liveShardReplicas, shardReplica)
@@ -600,12 +595,6 @@ func (s *Agent) addBuiltins(nowUnix uint32) {
 			[]int32{0, s.componentTag, 0, 0, 0, int32(version), hashTag, journalTag},
 			[]byte(hashStr), 1)
 	}
-
-	if s.journalHV != nil {
-		version, hashStr, hashStrXXH3 := s.journalHV()
-		writeJournalVersion(version, hashStr, format.TagValueIDMetaJournalVersionsKindLegacySHA1)
-		writeJournalVersion(version, hashStrXXH3, format.TagValueIDMetaJournalVersionsKindLegacyXXH3)
-	}
 	if s.journalFastHV != nil {
 		version, hashStr := s.journalFastHV()
 		writeJournalVersion(version, hashStr, format.TagValueIDMetaJournalVersionsKindNormalXXH3)
@@ -662,14 +651,56 @@ func (s *Agent) addBuiltins(nowUnix uint32) {
 }
 
 func (s *Agent) addBuiltInsHeartbeatsLocked(nowUnix uint32, count float64) {
+	if count <= 0 {
+		return
+	}
+
+	owner := ""
+	if s.envLoader != nil {
+		e := s.envLoader.Load()
+		owner = e.Owner
+	}
 	uptimeSec := float64(nowUnix - s.startTimestamp)
 
-	s.AddValueCounterString(nowUnix, &s.builtinMetricMetaHeartbeatVersion,
-		[]int32{0, s.componentTag, s.heartBeatEventType},
-		build.Commit(), uptimeSec, count)
-	s.AddValueCounterString(nowUnix, &s.builtinMetricMetaHeartbeatArgs,
-		[]int32{0, s.componentTag, s.heartBeatEventType, s.argsHash, 0, 0, 0, 0, 0, s.argsLen},
-		s.args, uptimeSec, count)
+	tags := [format.MaxTags]int32{
+		1:                    s.componentTag,
+		2:                    s.heartBeatEventType,
+		4:                    int32(build.CommitTag()),
+		6:                    int32(build.CommitTimestamp()),
+		format.AggHostTag:    s.AggregatorHost,
+		format.AggShardTag:   s.AggregatorShardKey,
+		format.AggReplicaTag: s.AggregatorReplicaKey,
+	}
+	sTags := [format.MaxTags]string{
+		7: string(s.hostName),
+	}
+
+	vKey := data_model.Key{
+		Timestamp: nowUnix,
+		Metric:    s.builtinMetricMetaHeartbeatVersion.MetricID, // panics if metricInfo nil
+		Tags:      tags,
+		STags:     sTags,
+	}
+	vKey.STags[9] = owner
+
+	vShardId, _, vWeightMul, vResolutionHash := s.shard(&vKey, &s.builtinMetricMetaHeartbeatVersion, nil)
+	// resolutionHash will be 0 for built-in metrics, we are OK with this
+	vShard := s.Shards[vShardId]
+	vShard.AddValueCounterStringHost(&vKey, vResolutionHash, data_model.TagUnion{S: build.Commit()}, uptimeSec, count, data_model.TagUnionBytes{}, &s.builtinMetricMetaHeartbeatVersion, vWeightMul)
+
+	aKey := data_model.Key{
+		Timestamp: nowUnix,
+		Metric:    s.builtinMetricMetaHeartbeatArgs.MetricID, // panics if metricInfo nil
+		Tags:      tags,
+		STags:     sTags,
+	}
+	aKey.Tags[3] = s.argsHash
+	aKey.Tags[9] = s.argsLen
+
+	aShardId, _, aWeightMul, aResolutionHash := s.shard(&aKey, &s.builtinMetricMetaHeartbeatArgs, nil)
+	// resolutionHash will be 0 for built-in metrics, we are OK with this
+	aShard := s.Shards[aShardId]
+	aShard.AddValueCounterStringHost(&aKey, aResolutionHash, data_model.TagUnion{S: s.args}, uptimeSec, count, data_model.TagUnionBytes{}, &s.builtinMetricMetaHeartbeatArgs, aWeightMul)
 }
 
 func (s *Agent) goFlushIteration(now time.Time) {

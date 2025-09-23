@@ -19,7 +19,7 @@ var filterOperatorIn = filterOperator{operatorIn, " OR "}
 var filterOperatorNotIn = filterOperator{operatorNotIn, " AND "}
 var escapeReplacer = strings.NewReplacer(`'`, `\'`, `\`, `\\`)
 
-func (b *queryBuilder) buildSeriesQuery(lod data_model.LOD) (*seriesQuery, error) {
+func (b *queryBuilder) buildSeriesQuery(lod data_model.LOD, settings string) (*seriesQuery, error) {
 	q := &seriesQuery{
 		queryBuilder: b,
 		version:      lod.Version,
@@ -36,7 +36,8 @@ func (b *queryBuilder) buildSeriesQuery(lod data_model.LOD) (*seriesQuery, error
 		limit = maxTableRows
 		q.writeOrderBy(&sb, &lod)
 	}
-	sb.WriteString(fmt.Sprintf(" LIMIT %v SETTINGS optimize_aggregation_in_order=1", limit))
+	sb.WriteString(fmt.Sprintf(" LIMIT %v", limit))
+	sb.WriteString(settings)
 	q.body = sb.String()
 	return q, nil
 }
@@ -358,7 +359,7 @@ func (b *queryBuilder) writeTagFilter(sb *strings.Builder, lod *data_model.LOD, 
 		var started bool
 		var raw bool
 		if b.metric != nil && tagX < len(b.metric.Tags) {
-			raw = b.metric.Tags[tagX].Raw
+			raw = b.metric.Tags[tagX].Raw()
 		}
 		for _, v := range filter.Values {
 			if v.Empty() {

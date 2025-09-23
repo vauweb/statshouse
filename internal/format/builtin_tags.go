@@ -65,7 +65,7 @@ const (
 	TagValueIDTimingLateRecent                      = 3
 	TagValueIDTimingLongWindowThrownAgent           = 4
 	TagValueIDTimingLongWindowThrownAggregator      = 5
-	TagValueIDTimingMissedSeconds                   = 6 // TODO - remove after everyone uses TagValueIDTimingMissedSecondsAgents
+	TagValueIDTimingMissedSeconds                   = 6 // was written by legacy agents, keep for old metrics
 	TagValueIDTimingLongWindowThrownAggregatorLater = 7
 	TagValueIDTimingDiskOverflowThrownAgent         = 8
 	TagValueIDTimingMissedSecondsAgent              = 9  // separate to prevent mix of old and new way to write missed seconds
@@ -130,7 +130,7 @@ const (
 	TagValueIDSrcIngestionStatusWarnTimestampClampedPast     = 55
 	TagValueIDSrcIngestionStatusWarnTimestampClampedFuture   = 56
 	TagValueIDSrcIngestionStatusErrMetricBuiltin             = 57
-	TagValueIDSrcIngestionStatusOKDup                        = 58 // TODO - remove after removing duplication code
+	TagValueIDSrcIngestionStatusOKDup                        = 58 // TODO - remove after we do not need to investigate conveyor duplication code
 
 	TagValueIDPacketFormatLegacy   = 1
 	TagValueIDPacketFormatTL       = 2
@@ -278,6 +278,9 @@ const (
 	TagValueIDSizeSampleFactors     = 7
 	TagValueIDSizeIngestionStatusOK = 8
 	TagValueIDSizeBuiltIn           = 9
+
+	TagValueIDSamplingYes = 1
+	TagValueIDSamplingNo  = 2
 )
 
 var insertKindToValue = map[int32]string{
@@ -290,6 +293,11 @@ var insertKindToValue = map[int32]string{
 	TagValueIDSizeSampleFactors:     "sample_factor",    // used only by agent
 	TagValueIDSizeIngestionStatusOK: "ingestion_status", // used only by agent
 	TagValueIDSizeBuiltIn:           "builtin",          // used only by aggregator
+}
+
+var samplingYesNoToValue = map[int32]string{
+	TagValueIDSamplingYes: "yes",
+	TagValueIDSamplingNo:  "no",
 }
 
 const (
@@ -386,6 +394,9 @@ const (
 	TagValueIDMappingQueueEventUnknownListAdd    = 4
 	TagValueIDMappingQueueEventCreateMapAdd      = 5
 	TagValueIDMappingQueueEventCreateMapRemove   = 6
+
+	TagSourceTokenFromClient = 1
+	TagSourceTokenFromVkuth  = 2
 )
 
 var (
@@ -414,3 +425,8 @@ var (
 		394:    "QUERY_WAS_CANCELLED",
 	}
 )
+
+var tokenSourceToValue = map[int32]string{
+	TagSourceTokenFromClient: "client",
+	TagSourceTokenFromVkuth:  "vkuth",
+}

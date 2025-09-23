@@ -115,6 +115,7 @@ const (
 	paramPriority     = "priority"
 	paramCompat       = "compat"
 	paramYL, paramYH  = "yl", "yh" // Y scale range
+	paramFull         = "full"
 
 	Version1       = "1"
 	Version2       = "2"
@@ -161,6 +162,11 @@ const (
 	// healthcheck should query any lightweight metric, this one was chosen randomly
 	healthcheckMetric = "__agg_bucket_receive_delay_sec" // format.BuiltinMetricMetaAggBucketReceiveDelaySec.Name
 	healthcheckQuery  = `{@name="` + healthcheckMetric + `",@what="avg"}`
+
+	headerVkuthJWTFromClient = "X-Vkuth-JWT-From-Client"
+	sourceJWTNotSet          = "0"
+	sourceJWTFromClient      = "1"
+	sourceJWTFromVkuth       = "2"
 )
 
 type (
@@ -178,14 +184,17 @@ type (
 	}
 
 	Handler struct {
-		Version3Start     atomic.Int64
-		Version3Prob      atomic.Float64
-		Version3StrcmpOff atomic.Bool
-		NewShardingStart  atomic.Int64
-		ConfigMu          sync.RWMutex
-		DisableCHAddr     []string
-		CacheBlacklist    []string
-		CacheWhitelist    []string
+		Version3Start         atomic.Int64
+		Version3Prob          atomic.Float64
+		Version3StrcmpOff     atomic.Bool
+		NewShardingStart      atomic.Int64
+		ConfigMu              sync.RWMutex
+		DisableCHAddr         []string
+		CacheBlacklist        []string
+		CacheWhitelist        []string
+		selectSettings        string // cached ClickHouse SELECT settings string
+		blockedMetricPrefixes []string
+		blockedUsers          []string
 
 		HandlerOptions
 		showInvisible         bool
@@ -279,7 +288,9 @@ type (
 	}
 
 	metricShortInfo struct {
-		Name string `json:"name"`
+		Name     string `json:"name"`
+		MetricID int32  `json:"metric_id,omitempty"` // we set to 0 to remove from JSON
+		Disable  bool   `json:"disable,omitempty"`   // we set to "false" to remove from JSON
 	}
 
 	dashboardShortInfo struct {
@@ -533,7 +544,7 @@ type (
 	SeriesMetaTag struct {
 		Value   string `json:"value"`
 		Comment string `json:"comment,omitempty"`
-		Raw     bool   `json:"raw,omitempty"`
+		Raw     bool   `json:"raw,omitempty"` // TODO - remove, use RawKind everywhere
 		RawKind string `json:"raw_kind,omitempty"`
 	}
 
@@ -608,7 +619,10 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV1
 			Version2: chV2,
 			Version3: chV2,
 		},
-		metricsStorage: metricStorage,
+		metricsStorage:        metricStorage,
+		selectSettings:        cfg.BuildSelectSettings(),
+		blockedMetricPrefixes: cfg.BlockedMetricPrefixes,
+		blockedUsers:          cfg.BlockedUsers,
 		tagValueCache: &pcache.Cache{
 			Loader: tagValueInverseLoader{
 				loadTimeout: metajournal.DefaultMetaTimeout,
@@ -676,6 +690,9 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV1
 		h.DisableCHAddr = cfg.DisableCHAddr
 		h.CacheBlacklist = cfg.CacheBlacklist
 		h.CacheWhitelist = cfg.CacheWhitelist
+		h.selectSettings = cfg.BuildSelectSettings()
+		h.blockedMetricPrefixes = cfg.BlockedMetricPrefixes
+		h.blockedUsers = cfg.BlockedUsers
 		h.ConfigMu.Unlock()
 	})
 	journal.Start(nil, nil, metadataLoader.LoadJournal)
@@ -747,6 +764,12 @@ func (h *Handler) disabledCHAddrs() []string {
 	return h.DisableCHAddr
 }
 
+func (h *Handler) getSelectSettings() string {
+	h.ConfigMu.RLock()
+	defer h.ConfigMu.RUnlock()
+	return h.selectSettings
+}
+
 func (h *requestHandler) savePanic(requestURI string, err any, stack []byte) {
 	v := error500{time: time.Now(), requestURI: requestURI, what: err, stack: stack, trace: h.trace}
 	h.errorsMu.Lock()
@@ -810,7 +833,6 @@ func (h *Handler) invalidateCache(ctx context.Context, from int64, seen map[cach
 	sb.WriteString(fmt.Sprint(from))
 	sb.WriteString(" GROUP BY time,key1 LIMIT ")
 	sb.WriteString(fmt.Sprint(cacheInvalidateMaxRows))
-	sb.WriteString(" SETTINGS optimize_aggregation_in_order=1")
 	// TODO - write metric with len(rows)
 	// TODO - code that works if we hit limit above
 
@@ -883,6 +905,22 @@ func (h *Handler) invalidateCache(ctx context.Context, from int64, seen map[cach
 func (h *requestHandler) doSelect(ctx context.Context, meta chutil.QueryMetaInto, version string, query ch.Query) error {
 	if version == Version1 && h.ch[version] == nil {
 		return fmt.Errorf("legacy ClickHouse database is disabled")
+	}
+	err := func() error {
+		h.Handler.ConfigMu.RLock()
+		defer h.Handler.ConfigMu.RUnlock()
+		for _, prefix := range h.blockedMetricPrefixes {
+			if strings.HasPrefix(meta.Metric.Name, prefix) {
+				return httpErr(http.StatusBadRequest, fmt.Errorf("metric %q is blocked", meta.Metric.Name))
+			}
+		}
+		if slices.Contains(h.blockedUsers, meta.User) {
+			return httpErr(http.StatusBadRequest, fmt.Errorf("user %q is blocked", meta.User))
+		}
+		return nil
+	}()
+	if err != nil {
+		return err
 	}
 
 	h.Tracef("%s", query.Body)
@@ -998,7 +1036,7 @@ func (h *Handler) getRichTagValue(metricMeta *format.MetricMetaValue, version st
 		}
 		return format.CodeTagValue(tagValueID)
 	}
-	if tag.Raw {
+	if tag.Raw() {
 		base := int32(0)
 		if version == Version1 {
 			base = format.TagValueIDRawDeltaLegacy
@@ -1028,7 +1066,7 @@ func (h *Handler) getTagValueID(tagValue string) (int32, error) {
 func (h *requestHandler) getRichTagValueID(tag *format.MetricMetaTag, version string, tagValue string) (int64, error) {
 	id, err := format.ParseCodeTagValue(tagValue)
 	if err == nil {
-		if version == Version1 && tag.Raw {
+		if version == Version1 && tag.Raw() {
 			id += format.TagValueIDRawDeltaLegacy
 		}
 		return id, nil
@@ -1055,7 +1093,7 @@ func (h *requestHandler) getRichTagValueID(tag *format.MetricMetaTag, version st
 		}
 		return 0, httpErr(http.StatusNotFound, fmt.Errorf("group %q not found", tagValue))
 	}
-	if tag.Raw {
+	if tag.Raw() {
 		value, ok := tag.Comment2Value[tagValue]
 		if ok {
 			id, err = format.ParseCodeTagValue(value)
@@ -1150,18 +1188,30 @@ func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
 }
 
 func HandleGetMetricsList(h *httpRequestHandler) {
+	full := h.FormValue(paramFull) == "1"
+
 	resp := &GetMetricsListResp{
 		Metrics: []metricShortInfo{},
 	}
-	for _, m := range format.BuiltinMetrics {
-		if !h.showInvisible && m.Disable { // we have invisible builtin metrics
+	for _, v := range format.BuiltinMetrics {
+		if !h.showInvisible && v.Disable && !full { // we have invisible builtin metrics
 			continue
 		}
-		resp.Metrics = append(resp.Metrics, metricShortInfo{Name: m.Name})
+		info := metricShortInfo{Name: v.Name}
+		if full {
+			info.MetricID = v.MetricID
+			info.Disable = v.Disable
+		}
+		resp.Metrics = append(resp.Metrics, info)
 	}
-	for _, v := range h.metricsStorage.GetMetaMetricList(h.showInvisible) {
+	for _, v := range h.metricsStorage.GetMetaMetricList(h.showInvisible || full) {
 		if h.accessInfo.CanViewMetric(*v) {
-			resp.Metrics = append(resp.Metrics, metricShortInfo{Name: v.Name})
+			info := metricShortInfo{Name: v.Name}
+			if full {
+				info.MetricID = v.MetricID
+				info.Disable = v.Disable
+			}
+			resp.Metrics = append(resp.Metrics, info)
 		}
 	}
 	sort.Slice(resp.Metrics, func(i int, j int) bool { return resp.Metrics[i].Name < resp.Metrics[j].Name })
@@ -1936,7 +1986,7 @@ func (h *requestHandler) handleGetMetricTagValues(ctx context.Context, req getMe
 		valueIDCount[format.TagValueIDProductionLegacy] = 100 // we only support production tables for v1
 	} else {
 		for _, lod := range lods {
-			query := pq.buildTagValuesQuery(lod)
+			query := pq.buildTagValuesQuery(lod, h.getSelectSettings())
 			isFast := lod.FromSec+fastQueryTimeInterval >= lod.ToSec
 			newSharding := h.newSharding(pq.metric, lod.FromSec)
 			err = h.doSelect(ctx, chutil.QueryMetaInto{
@@ -2761,7 +2811,7 @@ func (s seriesResponse) queryFuncShiftAndTagsAt(i int) (string, int64, map[strin
 			if s.Series.Meta.Metric != nil {
 				if meta := s.Series.Meta.Metric.Name2Tag(name); meta != nil {
 					v.Comment = meta.ValueComments[v.Value]
-					v.Raw = meta.Raw
+					v.Raw = meta.Raw()
 					v.RawKind = meta.RawKind
 				}
 			}
@@ -2842,7 +2892,7 @@ func (h *Handler) maybeAddQuerySeriesTagValue(m map[string]SeriesMetaTag, metric
 	}
 	if tag := metricMeta.Name2Tag(tagID); tag != nil {
 		metaTag.Comment = tag.ValueComments[metaTag.Value]
-		metaTag.Raw = tag.Raw
+		metaTag.Raw = tag.Raw()
 		metaTag.RawKind = tag.RawKind
 	}
 	m[format.TagIDLegacy(tagIndex)] = metaTag
@@ -3015,7 +3065,7 @@ func replaceInfNan(v *float64) {
 }
 
 func loadPoints(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD, ret [][]tsSelectRow, retStartIx int) (int, error) {
-	query, err := pq.buildSeriesQuery(lod)
+	query, err := pq.buildSeriesQuery(lod, h.getSelectSettings())
 	if err != nil {
 		return 0, err
 	}
@@ -3077,7 +3127,7 @@ func loadPoints(ctx context.Context, h *requestHandler, pq *queryBuilder, lod da
 }
 
 func loadPoint(ctx context.Context, h *requestHandler, pq *queryBuilder, lod data_model.LOD) ([]pSelectRow, error) {
-	query, err := pq.buildSeriesQuery(lod)
+	query, err := pq.buildSeriesQuery(lod, h.getSelectSettings())
 	if err != nil {
 		return nil, err
 	}
@@ -3295,7 +3345,15 @@ func mergeMetricNamespace(namespace string, metric string) string {
 }
 
 func (h *httpRequestHandler) init() error {
-	return h.requestHandler.init(vkuth.GetAccessToken(h.Request), h.Request.FormValue(ParamVersion))
+	return h.requestHandler.init(vkuth.GetAccessToken(h.Request), getAccessTokenSource(h.Request), h.Request.FormValue(ParamVersion))
+}
+
+func getAccessTokenSource(req *http.Request) string {
+	if req.Header.Get(headerVkuthJWTFromClient) == "1" {
+		return sourceJWTFromClient
+	} else {
+		return sourceJWTFromVkuth
+	}
 }
 
 func HandleProf(h *httpRequestHandler) {
@@ -3349,7 +3407,7 @@ func healthcheckAccessInfo(h *requestHandler) (accessInfo, bool) {
 	}
 }
 
-func (h *requestHandler) init(accessToken, version string) (err error) {
+func (h *requestHandler) init(accessToken, tokenSource, version string) (err error) {
 	switch version {
 	case Version1, Version3:
 		h.version = version
@@ -3362,6 +3420,7 @@ func (h *requestHandler) init(accessToken, version string) (err error) {
 	default:
 		return fmt.Errorf("invalid version: %q", version)
 	}
+	h.endpointStat.tokenSource = tokenSource
 	if h.accessInfo, err = parseAccessToken(h.jwtHelper, accessToken, h.protectedMetricPrefixes, h.LocalMode, h.insecureMode); err != nil {
 		if ai, ok := healthcheckAccessInfo(h); !ok {
 			return err

@@ -5,19 +5,20 @@ import (
 	"strings"
 
 	"github.com/ClickHouse/ch-go/proto"
+
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/format"
 )
 
-func (b *queryBuilder) buildTagValuesQuery(lod data_model.LOD) *tagValuesQuery {
-	return b.buildTagValuesQueryEx(lod, buildTagValuesQuery)
+func (b *queryBuilder) buildTagValuesQuery(lod data_model.LOD, settings string) *tagValuesQuery {
+	return b.buildTagValuesQueryEx(lod, settings, buildTagValuesQuery)
 }
 
-func (b *queryBuilder) buildTagValueIDsQuery(lod data_model.LOD) *tagValuesQuery {
-	return b.buildTagValuesQueryEx(lod, buildTagValueIDsQuery)
+func (b *queryBuilder) buildTagValueIDsQuery(lod data_model.LOD, settings string) *tagValuesQuery {
+	return b.buildTagValuesQueryEx(lod, settings, buildTagValueIDsQuery)
 }
 
-func (b *queryBuilder) buildTagValuesQueryEx(lod data_model.LOD, mode queryBuilderMode) *tagValuesQuery {
+func (b *queryBuilder) buildTagValuesQueryEx(lod data_model.LOD, settings string, mode queryBuilderMode) *tagValuesQuery {
 	if b.tag.Index == format.StringTopTagIndex {
 		b.tag.Index = format.StringTopTagIndexV3
 	}
@@ -31,7 +32,7 @@ func (b *queryBuilder) buildTagValuesQueryEx(lod data_model.LOD, mode queryBuild
 	q.writeGroupBy(&sb, &lod, mode)
 	sb.WriteString(" HAVING _count>0")
 	q.writeOrderBy(&sb, &lod, mode)
-	sb.WriteString(" SETTINGS optimize_aggregation_in_order=1")
+	sb.WriteString(settings)
 	q.body = sb.String()
 	return &q
 }
@@ -113,7 +114,7 @@ func (q *tagValuesQuery) hasInt(lod *data_model.LOD) bool {
 func (q *tagValuesQuery) hasStr(lod *data_model.LOD, mode queryBuilderMode) bool {
 	switch lod.Version {
 	case Version3:
-		return !q.tag.Raw && !q.tag.Raw64() && mode != buildTagValueIDsQuery
+		return !q.tag.Raw() && !q.tag.Raw64() && mode != buildTagValueIDsQuery
 	default:
 		return q.tag.Index == format.StringTopTagIndexV3
 	}

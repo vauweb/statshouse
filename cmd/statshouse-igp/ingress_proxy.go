@@ -158,7 +158,7 @@ func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd stri
 			"tcp", "", aesPwd, config.ConfigAgent, srvfunc.HostnameForStatshouse(),
 			format.TagValueIDComponentIngressProxy,
 			nil, mappingsCache,
-			nil, nil, nil,
+			nil, nil,
 			log.Printf,
 			func(s *agent.Agent, nowUnix uint32) {
 				// __igp_vm_size
@@ -188,7 +188,7 @@ func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd stri
 				s.AddValueCounter(nowUnix, format.BuiltinMetricMetaProxyHeapInuse,
 					tags, 1, float64(memStats.HeapInuse))
 			},
-			nil, nil, config.ConfigAgent.SendSourceBucket2)
+			nil, nil)
 		if err != nil {
 			log.Fatalf("error creating agent: %v", err)
 		}
@@ -594,6 +594,7 @@ func (p *proxyConn) reportRequestSize(req *proxyRequest) {
 			1: format.TagValueIDComponentIngressProxy,
 			2: int32(req.tag()),
 			6: p.clientCryptoKeyID,
+			7: p.hostnameID.Load(),
 			8: p.clientProtocolVersion,
 		}, float64(req.size), 1)
 }

@@ -98,6 +98,9 @@ var BuiltinMetricMetaTLByteSizePerInflightType = &MetricMetaValue{
 	}, {
 		Description:   "component",
 		ValueComments: convertToValueComments(componentToValue),
+	}, {
+		Description:   "sampling",
+		ValueComments: convertToValueComments(samplingYesNoToValue),
 	}, AggShardTag - 1: { // we reuse index of aggregator_shard here. -1 because we do not include env tag
 		Description: "agent_shard",
 		RawKind:     "int",
@@ -806,9 +809,6 @@ var BuiltinMetricMetaPromScrapeTime = &MetricMetaValue{
 	},
 }
 
-const BuiltinMetricIDAgentHeartbeatVersion = -41 // TODO - remove
-const BuiltinMetricIDAgentHeartbeatArgs = -42    // TODO - remove, this metric was writing larger than allowed strings to DB in the past
-
 var BuiltinMetricMetaUsageMemory = &MetricMetaValue{
 	Name:                    "__usage_mem",
 	Kind:                    MetricKindValue,
@@ -1361,6 +1361,10 @@ var BuiltinMetricMetaAPIServiceTime = &MetricMetaValue{
 	}, {
 		Description: "priority",
 		RawKind:     "int",
+	}, {
+		Description:   "token_source",
+		RawKind:       "int",
+		ValueComments: convertToValueComments(tokenSourceToValue),
 	}},
 }
 
@@ -1405,6 +1409,10 @@ var BuiltinMetricMetaAPIResponseTime = &MetricMetaValue{
 	}, {
 		Description: "priority",
 		RawKind:     "int",
+	}, {
+		Description:   "token_source",
+		RawKind:       "int",
+		ValueComments: convertToValueComments(tokenSourceToValue),
 	}},
 }
 
@@ -2423,44 +2431,6 @@ var BuiltinMetricMetaClientWriteError = &MetricMetaValue{
 	}},
 }
 
-// TODO - remove after all agents updated to v3
-var BuiltinMetricMetaAgentTimingsLegacy = &MetricMetaValue{
-	Name:                    "__src_timings_legacy",
-	Kind:                    MetricKindValue,
-	Description:             "Timings of agent operations",
-	MetricType:              MetricNanosecond,
-	NoSampleAgent:           false,
-	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   true,
-	WithAggregatorID:        false,
-	Tags: []MetricMetaTag{{
-		Description: "group",
-		ValueComments: convertToValueComments(map[int32]string{
-			TagValueIDAgentTimingGroupPipeline: "pipeline",
-			TagValueIDAgentTimingGroupSend:     "send",
-		}),
-	}, {
-		Description: "measure",
-		ValueComments: convertToValueComments(map[int32]string{
-			// pipeline
-			TagValueIDAgentTimingMapping:     "mapping",
-			TagValueIDAgentTimingMappingSlow: "mapping_slow",
-			TagValueIDAgentTimingApplyMetric: "apply_metric",
-			TagValueIDAgentTimingFlush:       "flush",
-			TagValueIDAgentTimingPreprocess:  "preprocess",
-			// send
-			TagValueIDAgentTimingSendRecent:   "send_recent",
-			TagValueIDAgentTimingSendHistoric: "send_historic",
-		}),
-	}, {
-		Description: "commit_timestamp",
-		RawKind:     "timestamp",
-	}, {
-		Description: "commit_hash",
-		RawKind:     "hex",
-	}},
-}
-
 var BuiltinMetricMetaAggBucketInfo = &MetricMetaValue{
 	Name:                    "__agg_bucket_info",
 	Kind:                    MetricKindValue,
@@ -2739,5 +2709,21 @@ var BuiltinMetricMetaApiChRequests = &MetricMetaValue{
 			TagValueIDStatusOK:    "ok",
 			TagValueIDStatusError: "error",
 		}),
+	}},
+}
+
+const BuiltinMetricIDMigrationLog = -141
+
+var BuiltinMetricMetaMigrationLog = &MetricMetaValue{
+	Name:                    "__migration_log",
+	Kind:                    MetricKindCounter,
+	Description:             "Number of rows migrated in successful migration step",
+	NoSampleAgent:           true, // because we need to know exact number of migrated rows
+	BuiltinAllowedToReceive: false,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description: "migration_timestamp",
+		RawKind:     "timestamp",
 	}},
 }

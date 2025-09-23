@@ -21,10 +21,11 @@ import (
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/proto"
-	"github.com/VKCOM/statshouse-go"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
+
+	"github.com/VKCOM/statshouse-go"
 
 	"github.com/VKCOM/statshouse/internal/chutil"
 	"github.com/VKCOM/statshouse/internal/data_model"
@@ -451,7 +452,7 @@ func (ev *requestHandler) GetTagFilter(metric *format.MetricMetaValue, tagIndex 
 	var t format.MetricMetaTag
 	if 0 <= tagIndex && tagIndex < len(metric.Tags) {
 		t = metric.Tags[tagIndex]
-		if t.Raw {
+		if t.Raw() {
 			// histogram bucket label
 			if t.Name == labels.BucketLabel {
 				if v, err := strconv.ParseFloat(tagValue, 32); err == nil {
@@ -639,10 +640,10 @@ func (h *requestHandler) QuerySeries(ctx context.Context, qry *promql.SeriesQuer
 								for y := range *v {
 									(*v)[y] = promql.NilValue
 								}
-								var h [2][]chutil.ArgMinMaxStringFloat32
+								var h [2][]data_model.ArgMinMaxStringFloat32
 								for z, qryHost := range qry.MinMaxHost {
 									if qryHost {
-										h[z] = make([]chutil.ArgMinMaxStringFloat32, len(qry.Timescale.Time))
+										h[z] = make([]data_model.ArgMinMaxStringFloat32, len(qry.Timescale.Time))
 									}
 								}
 								res.Data = append(res.Data, promql.SeriesData{
@@ -758,7 +759,7 @@ func (h *requestHandler) QueryTagValueIDs(ctx context.Context, qry promql.TagVal
 		tags = make(map[int64]bool)
 	)
 	for _, lod := range qry.Timescale.GetLODs(qry.Metric, qry.Offset) {
-		query := pq.buildTagValueIDsQuery(lod)
+		query := pq.buildTagValueIDsQuery(lod, h.getSelectSettings())
 		isFast := lod.FromSec+fastQueryTimeInterval >= lod.ToSec
 		newSharding := h.newSharding(pq.metric, lod.FromSec)
 		err := h.doSelect(ctx, chutil.QueryMetaInto{
@@ -843,14 +844,20 @@ func (w *handlerWhat) copyRowValuesAt(data []promql.SeriesData, x, y int, row *t
 		(*data[x].Values)[y] = row.value(w.sel[i].Digest, w.qry[i].Argument, queryStep, rowStep)
 		if minHost := data[x].MinMaxHost[0]; minHost != nil {
 			if row.minHost.Arg != 0 {
-				minHost[y] = row.minHost.AsArgMinMaxStringFloat32()
+				minHost[y] = data_model.ArgMinMaxStringFloat32{
+					AsInt32: row.minHost.Arg,
+					Val:     row.minHost.Val,
+				}
 			} else {
 				minHost[y] = row.minHostStr.ArgMinMaxStringFloat32
 			}
 		}
 		if maxHost := data[x].MinMaxHost[1]; maxHost != nil {
 			if row.maxHost.Arg != 0 {
-				maxHost[y] = row.maxHost.AsArgMinMaxStringFloat32()
+				maxHost[y] = data_model.ArgMinMaxStringFloat32{
+					AsInt32: row.maxHost.Arg,
+					Val:     row.maxHost.Val,
+				}
 			} else {
 				maxHost[y] = row.maxHostStr.ArgMinMaxStringFloat32
 			}
@@ -1104,7 +1111,7 @@ func promqlGetFilterValue(tagID string, s string, m *format.MetricMetaValue) str
 		return ""
 	}
 	if m != nil {
-		if t := m.Name2Tag(tagID); t.Raw && t.BuiltinKind == 0 && len(t.ValueComments) != 0 {
+		if t := m.Name2Tag(tagID); t.Raw() && t.BuiltinKind == 0 && len(t.ValueComments) != 0 {
 			if v := t.ValueComments[s]; v != "" {
 				return v
 			}
