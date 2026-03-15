@@ -26,14 +26,13 @@ type EstimatorMetricHash struct {
 	Hash   uint64
 }
 
+const estimatorWindow = 3600 // actually, we never want to change it
+
 type Estimator struct {
 	mu sync.Mutex
 
 	hour     map[uint32]map[int32]*ChUnique // estimator per hour
 	halfHour map[uint32]map[int32]*ChUnique // estimator per hour, but shifted by 30 minutes
-
-	window         uint32
-	maxCardinality float64
 }
 
 func updateEstimate(e map[int32]*ChUnique, mh EstimatorMetricHash) {
@@ -46,9 +45,7 @@ func updateEstimate(e map[int32]*ChUnique, mh EstimatorMetricHash) {
 }
 
 // Will cause divide by 0 if forgotten
-func (e *Estimator) Init(window int, maxCardinality int) {
-	e.window = uint32(window)
-	e.maxCardinality = float64(maxCardinality)
+func (e *Estimator) Init() {
 	e.hour = map[uint32]map[int32]*ChUnique{}
 	e.halfHour = map[uint32]map[int32]*ChUnique{}
 }
@@ -64,13 +61,13 @@ func (e *Estimator) UpdateWithKeys(time uint32, mhs []EstimatorMetricHash) {
 }
 
 func (e *Estimator) createEstimatorsLocked(time uint32) (map[int32]*ChUnique, map[int32]*ChUnique) {
-	tp := time / e.window
+	tp := time / estimatorWindow
 	ah, ok := e.hour[tp]
 	if !ok {
 		ah = map[int32]*ChUnique{}
 		e.hour[tp] = ah
 	}
-	stp := (time + e.window/2) / e.window
+	stp := (time + estimatorWindow/2) / estimatorWindow
 	bh, ok := e.halfHour[stp]
 	if !ok {
 		bh = map[int32]*ChUnique{}
@@ -79,13 +76,13 @@ func (e *Estimator) createEstimatorsLocked(time uint32) (map[int32]*ChUnique, ma
 	return ah, bh
 }
 
-func (e *Estimator) ReportHourCardinality(rng *rand.Rand, time uint32, miMap *MultiItemMap, usedMetrics map[int32]struct{}, aggregatorHost int32, shardKey int32, replicaKey int32, numShards int) {
+func (e *Estimator) ReportHourCardinality(rng *rand.Rand, time uint32, miMap *MultiItemMap, usedMetrics map[int32]struct{}, aggregatorHostTag TagUnion, shardKey int32, replicaKey int32) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	ah, bh := e.createEstimatorsLocked(time)
 	// Estimators overlap, we take linear combination to smooth value
-	aWeight := 2 * float64(time%e.window) / float64(e.window)
+	aWeight := 2 * float64(time%estimatorWindow) / float64(estimatorWindow)
 	if aWeight > 1 {
 		aWeight = 2 - aWeight
 	}
@@ -108,13 +105,10 @@ func (e *Estimator) ReportHourCardinality(rng *rand.Rand, time uint32, miMap *Mu
 		//	sf := cardinality / e.maxCardinality
 		//	sampleFactors[k] = sf
 		// }
-		cardinality *= float64(numShards)
-		// show full cardinality estimates in metrics. We need sum of average(all inserted per aggregator) over all aggregators
-		// we cannot implement this, so we multiply by # of shards, expecting uniform load (which is wrong if skip shards option is given to agents)
-		// so avg() of this metric shows full estimate
-		key := AggKey((time/60)*60, format.BuiltinMetricIDAggHourCardinality, [format.MaxTags]int32{0, 0, 0, 0, k}, aggregatorHost, shardKey, replicaKey)
-		item, _ := miMap.GetOrCreateMultiItem(key, nil, 1, nil)
-		item.Tail.AddValueCounterHost(rng, cardinality, 1, TagUnionBytes{I: aggregatorHost})
+		// we presume we have full view of metric, so those with "hash_by_tags" or "builtin" strategy will report wrong estimate
+		key := AggKey((time/60)*60, format.BuiltinMetricIDAggHourCardinality, [format.MaxTags]int32{0, 0, 0, 0, k}, aggregatorHostTag.I, shardKey, replicaKey)
+		item, _ := miMap.GetOrCreateMultiItem(key, nil, nil)
+		item.Tail.AddValueCounterHost(rng, cardinality, 1, aggregatorHostTag)
 	}
 }
 
@@ -123,8 +117,8 @@ func (e *Estimator) GarbageCollect(oldestTime uint32) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	tp := oldestTime / e.window
-	stp := (oldestTime + e.window/2) / e.window
+	tp := oldestTime / estimatorWindow
+	stp := (oldestTime + estimatorWindow/2) / estimatorWindow
 	// Collections are small - ~50 for 1h to 2d ratio
 	for k := range e.hour {
 		if k < tp {

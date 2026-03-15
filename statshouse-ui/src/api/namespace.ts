@@ -18,13 +18,14 @@ export type ApiNamespace = {
   };
 };
 export type Namespace = {
-  namespace_id: number;
+  namespace_id?: number;
   name: string;
-  version: number;
-  update_time: number;
-  delete_time: number;
+  version?: number;
+  update_time?: number;
+  delete_time?: number;
   weight: number;
-  disable: boolean;
+  disable?: boolean;
+  shard_nums?: string;
 };
 
 export type ApiNamespaceGet = {
@@ -33,17 +34,19 @@ export type ApiNamespaceGet = {
 
 export type ApiNamespacePost = {
   namespace: {
-    namespace_id: number;
+    namespace_id?: number;
     name: string;
     weight: number;
-    version: number;
+    version?: number;
     disable?: boolean;
+    shard_nums?: string;
   };
 };
 export type ApiNamespacePut = {
   namespace: {
     name: string;
     weight: number;
+    shard_nums?: string;
   };
 };
 

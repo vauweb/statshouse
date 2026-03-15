@@ -24,12 +24,12 @@ import (
 
 type autoCreate struct {
 	agg        *Aggregator
-	client     *tlmetadata.Client
+	loader     metajournal.MetadataLoader
 	storage    *metajournal.MetricsStorage
 	mu         sync.Mutex
 	co         *sync.Cond
-	queue      []*rpc.HandlerContext // protected by "mu"
-	args       map[*rpc.HandlerContext]tlstatshouse.AutoCreateBytes
+	queue      []rpc.LongpollHandle // protected by "mu"
+	args       map[rpc.LongpollHandle]tlstatshouse.AutoCreateBytes
 	ctx        context.Context
 	shutdownFn func()
 
@@ -41,11 +41,11 @@ type autoCreate struct {
 	running bool // guard against double "run"
 }
 
-func newAutoCreate(a *Aggregator, client *tlmetadata.Client, defaultNamespaceAllowed bool) *autoCreate {
+func newAutoCreate(a *Aggregator, loader metajournal.MetadataLoader, defaultNamespaceAllowed bool) *autoCreate {
 	ac := &autoCreate{
 		agg:                     a,
-		client:                  client,
-		args:                    make(map[*rpc.HandlerContext]tlstatshouse.AutoCreateBytes),
+		loader:                  loader,
+		args:                    make(map[rpc.LongpollHandle]tlstatshouse.AutoCreateBytes),
 		defaultNamespaceAllowed: defaultNamespaceAllowed,
 	}
 	ac.co = sync.NewCond(&ac.mu)
@@ -53,11 +53,17 @@ func newAutoCreate(a *Aggregator, client *tlmetadata.Client, defaultNamespaceAll
 	return ac
 }
 
-func (ac *autoCreate) run(storage *metajournal.MetricsStorage) {
+func (ac *autoCreate) setStorage(storage *metajournal.MetricsStorage) {
 	if ac.running {
 		return
 	}
 	ac.storage = storage
+}
+
+func (ac *autoCreate) run() {
+	if ac.running {
+		return
+	}
 	go ac.goWork()
 	ac.running = true
 }
@@ -101,11 +107,17 @@ func (ac *autoCreate) Shutdown() {
 	ac.co.Broadcast()
 }
 
-func (ac *autoCreate) CancelHijack(hctx *rpc.HandlerContext) {
+func (ac *autoCreate) CancelLongpoll(lh rpc.LongpollHandle) {
 	ac.mu.Lock()
 	defer ac.mu.Unlock()
-	delete(ac.args, hctx)
-	// TODO - must remove from queue here, otherwise the same hctx will be reused and added to map, and we'll break rpc.Server internal invariants
+	delete(ac.args, lh)
+	// TODO - must remove from queue here, otherwise the same lh will be reused and added to map.
+	// this is low probability event though (needs both the collision of *Connection and query ID)
+}
+
+func (ac *autoCreate) WriteEmptyResponse(lh rpc.LongpollHandle, hctx *rpc.HandlerContext) error {
+	ac.CancelLongpoll(lh)
+	return rpc.ErrLongpollNoEmptyResponse
 }
 
 func (ac *autoCreate) handleAutoCreate(_ context.Context, hctx *rpc.HandlerContext) error {
@@ -116,52 +128,45 @@ func (ac *autoCreate) handleAutoCreate(_ context.Context, hctx *rpc.HandlerConte
 	}
 	ac.mu.Lock()
 	defer ac.mu.Unlock()
-	ac.queue = append(ac.queue, hctx)
-	ac.args[hctx] = args
+	lh, err := hctx.StartLongpoll(ac)
+	if err != nil {
+		return err
+	}
+	ac.queue = append(ac.queue, lh)
+	ac.args[lh] = args
 	ac.co.Signal()
-	return hctx.HijackResponse(ac)
+	return nil
 }
 
 func (ac *autoCreate) goWork() {
-	for {
-		var ok bool
-		hctx, args, ok := ac.getWork()
-		if !ok { // done
-			return
-		}
-		err := ac.createMetric(args)
-		if ac.done() {
-			return
-		}
-		ac.mu.Lock()
-		if _, ok := ac.args[hctx]; ok {
-			delete(ac.args, hctx)
-			hctx.Response, _ = args.WriteResult(hctx.Response, tl.True{})
-			hctx.SendHijackedResponse(err)
-		}
-		ac.mu.Unlock()
-		if err != nil {
-			// backoff for a second
-			time.Sleep(1 * time.Second)
-		}
-	}
-}
-
-func (ac *autoCreate) getWork() (*rpc.HandlerContext, tlstatshouse.AutoCreateBytes, bool) {
 	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	for {
-		for len(ac.queue) == 0 {
-			if ac.done() {
-				return nil, tlstatshouse.AutoCreateBytes{}, false
-			}
+		if ac.done() {
+			return
+		}
+		if len(ac.queue) == 0 {
 			ac.co.Wait()
+			continue
 		}
-		hctx := ac.queue[0]
+		lh := ac.queue[0]
 		ac.queue = ac.queue[1:] // TODO - reuse buffer
-		if args, ok := ac.args[hctx]; ok {
-			return hctx, args, true
+		args, ok := ac.args[lh]
+		if !ok {
+			continue
 		}
+		delete(ac.args, lh)
+		ac.mu.Unlock()
+		createErr := ac.createMetric(args)
+		if hctx, _ := lh.FinishLongpoll(); hctx != nil {
+			hctx.Response, _ = args.WriteResult(hctx.Response, tl.True{})
+			hctx.SendLongpollResponse(createErr)
+		}
+		if createErr != nil {
+			// backoff for a second
+			time.Sleep(1 * time.Second)
+		}
+		ac.mu.Lock()
 	}
 }
 
@@ -265,11 +270,9 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 		tagEditCreate = 1 // create
 		edit.SetCreate(true)
 	}
-	// issue RPC call
-	var ret tlmetadata.Event
-	ctx, cancel := context.WithTimeout(ac.ctx, time.Minute)
-	defer cancel()
-	err = ac.client.EditEntitynew(ctx, edit, nil, &ret)
+	metadata := `{"user_email":"@autocreate","user_name":"","user_ref":""}`
+	// loader itself sets some default timeout
+	ret, err := ac.storage.SaveMetric(context.Background(), ac.loader, value, metadata)
 	if err != nil {
 		ac.agg.sh2.AddCounter(uint32(time.Now().Unix()), format.BuiltinMetricMetaAutoCreateMetric,
 			[]int32{0, tagEditCreate, 2}, 1) // 2 - failure
@@ -278,7 +281,7 @@ func (ac *autoCreate) createMetric(args tlstatshouse.AutoCreateBytes) error {
 	// succeeded, wait a bit until changes applied locally
 	ac.agg.sh2.AddCounter(uint32(time.Now().Unix()), format.BuiltinMetricMetaAutoCreateMetric,
 		[]int32{0, tagEditCreate, 1}, 1) // 1 - success
-	ctx, cancel = context.WithTimeout(ac.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ac.ctx, 5*time.Second)
 	defer cancel()
 	_ = ac.storage.WaitVersion(ctx, ret.Version)
 	return nil

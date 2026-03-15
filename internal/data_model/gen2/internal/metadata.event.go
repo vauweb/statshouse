@@ -13,6 +13,15 @@ import (
 
 var _ = basictl.NatWrite
 
+func BuiltinVectorMetadataEventFillRandom(rg *basictl.RandGenerator, vec *[]MetadataEvent) {
+	rg.IncreaseDepth()
+	l := basictl.RandomSize(rg)
+	*vec = make([]MetadataEvent, l)
+	for i := range *vec {
+		(*vec)[i].FillRandom(rg)
+	}
+	rg.DecreaseDepth()
+}
 func BuiltinVectorMetadataEventRead(w []byte, vec *[]MetadataEvent) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
@@ -42,7 +51,11 @@ func BuiltinVectorMetadataEventWrite(w []byte, vec []MetadataEvent) []byte {
 	return w
 }
 
-func BuiltinVectorMetadataEventReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]MetadataEvent) error {
+func BuiltinVectorMetadataEventInternalReadTL2(r []byte, vec *[]MetadataEvent) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("[]MetadataEvent")
+}
+
+func BuiltinVectorMetadataEventReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]MetadataEvent) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -56,7 +69,7 @@ func BuiltinVectorMetadataEventReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 				*vec = append(*vec, newValue)
 				*vec = (*vec)[:cap(*vec)]
 			}
-			if err := (*vec)[index].ReadJSON(legacyTypeNames, in); err != nil {
+			if err := (*vec)[index].ReadJSONGeneral(tctx, in); err != nil {
 				return err
 			}
 			in.WantComma()
@@ -71,17 +84,27 @@ func BuiltinVectorMetadataEventReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 }
 
 func BuiltinVectorMetadataEventWriteJSON(w []byte, vec []MetadataEvent) []byte {
-	return BuiltinVectorMetadataEventWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorMetadataEventWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorMetadataEventWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []MetadataEvent) []byte {
+func BuiltinVectorMetadataEventWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []MetadataEvent) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
-		w = elem.WriteJSONOpt(newTypeNames, short, w)
+		w = elem.WriteJSONOpt(tctx, w)
 	}
 	return append(w, ']')
 }
 
+func BuiltinVectorMetadataEventBytesFillRandom(rg *basictl.RandGenerator, vec *[]MetadataEventBytes) {
+	rg.IncreaseDepth()
+	l := basictl.RandomSize(rg)
+	*vec = make([]MetadataEventBytes, l)
+	for i := range *vec {
+		(*vec)[i].FillRandom(rg)
+	}
+	rg.DecreaseDepth()
+}
 func BuiltinVectorMetadataEventBytesRead(w []byte, vec *[]MetadataEventBytes) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
@@ -111,7 +134,11 @@ func BuiltinVectorMetadataEventBytesWrite(w []byte, vec []MetadataEventBytes) []
 	return w
 }
 
-func BuiltinVectorMetadataEventBytesReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]MetadataEventBytes) error {
+func BuiltinVectorMetadataEventBytesInternalReadTL2(r []byte, vec *[]MetadataEventBytes) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("[]MetadataEventBytes")
+}
+
+func BuiltinVectorMetadataEventBytesReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]MetadataEventBytes) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -125,7 +152,7 @@ func BuiltinVectorMetadataEventBytesReadJSON(legacyTypeNames bool, in *basictl.J
 				*vec = append(*vec, newValue)
 				*vec = (*vec)[:cap(*vec)]
 			}
-			if err := (*vec)[index].ReadJSON(legacyTypeNames, in); err != nil {
+			if err := (*vec)[index].ReadJSONGeneral(tctx, in); err != nil {
 				return err
 			}
 			in.WantComma()
@@ -140,13 +167,14 @@ func BuiltinVectorMetadataEventBytesReadJSON(legacyTypeNames bool, in *basictl.J
 }
 
 func BuiltinVectorMetadataEventBytesWriteJSON(w []byte, vec []MetadataEventBytes) []byte {
-	return BuiltinVectorMetadataEventBytesWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorMetadataEventBytesWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorMetadataEventBytesWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []MetadataEventBytes) []byte {
+func BuiltinVectorMetadataEventBytesWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []MetadataEventBytes) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
-		w = elem.WriteJSONOpt(newTypeNames, short, w)
+		w = elem.WriteJSONOpt(tctx, w)
 	}
 	return append(w, ']')
 }
@@ -175,7 +203,7 @@ func (item *MetadataEvent) ClearNamespaceId() {
 	item.NamespaceId = 0
 	item.FieldMask &^= 1 << 0
 }
-func (item MetadataEvent) IsSetNamespaceId() bool { return item.FieldMask&(1<<0) != 0 }
+func (item *MetadataEvent) IsSetNamespaceId() bool { return item.FieldMask&(1<<0) != 0 }
 
 func (item *MetadataEvent) SetMetadata(v string) {
 	item.Metadata = v
@@ -185,7 +213,7 @@ func (item *MetadataEvent) ClearMetadata() {
 	item.Metadata = ""
 	item.FieldMask &^= 1 << 1
 }
-func (item MetadataEvent) IsSetMetadata() bool { return item.FieldMask&(1<<1) != 0 }
+func (item *MetadataEvent) IsSetMetadata() bool { return item.FieldMask&(1<<1) != 0 }
 
 func (item *MetadataEvent) Reset() {
 	item.FieldMask = 0
@@ -198,6 +226,27 @@ func (item *MetadataEvent) Reset() {
 	item.UpdateTime = 0
 	item.Data = ""
 	item.Metadata = ""
+}
+
+func (item *MetadataEvent) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldMask = basictl.RandomFieldMask(rg, 0b11)
+	item.Id = basictl.RandomLong(rg)
+	item.Name = basictl.RandomString(rg)
+	if item.FieldMask&(1<<0) != 0 {
+		item.NamespaceId = basictl.RandomLong(rg)
+	} else {
+		item.NamespaceId = 0
+	}
+	item.EventType = basictl.RandomInt(rg)
+	item.Unused = basictl.RandomUint(rg)
+	item.Version = basictl.RandomLong(rg)
+	item.UpdateTime = basictl.RandomUint(rg)
+	item.Data = basictl.RandomString(rg)
+	if item.FieldMask&(1<<1) != 0 {
+		item.Metadata = basictl.RandomString(rg)
+	} else {
+		item.Metadata = ""
+	}
 }
 
 func (item *MetadataEvent) Read(w []byte) (_ []byte, err error) {
@@ -242,7 +291,6 @@ func (item *MetadataEvent) Read(w []byte) (_ []byte, err error) {
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataEvent) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -272,7 +320,6 @@ func (item *MetadataEvent) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataEvent) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -287,6 +334,11 @@ func (item MetadataEvent) String() string {
 }
 
 func (item *MetadataEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataEvent) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldMaskPresented bool
 	var propIdPresented bool
 	var propNamePresented bool
@@ -437,14 +489,15 @@ func (item *MetadataEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer)
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataEvent) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataEvent) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataEvent) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataEvent) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataEvent) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -526,6 +579,14 @@ func (item *MetadataEvent) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (item *MetadataEvent) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.event"))
+}
+
+func (item *MetadataEvent) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.event")
+}
+
 type MetadataEventBytes struct {
 	FieldMask   uint32
 	Id          int64
@@ -550,7 +611,7 @@ func (item *MetadataEventBytes) ClearNamespaceId() {
 	item.NamespaceId = 0
 	item.FieldMask &^= 1 << 0
 }
-func (item MetadataEventBytes) IsSetNamespaceId() bool { return item.FieldMask&(1<<0) != 0 }
+func (item *MetadataEventBytes) IsSetNamespaceId() bool { return item.FieldMask&(1<<0) != 0 }
 
 func (item *MetadataEventBytes) SetMetadata(v []byte) {
 	item.Metadata = v
@@ -560,7 +621,7 @@ func (item *MetadataEventBytes) ClearMetadata() {
 	item.Metadata = item.Metadata[:0]
 	item.FieldMask &^= 1 << 1
 }
-func (item MetadataEventBytes) IsSetMetadata() bool { return item.FieldMask&(1<<1) != 0 }
+func (item *MetadataEventBytes) IsSetMetadata() bool { return item.FieldMask&(1<<1) != 0 }
 
 func (item *MetadataEventBytes) Reset() {
 	item.FieldMask = 0
@@ -573,6 +634,27 @@ func (item *MetadataEventBytes) Reset() {
 	item.UpdateTime = 0
 	item.Data = item.Data[:0]
 	item.Metadata = item.Metadata[:0]
+}
+
+func (item *MetadataEventBytes) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldMask = basictl.RandomFieldMask(rg, 0b11)
+	item.Id = basictl.RandomLong(rg)
+	item.Name = basictl.RandomStringBytes(rg)
+	if item.FieldMask&(1<<0) != 0 {
+		item.NamespaceId = basictl.RandomLong(rg)
+	} else {
+		item.NamespaceId = 0
+	}
+	item.EventType = basictl.RandomInt(rg)
+	item.Unused = basictl.RandomUint(rg)
+	item.Version = basictl.RandomLong(rg)
+	item.UpdateTime = basictl.RandomUint(rg)
+	item.Data = basictl.RandomStringBytes(rg)
+	if item.FieldMask&(1<<1) != 0 {
+		item.Metadata = basictl.RandomStringBytes(rg)
+	} else {
+		item.Metadata = item.Metadata[:0]
+	}
 }
 
 func (item *MetadataEventBytes) Read(w []byte) (_ []byte, err error) {
@@ -617,7 +699,6 @@ func (item *MetadataEventBytes) Read(w []byte) (_ []byte, err error) {
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataEventBytes) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -647,7 +728,6 @@ func (item *MetadataEventBytes) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataEventBytes) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -662,6 +742,11 @@ func (item MetadataEventBytes) String() string {
 }
 
 func (item *MetadataEventBytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataEventBytes) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldMaskPresented bool
 	var propIdPresented bool
 	var propNamePresented bool
@@ -812,14 +897,15 @@ func (item *MetadataEventBytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonL
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataEventBytes) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataEventBytes) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataEventBytes) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataEventBytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataEventBytes) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -899,4 +985,12 @@ func (item *MetadataEventBytes) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.event", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataEventBytes) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.event"))
+}
+
+func (item *MetadataEventBytes) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.event")
 }

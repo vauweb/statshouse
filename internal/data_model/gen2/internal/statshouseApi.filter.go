@@ -13,6 +13,15 @@ import (
 
 var _ = basictl.NatWrite
 
+func BuiltinVectorStatshouseApiFilterFillRandom(rg *basictl.RandGenerator, vec *[]StatshouseApiFilter) {
+	rg.IncreaseDepth()
+	l := basictl.RandomSize(rg)
+	*vec = make([]StatshouseApiFilter, l)
+	for i := range *vec {
+		(*vec)[i].FillRandom(rg)
+	}
+	rg.DecreaseDepth()
+}
 func BuiltinVectorStatshouseApiFilterRead(w []byte, vec *[]StatshouseApiFilter) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
@@ -42,7 +51,93 @@ func BuiltinVectorStatshouseApiFilterWrite(w []byte, vec []StatshouseApiFilter) 
 	return w
 }
 
-func BuiltinVectorStatshouseApiFilterReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]StatshouseApiFilter) error {
+func BuiltinVectorStatshouseApiFilterCalculateLayout(sizes []int, optimizeEmpty bool, vec *[]StatshouseApiFilter) ([]int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return sizes, 0
+		}
+		return sizes, 1
+	}
+	sizePosition := len(sizes)
+	sizes = append(sizes, 0)
+
+	currentSize := 0
+	var sz int
+
+	currentSize += basictl.TL2CalculateSize(len(*vec))
+	for i := 0; i < len(*vec); i++ {
+		sizes, sz = (*vec)[i].CalculateLayout(sizes, false)
+		currentSize += sz
+	}
+	sizes[sizePosition] = currentSize
+	currentSize += basictl.TL2CalculateSize(currentSize)
+	Unused(sz)
+	return sizes, currentSize
+}
+
+func BuiltinVectorStatshouseApiFilterInternalWriteTL2(w []byte, sizes []int, optimizeEmpty bool, vec *[]StatshouseApiFilter) ([]byte, []int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return w, sizes, 0
+		}
+		w = append(w, 0)
+		return w, sizes, 1
+	}
+	currentSize := sizes[0]
+	sizes = sizes[1:]
+	w = basictl.TL2WriteSize(w, currentSize)
+	if currentSize == 0 {
+		return w, sizes, 1
+	}
+	oldLen := len(w)
+	w = basictl.TL2WriteSize(w, len(*vec))
+
+	var sz int
+	for i := 0; i < len(*vec); i++ {
+		w, sizes, _ = (*vec)[i].InternalWriteTL2(w, sizes, false)
+	}
+	Unused(sz)
+	if len(w)-oldLen != currentSize {
+		panic("tl2: mismatch between calculate and write")
+	}
+	return w, sizes, currentSize
+}
+
+func BuiltinVectorStatshouseApiFilterInternalReadTL2(r []byte, vec *[]StatshouseApiFilter) (_ []byte, err error) {
+	currentSize := 0
+	if r, currentSize, err = basictl.TL2ParseSize(r); err != nil {
+		return r, err
+	}
+	if len(r) < currentSize {
+		return r, basictl.TL2Error("not enough data: expected %d, got %d", currentSize, len(r))
+	}
+
+	currentR := r[:currentSize]
+	r = r[currentSize:]
+
+	elementCount := 0
+	if currentSize != 0 {
+		if currentR, elementCount, err = basictl.TL2ParseSize(currentR); err != nil {
+			return r, err
+		}
+		if elementCount > len(currentR) {
+			return r, basictl.TL2ElementCountError(elementCount, currentR)
+		}
+	}
+
+	if cap(*vec) < elementCount {
+		*vec = make([]StatshouseApiFilter, elementCount)
+	}
+	*vec = (*vec)[:elementCount]
+	for i := 0; i < elementCount; i++ {
+		if currentR, err = (*vec)[i].InternalReadTL2(currentR); err != nil {
+			return currentR, err
+		}
+	}
+	return r, nil
+}
+
+func BuiltinVectorStatshouseApiFilterReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]StatshouseApiFilter) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -56,7 +151,7 @@ func BuiltinVectorStatshouseApiFilterReadJSON(legacyTypeNames bool, in *basictl.
 				*vec = append(*vec, newValue)
 				*vec = (*vec)[:cap(*vec)]
 			}
-			if err := (*vec)[index].ReadJSON(legacyTypeNames, in); err != nil {
+			if err := (*vec)[index].ReadJSONGeneral(tctx, in); err != nil {
 				return err
 			}
 			in.WantComma()
@@ -71,13 +166,14 @@ func BuiltinVectorStatshouseApiFilterReadJSON(legacyTypeNames bool, in *basictl.
 }
 
 func BuiltinVectorStatshouseApiFilterWriteJSON(w []byte, vec []StatshouseApiFilter) []byte {
-	return BuiltinVectorStatshouseApiFilterWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorStatshouseApiFilterWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorStatshouseApiFilterWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []StatshouseApiFilter) []byte {
+func BuiltinVectorStatshouseApiFilterWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []StatshouseApiFilter) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
-		w = elem.WriteJSONOpt(newTypeNames, short, w)
+		w = elem.WriteJSONOpt(tctx, w)
 	}
 	return append(w, ']')
 }
@@ -97,6 +193,12 @@ func (item *StatshouseApiFilter) Reset() {
 	item.Values = item.Values[:0]
 }
 
+func (item *StatshouseApiFilter) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomUint(rg)
+	item.Key = basictl.RandomString(rg)
+	BuiltinVectorStatshouseApiTagValueFillRandom(rg, &item.Values)
+}
+
 func (item *StatshouseApiFilter) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
@@ -107,7 +209,6 @@ func (item *StatshouseApiFilter) Read(w []byte) (_ []byte, err error) {
 	return BuiltinVectorStatshouseApiTagValueRead(w, &item.Values)
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseApiFilter) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -126,7 +227,6 @@ func (item *StatshouseApiFilter) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseApiFilter) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -141,6 +241,11 @@ func (item StatshouseApiFilter) String() string {
 }
 
 func (item *StatshouseApiFilter) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *StatshouseApiFilter) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propKeyPresented bool
 	var propValuesPresented bool
@@ -174,7 +279,7 @@ func (item *StatshouseApiFilter) ReadJSON(legacyTypeNames bool, in *basictl.Json
 				if propValuesPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouseApi.filter", "values")
 				}
-				if err := BuiltinVectorStatshouseApiTagValueReadJSON(legacyTypeNames, in, &item.Values); err != nil {
+				if err := BuiltinVectorStatshouseApiTagValueReadJSONGeneral(tctx, in, &item.Values); err != nil {
 					return err
 				}
 				propValuesPresented = true
@@ -201,14 +306,15 @@ func (item *StatshouseApiFilter) ReadJSON(legacyTypeNames bool, in *basictl.Json
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseApiFilter) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *StatshouseApiFilter) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *StatshouseApiFilter) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *StatshouseApiFilter) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *StatshouseApiFilter) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -227,7 +333,7 @@ func (item *StatshouseApiFilter) WriteJSONOpt(newTypeNames bool, short bool, w [
 	backupIndexValues := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"values":`...)
-	w = BuiltinVectorStatshouseApiTagValueWriteJSONOpt(newTypeNames, short, w, item.Values)
+	w = BuiltinVectorStatshouseApiTagValueWriteJSONOpt(tctx, w, item.Values)
 	if (len(item.Values) != 0) == false {
 		w = w[:backupIndexValues]
 	}
@@ -243,4 +349,154 @@ func (item *StatshouseApiFilter) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("statshouseApi.filter", err.Error())
 	}
 	return nil
+}
+
+func (item *StatshouseApiFilter) CalculateLayout(sizes []int, optimizeEmpty bool) ([]int, int) {
+	sizes = append(sizes, 1360164518)
+	sizePosition := len(sizes)
+	sizes = append(sizes, 0)
+
+	currentSize := 1
+	lastUsedByte := 0
+	var sz int
+
+	if item.FieldsMask != 0 {
+		currentSize += 4
+		lastUsedByte = currentSize
+	}
+	if len(item.Key) != 0 {
+		currentSize += basictl.TL2CalculateSize(len(item.Key)) + len(item.Key)
+		lastUsedByte = currentSize
+	}
+	if sizes, sz = BuiltinVectorStatshouseApiTagValueCalculateLayout(sizes, true, &item.Values); sz != 0 {
+		currentSize += sz
+		lastUsedByte = currentSize
+	}
+
+	if lastUsedByte < currentSize {
+		currentSize = lastUsedByte
+	}
+	sizes[sizePosition] = currentSize
+	if currentSize == 0 {
+		sizes = sizes[:sizePosition+1]
+	}
+	if !optimizeEmpty || currentSize != 0 {
+		currentSize += basictl.TL2CalculateSize(currentSize)
+	}
+	Unused(sz)
+	return sizes, currentSize
+}
+
+func (item *StatshouseApiFilter) InternalWriteTL2(w []byte, sizes []int, optimizeEmpty bool) ([]byte, []int, int) {
+	if sizes[0] != 1360164518 {
+		panic("tl2: tag mismatch between calculate and write")
+	}
+	currentSize := sizes[1]
+	sizes = sizes[2:]
+	if optimizeEmpty && currentSize == 0 {
+		return w, sizes, 0
+	}
+	w = basictl.TL2WriteSize(w, currentSize)
+	if currentSize == 0 {
+		return w, sizes, 1
+	}
+	oldLen := len(w)
+	var sz int
+	var currentBlock byte
+	currentBlockPosition := len(w)
+	w = append(w, 0)
+	if item.FieldsMask != 0 {
+		w = basictl.NatWrite(w, item.FieldsMask)
+		currentBlock |= 2
+	}
+	if len(item.Key) != 0 {
+		w = basictl.StringWriteTL2(w, item.Key)
+		currentBlock |= 4
+	}
+	if w, sizes, sz = BuiltinVectorStatshouseApiTagValueInternalWriteTL2(w, sizes, true, &item.Values); sz != 0 {
+		currentBlock |= 8
+	}
+	if currentBlockPosition < len(w) {
+		w[currentBlockPosition] = currentBlock
+	}
+	if len(w)-oldLen != currentSize {
+		panic("tl2: mismatch between calculate and write")
+	}
+	Unused(sz)
+	return w, sizes, 1
+}
+
+func (item *StatshouseApiFilter) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	var sizes, sizes2 []int
+	if ctx != nil {
+		sizes = ctx.SizeBuffer[:0]
+	}
+	sizes, _ = item.CalculateLayout(sizes, false)
+	w, sizes2, _ = item.InternalWriteTL2(w, sizes, false)
+	if len(sizes2) != 0 {
+		panic("tl2: internal write did not consume all size data")
+	}
+	if ctx != nil {
+		ctx.SizeBuffer = sizes
+	}
+	return w
+}
+
+func (item *StatshouseApiFilter) InternalReadTL2(r []byte) (_ []byte, err error) {
+	currentSize := 0
+	if r, currentSize, err = basictl.TL2ParseSize(r); err != nil {
+		return r, err
+	}
+	if currentSize == 0 {
+		item.Reset()
+		return r, nil
+	}
+	if len(r) < currentSize {
+		return r, basictl.TL2Error("not enough data: expected %d, got %d", currentSize, len(r))
+	}
+
+	currentR := r[:currentSize]
+	r = r[currentSize:]
+
+	var block byte
+	if currentR, err = basictl.ByteReadTL2(currentR, &block); err != nil {
+		return currentR, err
+	}
+	// read No of constructor
+	if block&1 != 0 {
+		var index int
+		if currentR, index, err = basictl.TL2ParseSize(currentR); err != nil {
+			return currentR, err
+		}
+		if index != 0 {
+			return r, ErrorInvalidUnionIndex("statshouseApi.filter", index)
+		}
+	}
+	if block&2 != 0 {
+		if currentR, err = basictl.NatRead(currentR, &item.FieldsMask); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.FieldsMask = 0
+	}
+	if block&4 != 0 {
+		if currentR, err = basictl.StringReadTL2(currentR, &item.Key); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.Key = ""
+	}
+	if block&8 != 0 {
+		if currentR, err = BuiltinVectorStatshouseApiTagValueInternalReadTL2(currentR, &item.Values); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.Values = item.Values[:0]
+	}
+	Unused(currentR)
+	return r, nil
+}
+
+func (item *StatshouseApiFilter) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return item.InternalReadTL2(r)
 }

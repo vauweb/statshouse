@@ -42,7 +42,6 @@ var (
 	BuiltinMetrics = map[int32]*MetricMetaValue{
 		BuiltinMetricIDAgentSamplingFactor:      BuiltinMetricMetaAgentSamplingFactor,      // used for badges
 		BuiltinMetricIDAggBucketReceiveDelaySec: BuiltinMetricMetaAggBucketReceiveDelaySec, // used for badges
-		-3:                                      BuiltinMetricMetaAggInsertSizeLegacy,
 		-4:                                      BuiltinMetricMetaTLByteSizePerInflightType,
 		-5:                                      BuiltinMetricMetaAggKeepAlive,
 		-6:                                      BuiltinMetricMetaAggSizeCompressed,
@@ -88,7 +87,6 @@ var (
 		-66:                                     BuiltinMetricMetaAPISelectBytes,
 		-67:                                     BuiltinMetricMetaAPISelectRows,
 		-68:                                     BuiltinMetricMetaAPISelectDuration,
-		-70:                                     BuiltinMetricMetaAPISourceSelectRows,
 		-71:                                     BuiltinMetricMetaSystemMetricScrapeDuration,
 		-72:                                     BuiltinMetricMetaMetaServiceTime,
 		-73:                                     BuiltinMetricMetaMetaClientWaits,
@@ -130,12 +128,12 @@ var (
 		-111:                                    BuiltinMetricMetaAggSamplingEngineTime,
 		-112:                                    BuiltinMetricMetaAggSamplingEngineKeys,
 		-113:                                    BuiltinMetricMetaProxyAcceptHandshakeError,
-		-114:                                    BuiltinMetricMetaProxyVmSize,
-		-115:                                    BuiltinMetricMetaProxyVmRSS,
-		-116:                                    BuiltinMetricMetaProxyHeapAlloc,
-		-117:                                    BuiltinMetricMetaProxyHeapSys,
-		-118:                                    BuiltinMetricMetaProxyHeapIdle,
-		-119:                                    BuiltinMetricMetaProxyHeapInuse,
+		BuiltinMetricIDProxyVmSize:              BuiltinMetricMetaProxyVmSize,
+		BuiltinMetricIDProxyVmRSS:               BuiltinMetricMetaProxyVmRSS,
+		BuiltinMetricIDProxyHeapAlloc:           BuiltinMetricMetaProxyHeapAlloc,
+		BuiltinMetricIDProxyHeapSys:             BuiltinMetricMetaProxyHeapSys,
+		BuiltinMetricIDProxyHeapIdle:            BuiltinMetricMetaProxyHeapIdle,
+		BuiltinMetricIDProxyHeapInuse:           BuiltinMetricMetaProxyHeapInuse,
 		-120:                                    BuiltinMetricMetaApiVmSize,
 		-121:                                    BuiltinMetricMetaApiVmRSS,
 		-122:                                    BuiltinMetricMetaApiHeapAlloc,
@@ -157,6 +155,15 @@ var (
 		-139:                                    BuiltinMetricMetaAggOldMetrics,
 		-140:                                    BuiltinMetricMetaApiChRequests,
 		BuiltinMetricIDMigrationLog:             BuiltinMetricMetaMigrationLog,
+		-142:                                    BuiltinMetricMetaAPISelectOSCPUVirtualTime,
+		-143:                                    BuiltinMetricMetaAPIRateLimit,
+		-144:                                    BuiltinMetricMetaMappingClientWaits,
+		-145:                                    BuiltinMetricMetaMappingCacheVersion,
+		-146:                                    BuiltinMetricMappingStorageVersion,
+		-147:                                    BuiltinMetricMappingStoragePending,
+		BuiltinMetricIDIngestionStatusNoShard:   BuiltinMetricMetaIngestionStatusNoShard,
+		BuiltinMetricIDHeartbeatVersionAgent:    BuiltinMetricMetaHeartbeatVersionAgent,
+		BuiltinMetricIDHeartbeatVersionIngress:  BuiltinMetricMetaHeartbeatVersionIngress,
 	}
 
 	// BuiltInGroupDefault can be overridden by journal, don't use directly
@@ -250,12 +257,15 @@ func init() {
 
 		BuiltinMetricByName[m.Name] = m
 
-		if id == BuiltinMetricIDIngestionStatus || id == BuiltinMetricIDAggMappingCreated || id == BuiltinMetricIDMetaUIErrors {
+		if id == BuiltinMetricIDIngestionStatus || id == BuiltinMetricIDIngestionStatusNoShard ||
+			id == BuiltinMetricIDAggMappingCreated || id == BuiltinMetricIDMetaUIErrors {
 			m.Tags = append([]MetricMetaTag{{Description: "environment"}}, m.Tags...)
 		} else {
 			m.Tags = append([]MetricMetaTag{{Description: "-"}}, m.Tags...)
 		}
-		for len(m.Tags) < MaxTags { // prevent overflows in code below
+		for len(m.Tags) < MaxTagsV2 {
+			// prevent overflows in code below
+			// Do not set to MaxTags, because then StringTop (47) tag will have raw kind
 			m.Tags = append(m.Tags, MetricMetaTag{Description: "-"})
 		}
 		if m.WithAggregatorID {

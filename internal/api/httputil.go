@@ -18,15 +18,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mailru/easyjson/jwriter"
+
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/VKCOM/statshouse/internal/promql"
-	"github.com/mailru/easyjson/jwriter"
 )
 
 const (
-	cacheMinAgeSeconds = 1
-	cacheMaxAgeSeconds = 31536000
+	cacheMinAgeSeconds          = 1
+	cacheMaxAgeSeconds          = 365 * 86400
+	cacheAgeStaticAssetsSeconds = 30 * 86400
+	cacheAgeStaticOtherSeconds  = 300
 
 	widthAutoRes = 0
 	widthLODRes  = 1
@@ -66,7 +69,9 @@ func httpCode(err error) int {
 		switch {
 		case errors.Is(err, data_model.ErrEntityNotExists):
 			code = http.StatusNotFound
-		case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		case errors.Is(err, context.Canceled):
+			code = 499 // client closed request
+		case errors.Is(err, context.DeadlineExceeded):
 			code = http.StatusGatewayTimeout // 504
 		case errors.As(err, &httpErr):
 			code = httpErr.code
@@ -159,6 +164,9 @@ func respondJSON(h *httpRequestHandler, resp interface{}, cache time.Duration, c
 		r.Error = err.Error()
 	} else {
 		r.Data = resp
+	}
+	if h.announcement != "" {
+		w.Header().Set("X-Statshouse-Announcment", h.announcement)
 	}
 	start := time.Now()
 	var jw jwriter.Writer

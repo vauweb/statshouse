@@ -27,7 +27,7 @@ func newMetricStorage(loader MetricsStorageLoader) (*MetricsStorage, *JournalFas
 	m := MakeMetricsStorage(nil)
 	//j := MakeJournal("", data_model.JournalDDOSProtectionTimeout, nil,
 	//	[]ApplyEvent{m.ApplyEvent})
-	j := MakeJournalFast(data_model.JournalDDOSProtectionTimeout, false,
+	j := MakeJournalFast(data_model.NewChunkedStorageNop(), data_model.JournalDDOSProtectionTimeout, false,
 		[]ApplyEvent{m.ApplyEvent})
 	j.metaLoader = loader
 	j.parseDiscCache()
@@ -882,7 +882,7 @@ func TestMetricsStorage(t *testing.T) {
 			require.Equal(t, group2Metric6.MetricID, metric.MetricID)
 		})
 	})
-	journal = MakeJournalFast(data_model.JournalDDOSProtectionTimeout, false,
+	journal = MakeJournalFast(data_model.NewChunkedStorageNop(), data_model.JournalDDOSProtectionTimeout, false,
 		nil)
 	journal.metaLoader = loader
 
@@ -904,6 +904,9 @@ func TestMetricsStorage(t *testing.T) {
 			{FieldMask: 1, Id: 1, Version: 1},
 			{FieldMask: 1, Id: 2, Version: 2},
 			{FieldMask: 1, Id: 3, Version: 3},
+		}
+		for i, ev := range events {
+			events[i].SetNamespaceId(ev.NamespaceId)
 		}
 		err := journal.updateJournal(nil)
 		require.NoError(t, err)
@@ -1091,9 +1094,12 @@ func genMetricMetaValue() *rapid.Generator[format.MetricMetaValue] {
 			PreKeyOnly:           rapid.Bool().Draw(t, "preKeyOnly"),
 			MetricType:           rapid.String().Draw(t, "metricType"),
 			FairKeyTagIDs:        rapid.SliceOf(rapid.String()).Draw(t, "fairKeyTagIDs"),
-			ShardStrategy:        rapid.StringMatching("^tags_hash$|^fixed_shard$|^metric_id$|^$").Draw(t, "shardStrategy"),
-			ShardNum:             rapid.Uint32Max(16).Draw(t, "shardNum"),
-			PipelineVersion:      rapid.Uint8Range(0, 3).Draw(t, "pipelineVersion"),
+			ShardStrategy:        rapid.StringMatching("^tags_hash$|^fixed_shard$|^$").Draw(t, "shardStrategy"),
+			ShardNum:             rapid.Uint32Max(15).Draw(t, "shardNum"),
+			ShardFixedKey:        rapid.Uint32Max(16).Draw(t, "shard"),
+			ShardFixedKey2:       rapid.Uint32Max(16).Draw(t, "shard2"),
+
+			ShardFixedKey2Timestamp: rapid.Uint32().Draw(t, "shard2_timestamp"),
 		}
 	})
 }

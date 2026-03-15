@@ -24,11 +24,14 @@ func (item *EngineInvokeHttpQuery) Reset() {
 	item.Query.Reset()
 }
 
+func (item *EngineInvokeHttpQuery) FillRandom(rg *basictl.RandGenerator) {
+	item.Query.FillRandom(rg)
+}
+
 func (item *EngineInvokeHttpQuery) Read(w []byte) (_ []byte, err error) {
 	return item.Query.Read(w)
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineInvokeHttpQuery) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -45,7 +48,6 @@ func (item *EngineInvokeHttpQuery) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineInvokeHttpQuery) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -65,47 +67,61 @@ func (item *EngineInvokeHttpQuery) WriteResult(w []byte, ret EngineHttpQueryResp
 }
 
 func (item *EngineInvokeHttpQuery) ReadResultJSON(legacyTypeNames bool, in *basictl.JsonLexer, ret *EngineHttpQueryResponse) error {
-	if err := ret.ReadJSON(legacyTypeNames, in); err != nil {
+	tctx := &basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	if err := ret.ReadJSONGeneral(tctx, in); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (item *EngineInvokeHttpQuery) WriteResultJSON(w []byte, ret EngineHttpQueryResponse) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *EngineInvokeHttpQuery) writeResultJSON(newTypeNames bool, short bool, w []byte, ret EngineHttpQueryResponse) (_ []byte, err error) {
-	w = ret.WriteJSONOpt(newTypeNames, short, w)
+func (item *EngineInvokeHttpQuery) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret EngineHttpQueryResponse) (_ []byte, err error) {
+	w = ret.WriteJSONOpt(tctx, w)
 	return w, nil
 }
 
-func (item *EngineInvokeHttpQuery) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineInvokeHttpQuery) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret EngineHttpQueryResponse
+	ret.FillRandom(rg)
+	return item.WriteResult(w, ret)
+}
+
+func (item *EngineInvokeHttpQuery) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret EngineHttpQueryResponse
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *EngineInvokeHttpQuery) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineInvokeHttpQuery) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret EngineHttpQueryResponse
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *EngineInvokeHttpQuery) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret EngineHttpQueryResponse
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *EngineInvokeHttpQuery) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.invokeHttpQuery")
+}
+
+func (item *EngineInvokeHttpQuery) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.invokeHttpQuery")
+}
+
+func (item *EngineInvokeHttpQuery) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.invokeHttpQuery")
+}
+
+func (item *EngineInvokeHttpQuery) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.invokeHttpQuery")
 }
 
 func (item EngineInvokeHttpQuery) String() string {
@@ -113,6 +129,11 @@ func (item EngineInvokeHttpQuery) String() string {
 }
 
 func (item *EngineInvokeHttpQuery) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineInvokeHttpQuery) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propQueryPresented bool
 
 	if in != nil {
@@ -128,7 +149,7 @@ func (item *EngineInvokeHttpQuery) ReadJSON(legacyTypeNames bool, in *basictl.Js
 				if propQueryPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("engine.invokeHttpQuery", "query")
 				}
-				if err := item.Query.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Query.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propQueryPresented = true
@@ -149,18 +170,19 @@ func (item *EngineInvokeHttpQuery) ReadJSON(legacyTypeNames bool, in *basictl.Js
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineInvokeHttpQuery) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineInvokeHttpQuery) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineInvokeHttpQuery) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineInvokeHttpQuery) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineInvokeHttpQuery) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"query":`...)
-	w = item.Query.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Query.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 
@@ -173,4 +195,12 @@ func (item *EngineInvokeHttpQuery) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.invokeHttpQuery", err.Error())
 	}
 	return nil
+}
+
+func (item *EngineInvokeHttpQuery) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.invokeHttpQuery"))
+}
+
+func (item *EngineInvokeHttpQuery) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.invokeHttpQuery")
 }

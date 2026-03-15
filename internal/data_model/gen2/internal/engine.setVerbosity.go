@@ -24,11 +24,14 @@ func (item *EngineSetVerbosity) Reset() {
 	item.Verbosity = 0
 }
 
+func (item *EngineSetVerbosity) FillRandom(rg *basictl.RandGenerator) {
+	item.Verbosity = basictl.RandomInt(rg)
+}
+
 func (item *EngineSetVerbosity) Read(w []byte) (_ []byte, err error) {
 	return basictl.IntRead(w, &item.Verbosity)
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineSetVerbosity) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -45,7 +48,6 @@ func (item *EngineSetVerbosity) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineSetVerbosity) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -65,47 +67,61 @@ func (item *EngineSetVerbosity) WriteResult(w []byte, ret True) (_ []byte, err e
 }
 
 func (item *EngineSetVerbosity) ReadResultJSON(legacyTypeNames bool, in *basictl.JsonLexer, ret *True) error {
-	if err := ret.ReadJSON(legacyTypeNames, in); err != nil {
+	tctx := &basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	if err := ret.ReadJSONGeneral(tctx, in); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (item *EngineSetVerbosity) WriteResultJSON(w []byte, ret True) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *EngineSetVerbosity) writeResultJSON(newTypeNames bool, short bool, w []byte, ret True) (_ []byte, err error) {
-	w = ret.WriteJSONOpt(newTypeNames, short, w)
+func (item *EngineSetVerbosity) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret True) (_ []byte, err error) {
+	w = ret.WriteJSONOpt(tctx, w)
 	return w, nil
 }
 
-func (item *EngineSetVerbosity) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineSetVerbosity) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret True
+	ret.FillRandom(rg)
+	return item.WriteResult(w, ret)
+}
+
+func (item *EngineSetVerbosity) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret True
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *EngineSetVerbosity) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineSetVerbosity) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret True
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *EngineSetVerbosity) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret True
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *EngineSetVerbosity) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setVerbosity")
+}
+
+func (item *EngineSetVerbosity) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setVerbosity")
+}
+
+func (item *EngineSetVerbosity) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setVerbosity")
+}
+
+func (item *EngineSetVerbosity) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setVerbosity")
 }
 
 func (item EngineSetVerbosity) String() string {
@@ -113,6 +129,11 @@ func (item EngineSetVerbosity) String() string {
 }
 
 func (item *EngineSetVerbosity) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineSetVerbosity) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propVerbosityPresented bool
 
 	if in != nil {
@@ -149,14 +170,15 @@ func (item *EngineSetVerbosity) ReadJSON(legacyTypeNames bool, in *basictl.JsonL
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineSetVerbosity) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineSetVerbosity) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineSetVerbosity) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineSetVerbosity) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineSetVerbosity) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexVerbosity := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -177,4 +199,12 @@ func (item *EngineSetVerbosity) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.setVerbosity", err.Error())
 	}
 	return nil
+}
+
+func (item *EngineSetVerbosity) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.setVerbosity"))
+}
+
+func (item *EngineSetVerbosity) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.setVerbosity")
 }

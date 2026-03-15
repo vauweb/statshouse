@@ -33,11 +33,12 @@ import (
 	"github.com/VKCOM/statshouse/internal/pcache"
 	"github.com/VKCOM/statshouse/internal/receiver"
 	"github.com/VKCOM/statshouse/internal/stats"
+	"github.com/VKCOM/statshouse/internal/trustedsubnets"
 	"github.com/VKCOM/statshouse/internal/util"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/platform"
 	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/vkgo/vkd/platform"
 )
 
 const defaultPathToPwd = `/etc/engine/pass`
@@ -89,6 +90,8 @@ var argv struct {
 	// for old mode
 	historicStorageDir string
 
+	trustedSubnetGroupsFlag trustedsubnets.Flag
+
 	agent.Config
 }
 
@@ -136,13 +139,12 @@ func main() {
 	logOk = log.New(os.Stdout, "LOG "+pidStr+" ", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	logErr = log.New(os.Stderr, "ERR "+pidStr+" ", log.LstdFlags|log.Lshortfile|log.Lmicroseconds)
 	// data_model.PrintLinearMaxHostProbabilities()
-	if entrypoint, err := parseCommandLine(); err != nil {
+	code, err := parseCommandLine()
+	if err != nil {
 		log.Fatalln(err)
-	} else if entrypoint != nil {
-		code := entrypoint()
-		fmt.Println() // ensure command prompt starts at new line, it's annoying when not
-		os.Exit(code)
 	}
+	fmt.Println() // ensure command prompt starts at new line, it's annoying when not
+	os.Exit(code)
 }
 
 func run() int {
@@ -224,6 +226,7 @@ func run() int {
 	main.agent, err = agent.MakeAgent("tcp",
 		argv.cacheDir,
 		aesPwd,
+		argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()),
 		argv.Config,
 		argv.customHostName,
 		format.TagValueIDComponentAgent,
@@ -356,7 +359,7 @@ func run() int {
 		rpc.ServerWithLogf(logErr.Printf),
 		rpc.ServerWithVersion(build.Info()),
 		rpc.ServerWithCryptoKeys([]string{aesPwd}),
-		rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
+		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())),
 		rpc.ServerWithSyncHandler(handlerRPC.Handle),
 		rpc.ServerWithStatsHandler(statsHandler{receiversUDP: main.receiversUDP, receiverRPC: receiverRPC, sh2: main.agent, journal: journalFast}.handleStats),
 		metrics.ServerWithMetrics,
@@ -563,10 +566,13 @@ func readAESPwd() string {
 func argvCreateClient() (rpc.Client, string) {
 	cryptoKey := readAESPwd()
 	return rpc.NewClient(
-		rpc.ClientWithLogf(logErr.Printf), rpc.ClientWithCryptoKey(cryptoKey), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())), cryptoKey
+		rpc.ClientWithProtocolVersion(1),
+		rpc.ClientWithLogf(logErr.Printf),
+		rpc.ClientWithCryptoKey(cryptoKey),
+		rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))), cryptoKey
 }
 
-func parseCommandLine() (entrypoint func() int, _ error) {
+func parseCommandLine() (int, error) {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Daemons usage:\n")
 		fmt.Fprintf(os.Stderr, "statshouse agent <options>             daemon receiving data from clients and sending to aggregators\n")
@@ -578,7 +584,7 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		fmt.Fprintf(os.Stderr, "statshouse simple_fsync <options>      simple SSD benchmark\n")
 		fmt.Fprintf(os.Stderr, "statshouse tlclient.api <options>      test API\n")
 		fmt.Fprintf(os.Stderr, "statshouse benchmark <options>         some benchmarks\n")
-		return nil, nil
+		return 0, nil
 	}
 
 	var verb string
@@ -594,7 +600,7 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 			log.Printf("-new-conveyor argument is deprecated, instead of 'statshouse ... %s ...' run 'statshouse agent ...' or 'statshouse -agent ...'", os.Args[i])
 			os.Args = append(os.Args[:i], os.Args[i+1:]...)
 		default:
-			return nil, fmt.Errorf("wrong value for -new-conveyor argument %s, must be 'agent', 'duplicate_map' (also means agent)", s)
+			return 0, fmt.Errorf("wrong value for -new-conveyor argument %s, must be 'agent', 'duplicate_map' (also means agent)", s)
 		}
 	}
 	if verb == "" {
@@ -628,6 +634,7 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		flag.BoolVar(&argv.hardwareMetricScrapeDisable, "hardware-metric-scrape-disable", false, "disable hardware metric scraping")
 		flag.StringVar(&argv.envFilePath, "env-file-path", "/etc/statshouse_env.yml", "statshouse environment file path")
 		argv.Config.Bind(flag.CommandLine, agent.DefaultConfig())
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		// DEPRECATED but still in use
 		var sampleFactor int
 		var maxMemLimit uint64
@@ -645,10 +652,10 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 
 		argv.AggregatorAddresses = strings.Split(argv.aggAddr, ",")
 		if len(argv.AggregatorAddresses) != 3 {
-			return nil, fmt.Errorf("-agg-addr must contain comma-separated list of 3 aggregators (1 shard is recommended)")
+			return 0, fmt.Errorf("-agg-addr must contain comma-separated list of 3 aggregators (1 shard is recommended)")
 		}
 		if argv.coresUDP < 0 {
-			return nil, fmt.Errorf("--cores-udp must be set to at least 0")
+			return 0, fmt.Errorf("--cores-udp must be set to at least 0")
 		}
 		if argv.maxCores < 0 {
 			argv.maxCores = 1 + argv.coresUDP*3/2
@@ -661,45 +668,60 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 			logErr.Printf("warning: --pprof-http option deprecated due to security reasons. Please use explicit --pprof=127.0.0.1:11123 option")
 		}
 
-		return run, argv.Config.ValidateConfigSource()
+		if err := argv.Config.ValidateConfigSource(); err != nil {
+			return 0, err
+		}
+		return run(), nil
 	case "test_parser":
 		flag.IntVar(&argv.bufferSizeUDP, "buffer-size-udp", receiver.DefaultConnBufSize, "UDP receiving buffer size")
 		flag.StringVar(&argv.listenAddr, "p", ":13337", "RAW UDP & RPC TCP listen address")
 		build.FlagParseShowVersionHelp()
 		parseListenAddress()
-		return mainTestParser, nil
+		return mainTestParser(), nil
 	case "test_map":
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.aggAddr, "agg-addr", "", "comma-separated list of aggregator addresses to test.")
 		flag.StringVar(&argv.mapString, "string", "production", "string to map.")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
 		argv.AggregatorAddresses = strings.Split(argv.aggAddr, ",")
 		if len(argv.AggregatorAddresses) == 0 {
-			return nil, fmt.Errorf("--agg-addr must not be empty")
+			return 0, fmt.Errorf("--agg-addr must not be empty")
 		}
-		return mainTestMap, nil
+		return mainTestMap(), nil
 	case "test_longpoll":
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.aggAddr, "agg-addr", "", "comma-separated list of aggregator addresses to test.")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
 		argv.AggregatorAddresses = strings.Split(argv.aggAddr, ",")
 		if len(argv.AggregatorAddresses) == 0 {
-			return nil, fmt.Errorf("--agg-addr must not be empty")
+			return 0, fmt.Errorf("--agg-addr must not be empty")
 		}
-		return mainTestLongpoll, nil
+		return mainTestLongpoll(), nil
 	case "modules":
-		return mainModules, nil
+		return mainModules(), nil
 	case "tlclient":
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.statshouseAddr, "statshouse-addr", "127.0.0.1:13337", "statshouse address for tlclient")
 		flag.StringVar(&argv.statshouseNet, "statshouse-net", "tcp4", "statshouse network for tlclient")
 		flag.DurationVar(&argv.tlclientTimeout, "timeout", 2*time.Second, "timeout of RPC call to agent")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
-		return mainTLClient, nil
-	case "tlclient.api":
+		return mainTLClient(), nil
+	case "tlclient.api", "tlclient.api.stub":
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
+		flag.StringVar(&argv.statshouseAddr, "api-addr", "127.0.0.1:2400", "statshouse API address for tlclient")
+		flag.StringVar(&argv.statshouseNet, "api-net", "tcp4", "statshouse API network for tlclient")
+		preferTL2 := false
+		flag.BoolVar(&preferTL2, "tl2", false, "prefer TL2")
+		flag.DurationVar(&argv.tlclientTimeout, "timeout", 2*time.Second, "timeout of RPC call to statshouse API")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
-		return mainTLClientAPI, nil
+		if verb == "tlclient.api.stub" {
+			return mainTLClientAPIStub(preferTL2), nil
+		}
+		return mainTLClientAPI(preferTL2), nil
 	case "tag_mapping":
 		flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "")
 		flag.IntVar(&argv.budget, "budget", 0, "mapping budget to set")
@@ -708,23 +730,26 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "")
 		flag.StringVar(&argv.metric, "metric", "", "metric name, if specified then strings are considered metric tags")
 		flag.StringVar(&argv.tags, "tag", "", "string to be searched for a int32 mapping")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
-		return mainTagMapping, nil
+		return mainTagMapping(), nil
 	case "put_tag_bootstrap":
 		flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "")
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.metadataAddr, "metadata-addr", "127.0.0.1:2442", "")
 		flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
-		return mainPutTagBootstrap, nil
+		return mainPutTagBootstrap(), nil
 	case "publish_tag_drafts":
 		flag.BoolVar(&argv.dryRun, "dry-run", true, "do not publish changes")
 		flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "")
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.metadataAddr, "metadata-addr", "127.0.0.1:2442", "")
 		flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
-		return mainPublishTagDrafts, nil
+		return mainPublishTagDrafts(), nil
 	case "mass_update_metadata":
 		flag.BoolVar(&argv.dryRun, "dry-run", true, "do not publish changes")
 		flag.IntVar(&argv.maxUpdates, "max-updates", 0, "make no more than this # of modifications")
@@ -732,16 +757,17 @@ func parseCommandLine() (entrypoint func() int, _ error) {
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.metadataAddr, "metadata-addr", "127.0.0.1:2442", "")
 		flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "")
+		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
-		return massUpdateMetadata, nil
+		return massUpdateMetadata(), nil
 	case "simple_fsync":
-		return mainSimpleFSyncTest, nil
+		return mainSimpleFSyncTest(), nil
 	case "benchmark":
 		flag.StringVar(&argv.listenAddr, "p", "127.0.0.1:13337", "RAW UDP & RPC TCP write/listen port")
 		build.FlagParseShowVersionHelp()
-		return mainBenchmarks, nil
+		return mainBenchmarks(), nil
 	default:
-		return nil, fmt.Errorf("unknown verb %q", verb)
+		return 0, fmt.Errorf("unknown verb %q", verb)
 	}
 }
 

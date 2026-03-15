@@ -44,7 +44,6 @@ const (
 	StringTopTagID            = "_s"
 	StringTopTagIDV3          = "47" // for backward compatibility with v2 we write "_s" into "47"
 	HostTagID                 = "_h"
-	ShardTagID                = "_shard_num"
 	EnvTagID                  = "0"
 	LETagName                 = "le"
 	ScrapeNamespaceTagName    = "__scrape_namespace__"
@@ -54,6 +53,7 @@ const (
 	HistogramBucketsDelimC    = ','
 	HistogramBucketsEndMark   = "$"
 	HistogramBucketsEndMarkC  = '$'
+	TableDistSuffix           = "_dist"
 
 	StringTopTagIndex   = -1 // used as flag during mapping
 	StringTopTagIndexV3 = 47
@@ -67,12 +67,6 @@ const (
 	AggReplicaTag = 13
 	RouteTag      = 14
 	AgentEnvTag   = 15
-
-	// legacy values, used only by API to process data from version1 database
-	TagValueIDProductionLegacy   = 22676293   // stlogs_s_production, actual value matters only for legacy conveyor
-	TagValueNullLegacy           = "null"     // see TagValueIDNull
-	TagValueIDMappingFloodLegacy = 22136242   // STATLOGS_KEY_KEYOVERFLOW_INT
-	TagValueIDRawDeltaLegacy     = 10_000_000 // STATLOGS_INT_NOCONVERT
 
 	NamespaceSeparator     = ":"
 	NamespaceSeparatorRune = ':'
@@ -116,7 +110,7 @@ const (
 	*/
 )
 
-// Legacy, left for API backward compatibility
+// Legacy, left for API and Agent backward compatibility
 const (
 	LegacyStringTopTagID = "skey"
 	legacyTagIDPrefix    = "key"
@@ -140,12 +134,6 @@ var (
 	tagIDsLegacy   []string              // initialized in builtin.go due to dependency
 	apiCompatTagID = map[string]string{} // initialized in builtin.go due to dependency
 )
-
-type AgentEnvRouteArch struct {
-	AgentEnv  int32
-	Route     int32
-	BuildArch int32
-}
 
 type MetricKind int
 
@@ -190,71 +178,73 @@ const (
 	BuiltinKindNamespace = 3
 )
 
-// TODO - omitempty everywhere
-
+// This struct is immutable, it is accessed by mapping code without any locking
+//
 //easyjson:json
 type NamespaceMeta struct {
-	ID         int32  `json:"namespace_id"`
-	Name       string `json:"name"`
-	Version    int64  `json:"version"`
-	UpdateTime uint32 `json:"update_time"`
-	DeleteTime uint32 `json:"delete_time"`
+	ID         int32  `json:"namespace_id,omitempty"` // cleared in DB, restored from event
+	Name       string `json:"name,omitempty"`         // cleared in DB, restored from event
+	Version    int64  `json:"version,omitempty"`      // cleared in DB, restored from event
+	UpdateTime uint32 `json:"update_time,omitempty"`  // cleared in DB, restored from event
+	DeleteTime uint32 `json:"delete_time,omitempty"`  // cleared in DB, restored from event
 
-	Weight  float64 `json:"weight"`
-	Disable bool    `json:"disable"`
+	Weight    float64 `json:"weight,omitempty"`
+	Disable   bool    `json:"disable"`              // no omitempty, in case we want to switch to "Visible" later
+	ShardKeys string  `json:"shard_nums,omitempty"` // 1-based
 
 	EffectiveWeight int64 `json:"-"`
 }
 
 // This struct is immutable, it is accessed by mapping code without any locking
 type DashboardMeta struct {
-	DashboardID int32  `json:"dashboard_id"` // I'm sure day will come when we will be forced to make this int32
-	Name        string `json:"name"`
-	Version     int64  `json:"version,omitempty"`
-	UpdateTime  uint32 `json:"update_time"`
+	DashboardID int32  `json:"dashboard_id,omitempty"` // cleared in DB, restored from event
+	Name        string `json:"name,omitempty"`         // cleared in DB, restored from event
+	Version     int64  `json:"version,omitempty"`      // cleared in DB, restored from event
+	UpdateTime  uint32 `json:"update_time,omitempty"`  // cleared in DB, restored from event
 
-	DeleteTime uint32                 `json:"delete_time"` // TODO - do not store event-specific information in journal event.
-	JSONData   map[string]interface{} `json:"data"`        // TODO - there must be a better way?
+	DeleteTime uint32                 `json:"delete_time,omitempty"` // cleared in DB, restored from event, works like Disabled flag if != 0
+	JSONData   map[string]interface{} `json:"data"`                  // saved to DB
 }
 
 // This struct is immutable, it is accessed by mapping code without any locking
 //
 //easyjson:json
 type MetricsGroup struct {
-	ID          int32  `json:"group_id"`
-	NamespaceID int32  `json:"namespace_id"`
-	Name        string `json:"name"`
-	Version     int64  `json:"version"`
-	UpdateTime  uint32 `json:"update_time"`
+	ID          int32  `json:"group_id,omitempty"`     // cleared in DB, restored from event
+	NamespaceID int32  `json:"namespace_id,omitempty"` // checked and stored in DB
+	Name        string `json:"name,omitempty"`         // cleared in DB, restored from event
+	Version     int64  `json:"version,omitempty"`      // cleared in DB, restored from event
+	UpdateTime  uint32 `json:"update_time,omitempty"`  // cleared in DB, restored from event
 
-	Weight  float64 `json:"weight,omitempty"`
-	Disable bool    `json:"disable,omitempty"`
+	Weight    float64 `json:"weight,omitempty"`
+	Disable   bool    `json:"disable,omitempty"`
+	ShardKeys string  `json:"shard_keys,omitempty"` // 1-based
 
 	EffectiveWeight int64 `json:"-"`
 }
 
 // possible sharding strategies
 const (
-	ShardByTagsHash = "tags_hash"
-	ShardFixed      = "fixed_shard"
-	ShardByMetric   = "metric_id" // shard = metric_id % num_shards
-	ShardBuiltin    = "builtin"   // for special builtin metrics that are written in all shards (only dist)
+	ShardByTagsHash  = "tags_hash"   // TODO: remove after nginx metrics are moved out to its own shard
+	ShardFixed       = "fixed_shard" // should be the only strategy for all user metrics
+	ShardByMetricID  = ""            // shard = metric_id % shardByMetricCount, for most built-in and hardware metrics.
+	ShardBuiltinDist = "builtin"     // for several builtin metrics which are written by aggregator into the same shard with the metrics they describe
 )
 
 // This struct is immutable, it is accessed by mapping code without any locking
 //
 //easyjson:json
 type MetricMetaValue struct {
-	MetricID    int32  `json:"metric_id,omitempty"`
-	NamespaceID int32  `json:"namespace_id,omitempty"` // RO
-	Name        string `json:"name,omitempty"`
-	Version     int64  `json:"version,omitempty"`
-	UpdateTime  uint32 `json:"-"` // updated from event
+	MetricID    int32  `json:"metric_id,omitempty"`    // cleared in DB, restored from event
+	NamespaceID int32  `json:"namespace_id,omitempty"` // checked and stored in DB
+	Name        string `json:"name,omitempty"`         // cleared in DB, restored from event
+	Version     int64  `json:"version,omitempty"`      // cleared in DB, restored from event
+	UpdateTime  uint32 `json:"-"`                      // cleared in DB, restored from event
 
 	Description          string                   `json:"description,omitempty"`
 	Tags                 []MetricMetaTag          `json:"tags,omitempty"`
 	TagsDraft            map[string]MetricMetaTag `json:"tags_draft,omitempty"`
-	Disable              bool                     `json:"disable,omitempty"` // TODO - finish migration from visible flag to this flag
+	Disable              bool                     `json:"disable,omitempty"`
 	Kind                 string                   `json:"kind,omitempty"`
 	Weight               float64                  `json:"weight,omitempty"`
 	Resolution           int                      `json:"resolution,omitempty"`             // no invariants
@@ -268,19 +258,22 @@ type MetricMetaValue struct {
 	PreKeyOnly           bool                     `json:"pre_key_only,omitempty"`
 	MetricType           string                   `json:"metric_type,omitempty"`
 	FairKeyTagIDs        []string                 `json:"fair_key_tag_ids,omitempty"`
-	ShardStrategy        string                   `json:"shard_strategy,omitempty"`
-	ShardNum             uint32                   `json:"shard_num,omitempty"`
-	PipelineVersion      uint8                    `json:"pipeline_version,omitempty"`
 
-	MetricTagID          uint8                     `json:"-"` // 0 means no metric tag, only for builtin metrics, can be used to determine shard
-	name2Tag             map[string]*MetricMetaTag // Should be restored from Tags after reading
+	ShardStrategy           string `json:"shard_strategy,omitempty"`
+	ShardNum                uint32 `json:"shard_num,omitempty"`        // warning: zero-based, contains clickhouse shard - 1 (clickhouse shard_num is 1-based)
+	ShardFixedKey           uint32 `json:"shard,omitempty"`            // 1-based, 0 means not set, if set, ShardStrategy is ignored
+	ShardFixedKey2          uint32 `json:"shard2,omitempty"`           // 1-based, 0 means not set
+	ShardFixedKey2Timestamp uint32 `json:"shard2_timestamp,omitempty"` // timestamp to start writing to second fixed shard
+
+	// Should be restored from Tags after reading
+	name2TagAgent map[string]int // for agent, contains only custom tag names, including StringTopName
+
+	name2Tag             map[string]*MetricMetaTag // for API
 	EffectiveResolution  int                       `json:"-"` // Should be restored from Tags after reading
 	PreKeyIndex          int                       `json:"-"` // index of tag which goes to 'prekey' column, or <0 if no tag goes
-	FairKey              []int                     `json:"-"`
+	FairKeyIndex         []int                     `json:"-"`
 	EffectiveWeight      int64                     `json:"-"`
 	HasPercentiles       bool                      `json:"-"`
-	RoundSampleFactors   bool                      `json:"-"` // Experimental, set if magic word in description is found
-	WhalesOff            bool                      `json:"-"` // "whales" sampling algorithm disabled
 	HistogramBuckets     []float32                 `json:"-"` // Prometheus histogram buckets
 	IsHardwareSlowMetric bool                      `json:"-"`
 	GroupID              int32                     `json:"-"`
@@ -289,18 +282,6 @@ type MetricMetaValue struct {
 	BuiltinAllowedToReceive bool `json:"-"` // we allow only small subset of built-in metrics through agent receiver.
 	WithAgentEnvRouteArch   bool `json:"-"` // set for some built-in metrics to add common set of tags
 	WithAggregatorID        bool `json:"-"` // set for some built-in metrics to add common set of tags
-}
-
-// TODO - better place?
-type CreateMappingExtra struct {
-	Create    bool
-	Metric    string // set by old conveyor, TODO - remove?
-	MetricID  int32  // set by new conveyor
-	TagIDKey  int32
-	ClientEnv int32
-	Aera      AgentEnvRouteArch
-	HostName  string
-	Host      int32
 }
 
 func (m MetricMetaValue) MarshalBinary() ([]byte, error) { return easyjson.Marshal(m) }
@@ -318,15 +299,6 @@ func (m *DashboardMeta) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	return nil
-}
-
-func (m *MetricMetaValue) WithGroupID(groupID int32) *MetricMetaValue {
-	if m.GroupID == groupID {
-		return m
-	}
-	c := *m
-	c.GroupID = groupID
-	return &c
 }
 
 // this method is faster than string hash, plus saves a lot of memory in maps
@@ -409,6 +381,102 @@ func (m *MetricMetaValue) Name2TagBytes(name []byte) *MetricMetaTag {
 	return m.name2Tag[string(name)]
 }
 
+// this method is faster than string hash, also saves tons of memory in maps
+func (m *MetricMetaValue) name2TagAgentFastBytes(name []byte) *MetricMetaTag {
+	var num uint
+	switch len(name) {
+	case 1:
+		num = uint(name[0]) - '0'
+		if num > 9 {
+			return nil
+		}
+	case 2:
+		if name[0] == '_' && name[1] == 'h' {
+			return &defaultHTag
+		}
+		if name[0] == '_' && name[1] == 's' {
+			num = StringTopTagIndexV3
+		} else {
+			num = uint(name[0]) - '0'
+			if num > 9 {
+				return nil
+			}
+			num2 := uint(name[1]) - '0'
+			if num2 > 9 {
+				return nil
+			}
+			num = num*10 + num2
+		}
+	default:
+		return nil
+	}
+	if num < uint(len(m.Tags)) {
+		return &m.Tags[num]
+	}
+	if num < uint(len(defaultMetaTags)) {
+		return &defaultMetaTags[num]
+	}
+	return nil
+}
+
+// this method is faster than string hash, also saves tons of memory in maps
+func (m *MetricMetaValue) name2TagAgentFastLegacyBytes(name []byte) *MetricMetaTag {
+	if len(name) < len(legacyTagIDPrefix) || string(name[:len(legacyTagIDPrefix)]) != legacyTagIDPrefix {
+		return nil
+	}
+	name = name[len(legacyTagIDPrefix):]
+	var num uint
+	switch len(name) {
+	case 1:
+		num = uint(name[0]) - '0'
+		if num > 9 {
+			return nil
+		}
+	case 2:
+		num = uint(name[0]) - '0'
+		if num > 9 {
+			return nil
+		}
+		num2 := uint(name[1]) - '0'
+		if num2 > 9 {
+			return nil
+		}
+		num = num*10 + num2
+	default:
+		return nil
+	}
+	if num >= MaxTagsV2 { // cannot refer to modern tags with legacy name
+		return nil
+	}
+	if num < uint(len(m.Tags)) {
+		return &m.Tags[num]
+	}
+	return &defaultMetaTags[num]
+}
+
+func (m *MetricMetaValue) Name2TagAgentFastBytes(name []byte) (_ *MetricMetaTag, legacy bool) {
+	if tag := m.name2TagAgentFastBytes(name); tag != nil {
+		return tag, false
+	}
+	if tagIndex, ok := m.name2TagAgent[string(name)]; ok {
+		if tagIndex < len(m.Tags) {
+			return &m.Tags[tagIndex], false
+		}
+		if tagIndex < len(defaultMetaTags) {
+			return &defaultMetaTags[tagIndex], false
+		}
+		panic("name2TagAgent must contain valid tag indices only")
+	}
+	// TODO: make it 0 and remove
+	// we fully deprecated old "skey" tag for agent, we have 0 such events in production
+	// to deprecated function call below, monitor this metric
+	// https://statshouse.mvk.com/view?t=1764534680&f=-604800&s=__src_ingestion_status&qf=2-%2047&n=100&dg=0&dl=0.0.12.12
+	if tag := m.name2TagAgentFastLegacyBytes(name); tag != nil {
+		return tag, true
+	}
+	return nil, false
+}
+
 func (m *MetricMetaValue) AppendTagNames(res []string) []string {
 	for name := range m.name2Tag {
 		res = append(res, name)
@@ -431,6 +499,15 @@ func (m *MetricMetaValue) setName2Tag(name string, newTag *MetricMetaTag, canoni
 		return
 	}
 	m.name2Tag[name] = newTag
+}
+
+func (m *MetricMetaValue) MetricTagIndex() int {
+	for i, tag := range m.Tags {
+		if tag.BuiltinKind == BuiltinKindMetric {
+			return i
+		}
+	}
+	return 0
 }
 
 // TODO - remove this function after we have no v2 agents
@@ -510,7 +587,7 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 			err = multierr.Append(err, fmt.Errorf("invalid raw kind %q of tag %d", tag.RawKind, i))
 		}
 		tag.raw64 = IsRaw64Kind(tag.RawKind)
-		if tag.raw64 && tag.Index >= MaxTags-1 { // for now, to avoid overflows in v2 and v3 mapping
+		if tag.raw64 && tag.Index >= MaxTags-1 { // to avoid overflows without explicit check during mapping
 			err = multierr.Append(err, fmt.Errorf("last tag cannot be raw64 kind %q of tag %d", tag.RawKind, i))
 			tag.raw64 = false
 		}
@@ -537,6 +614,10 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 
 		if tag.Name != "" {
 			m.setName2Tag(tag.Name, tag, false, &err) // not set if equalsToDefault
+			if m.name2TagAgent == nil {               // save memory on empty map
+				m.name2TagAgent = map[string]int{}
+			}
+			m.name2TagAgent[tag.Name] = i
 		}
 	}
 	if m.StringTopName == "" && m.StringTopDescription == "" {
@@ -548,7 +629,11 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 			Index:       StringTopTagIndex,
 		}
 		if m.StringTopName != "" {
-			m.setName2Tag(m.StringTopName, sTag, false, &err) // not set if equalsToDefault
+			m.setName2Tag(m.StringTopName, sTag, false, &err)
+			if m.name2TagAgent == nil { // save memory on empty map
+				m.name2TagAgent = map[string]int{}
+			}
+			m.name2TagAgent[m.StringTopName] = StringTopTagIndexV3
 		}
 		m.setName2Tag(StringTopTagID, sTag, true, &err)
 	}
@@ -573,10 +658,6 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 		}
 	}
 	m.HasPercentiles = m.Kind == MetricKindValuePercentiles || m.Kind == MetricKindMixedPercentiles
-	m.RoundSampleFactors = strings.Contains(m.Description, "__round_sample_factors") || // TODO - deprecate
-		strings.Contains(m.Description, ToggleDescriptionMark+"round_sample_factors")
-	m.WhalesOff = strings.Contains(m.Description, "__whales_off") || // TODO - deprecate
-		strings.Contains(m.Description, ToggleDescriptionMark+"whales_off")
 	if ind := strings.Index(m.Description, HistogramBucketsStartMark); ind != -1 {
 		s := m.Description[ind+len(HistogramBucketsStartMark):]
 		if ind = strings.Index(s, HistogramBucketsEndMark); ind != -1 {
@@ -603,15 +684,12 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 	}
 	// restore fair key index
 	if len(m.FairKeyTagIDs) != 0 {
-		m.FairKey = make([]int, 0, len(m.FairKeyTagIDs))
+		m.FairKeyIndex = make([]int, 0, len(m.FairKeyTagIDs))
 		for _, v := range m.FairKeyTagIDs {
 			if tag := m.Name2Tag(v); tag != nil {
-				m.FairKey = append(m.FairKey, int(tag.Index))
+				m.FairKeyIndex = append(m.FairKeyIndex, int(tag.Index))
 			}
 		}
-	}
-	if m.PipelineVersion != 3 { // PipelineVersion 0 is good default for JSON
-		m.PipelineVersion = 0
 	}
 
 	if slowHostMetricID[m.MetricID] {
@@ -664,26 +742,29 @@ func (m *MetricMetaValue) GroupBy(groupBy []string) (res []int) {
 	return res
 }
 
-func (metric *MetricMetaValue) NewSharding(timestamp, newShardingStart int64) bool {
-	if metric == nil {
+func (m *MetricMetaValue) Sharded() bool {
+	if m == nil { // TODO - remove this check, make sure metric != nil always
 		return false
 	}
-	switch metric.ShardStrategy {
-	case ShardFixed, ShardByMetric, "":
-		return newShardingStart != 0 && timestamp >= newShardingStart
+	if m.ShardFixedKey > 0 {
+		return true
+	}
+	switch m.ShardStrategy {
+	case ShardFixed, ShardByMetricID:
+		return true
 	default:
 		return false
 	}
 }
 
 func (m *MetricMetaValue) Shard(numShards int) int {
-	if m == nil {
-		return -1
+	if m.ShardFixedKey > 0 {
+		return int(m.ShardFixedKey - 1)
 	}
 	switch m.ShardStrategy {
 	case ShardFixed:
 		return int(m.ShardNum)
-	case ShardByMetric, "":
+	case ShardByMetricID:
 		return int(uint32(m.MetricID) % uint32(numShards))
 	default:
 		return -1
@@ -733,10 +814,6 @@ func (m *NamespaceMeta) RestoreCachedInfo(builtin bool) error {
 		m.EffectiveWeight = MaxEffectiveNamespaceWeight
 	}
 	return err
-}
-
-func (m *MetricsGroup) MetricIn(metric *MetricMetaValue) bool {
-	return !m.Disable && strings.HasPrefix(metric.Name, m.Name)
 }
 
 // '@' is reserved by api access.Do not use it here
@@ -1222,12 +1299,12 @@ func NamespaceName(namespace string, name string) string {
 	return namespace + NamespaceSeparator + name
 }
 
-func SplitNamespace(metricName string) (string, string) {
+func SplitNamespace(metricName string) (ns string, name string) {
 	ix := strings.Index(metricName, NamespaceSeparator)
 	if ix == -1 {
-		return metricName, ""
+		return "", metricName
 	}
-	return metricName[ix+1:], metricName[:ix]
+	return metricName[:ix], metricName[ix+1:]
 }
 
 func EventTypeToName(typ int32) string {
@@ -1263,19 +1340,19 @@ func SameCompactTag(ta, tb *MetricMetaTag) bool {
 
 func SameCompactMetric(a, b *MetricMetaValue) bool {
 	if a.MetricID != b.MetricID ||
-		a.Name != b.Name ||
 		a.NamespaceID != b.NamespaceID ||
+		a.Name != b.Name ||
 		a.GroupID != b.GroupID ||
 		a.Disable != b.Disable ||
 		a.EffectiveWeight != b.EffectiveWeight ||
 		a.EffectiveResolution != b.EffectiveResolution ||
-		!slices.Equal(a.FairKey, b.FairKey) ||
+		!slices.Equal(a.FairKeyIndex, b.FairKeyIndex) ||
 		a.ShardStrategy != b.ShardStrategy ||
 		a.ShardNum != b.ShardNum ||
-		a.PipelineVersion != b.PipelineVersion ||
-		a.HasPercentiles != b.HasPercentiles ||
-		a.WhalesOff != b.WhalesOff ||
-		a.RoundSampleFactors != b.RoundSampleFactors {
+		a.ShardFixedKey != b.ShardFixedKey ||
+		a.ShardFixedKey2 != b.ShardFixedKey2 ||
+		a.ShardFixedKey2Timestamp != b.ShardFixedKey2Timestamp ||
+		a.HasPercentiles != b.HasPercentiles {
 		return false
 	}
 	for i := 0; i < MaxTags; i++ {
@@ -1313,8 +1390,11 @@ func SameCompactMetric(a, b *MetricMetaValue) bool {
 }
 
 func keepCompactMetricDescription(value *MetricMetaValue) bool {
+	// we keep condition the same for now, so compact journal hashes do not change.
+	// TODO - add HistogramBucketsStartMark to the list somehow?
 	return RemoteConfigMetric(value.Name) ||
-		value.RoundSampleFactors || value.WhalesOff || // legacy marks without ToggleDescriptionMark
+		strings.Contains(value.Description, "__round_sample_factors") ||
+		strings.Contains(value.Description, "__whales_off") ||
 		strings.Contains(value.Description, ToggleDescriptionMark)
 }
 

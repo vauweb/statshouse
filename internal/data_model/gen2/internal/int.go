@@ -13,71 +13,18 @@ import (
 
 var _ = basictl.NatWrite
 
-func BuiltinTuple12IntReset(vec *[12]int32) {
-	for i := range *vec {
-		(*vec)[i] = 0
-	}
-}
-
-func BuiltinTuple12IntRead(w []byte, vec *[12]int32) (_ []byte, err error) {
-	for i := range *vec {
-		if w, err = basictl.IntRead(w, &(*vec)[i]); err != nil {
-			return w, err
-		}
-	}
-	return w, nil
-}
-
-func BuiltinTuple12IntWrite(w []byte, vec *[12]int32) []byte {
-	for _, elem := range *vec {
-		w = basictl.IntWrite(w, elem)
-	}
-	return w
-}
-
-func BuiltinTuple12IntReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[12]int32) error {
-	index := 0
-	if in != nil {
-		in.Delim('[')
-		if !in.Ok() {
-			return ErrorInvalidJSON("[12]int32", "expected json array")
-		}
-		for ; !in.IsDelim(']'); index++ {
-			if index == 12 {
-				return ErrorWrongSequenceLength("[12]int32", index+1, 12)
-			}
-			if err := Json2ReadInt32(in, &(*vec)[index]); err != nil {
-				return err
-			}
-			in.WantComma()
-		}
-		in.Delim(']')
-		if !in.Ok() {
-			return ErrorInvalidJSON("[12]int32", "expected json array's end")
-		}
-	}
-	if index != 12 {
-		return ErrorWrongSequenceLength("[12]int32", index+1, 12)
-	}
-	return nil
-}
-
-func BuiltinTuple12IntWriteJSON(w []byte, vec *[12]int32) []byte {
-	return BuiltinTuple12IntWriteJSONOpt(true, false, w, vec)
-}
-func BuiltinTuple12IntWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec *[12]int32) []byte {
-	w = append(w, '[')
-	for _, elem := range *vec {
-		w = basictl.JSONAddCommaIfNeeded(w)
-		w = basictl.JSONWriteInt32(w, elem)
-	}
-	return append(w, ']')
-}
-
 func BuiltinTuple4IntReset(vec *[4]int32) {
 	for i := range *vec {
 		(*vec)[i] = 0
 	}
+}
+
+func BuiltinTuple4IntFillRandom(rg *basictl.RandGenerator, vec *[4]int32) {
+	rg.IncreaseDepth()
+	for i := range *vec {
+		(*vec)[i] = basictl.RandomInt(rg)
+	}
+	rg.DecreaseDepth()
 }
 
 func BuiltinTuple4IntRead(w []byte, vec *[4]int32) (_ []byte, err error) {
@@ -96,7 +43,11 @@ func BuiltinTuple4IntWrite(w []byte, vec *[4]int32) []byte {
 	return w
 }
 
-func BuiltinTuple4IntReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[4]int32) error {
+func BuiltinTuple4IntInternalReadTL2(r []byte, vec *[4]int32) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("[4]int32")
+}
+
+func BuiltinTuple4IntReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[4]int32) error {
 	index := 0
 	if in != nil {
 		in.Delim('[')
@@ -124,9 +75,10 @@ func BuiltinTuple4IntReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *
 }
 
 func BuiltinTuple4IntWriteJSON(w []byte, vec *[4]int32) []byte {
-	return BuiltinTuple4IntWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinTuple4IntWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinTuple4IntWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec *[4]int32) []byte {
+func BuiltinTuple4IntWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec *[4]int32) []byte {
 	w = append(w, '[')
 	for _, elem := range *vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -135,6 +87,89 @@ func BuiltinTuple4IntWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec *
 	return append(w, ']')
 }
 
+func BuiltinTuple7IntReset(vec *[7]int32) {
+	for i := range *vec {
+		(*vec)[i] = 0
+	}
+}
+
+func BuiltinTuple7IntFillRandom(rg *basictl.RandGenerator, vec *[7]int32) {
+	rg.IncreaseDepth()
+	for i := range *vec {
+		(*vec)[i] = basictl.RandomInt(rg)
+	}
+	rg.DecreaseDepth()
+}
+
+func BuiltinTuple7IntRead(w []byte, vec *[7]int32) (_ []byte, err error) {
+	for i := range *vec {
+		if w, err = basictl.IntRead(w, &(*vec)[i]); err != nil {
+			return w, err
+		}
+	}
+	return w, nil
+}
+
+func BuiltinTuple7IntWrite(w []byte, vec *[7]int32) []byte {
+	for _, elem := range *vec {
+		w = basictl.IntWrite(w, elem)
+	}
+	return w
+}
+
+func BuiltinTuple7IntInternalReadTL2(r []byte, vec *[7]int32) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("[7]int32")
+}
+
+func BuiltinTuple7IntReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[7]int32) error {
+	index := 0
+	if in != nil {
+		in.Delim('[')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[7]int32", "expected json array")
+		}
+		for ; !in.IsDelim(']'); index++ {
+			if index == 7 {
+				return ErrorWrongSequenceLength("[7]int32", index+1, 7)
+			}
+			if err := Json2ReadInt32(in, &(*vec)[index]); err != nil {
+				return err
+			}
+			in.WantComma()
+		}
+		in.Delim(']')
+		if !in.Ok() {
+			return ErrorInvalidJSON("[7]int32", "expected json array's end")
+		}
+	}
+	if index != 7 {
+		return ErrorWrongSequenceLength("[7]int32", index+1, 7)
+	}
+	return nil
+}
+
+func BuiltinTuple7IntWriteJSON(w []byte, vec *[7]int32) []byte {
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinTuple7IntWriteJSONOpt(&tctx, w, vec)
+}
+func BuiltinTuple7IntWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec *[7]int32) []byte {
+	w = append(w, '[')
+	for _, elem := range *vec {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = basictl.JSONWriteInt32(w, elem)
+	}
+	return append(w, ']')
+}
+
+func BuiltinVectorIntFillRandom(rg *basictl.RandGenerator, vec *[]int32) {
+	rg.IncreaseDepth()
+	l := basictl.RandomSize(rg)
+	*vec = make([]int32, l)
+	for i := range *vec {
+		(*vec)[i] = basictl.RandomInt(rg)
+	}
+	rg.DecreaseDepth()
+}
 func BuiltinVectorIntRead(w []byte, vec *[]int32) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
@@ -164,7 +199,92 @@ func BuiltinVectorIntWrite(w []byte, vec []int32) []byte {
 	return w
 }
 
-func BuiltinVectorIntReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]int32) error {
+func BuiltinVectorIntCalculateLayout(sizes []int, optimizeEmpty bool, vec *[]int32) ([]int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return sizes, 0
+		}
+		return sizes, 1
+	}
+	sizePosition := len(sizes)
+	sizes = append(sizes, 0)
+
+	currentSize := 0
+	var sz int
+
+	currentSize += basictl.TL2CalculateSize(len(*vec))
+	for i := 0; i < len(*vec); i++ {
+		currentSize += 4
+	}
+	sizes[sizePosition] = currentSize
+	currentSize += basictl.TL2CalculateSize(currentSize)
+	Unused(sz)
+	return sizes, currentSize
+}
+
+func BuiltinVectorIntInternalWriteTL2(w []byte, sizes []int, optimizeEmpty bool, vec *[]int32) ([]byte, []int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return w, sizes, 0
+		}
+		w = append(w, 0)
+		return w, sizes, 1
+	}
+	currentSize := sizes[0]
+	sizes = sizes[1:]
+	w = basictl.TL2WriteSize(w, currentSize)
+	if currentSize == 0 {
+		return w, sizes, 1
+	}
+	oldLen := len(w)
+	w = basictl.TL2WriteSize(w, len(*vec))
+
+	var sz int
+	for i := 0; i < len(*vec); i++ {
+		w = basictl.IntWrite(w, (*vec)[i])
+	}
+	Unused(sz)
+	if len(w)-oldLen != currentSize {
+		panic("tl2: mismatch between calculate and write")
+	}
+	return w, sizes, currentSize
+}
+
+func BuiltinVectorIntInternalReadTL2(r []byte, vec *[]int32) (_ []byte, err error) {
+	currentSize := 0
+	if r, currentSize, err = basictl.TL2ParseSize(r); err != nil {
+		return r, err
+	}
+	if len(r) < currentSize {
+		return r, basictl.TL2Error("not enough data: expected %d, got %d", currentSize, len(r))
+	}
+
+	currentR := r[:currentSize]
+	r = r[currentSize:]
+
+	elementCount := 0
+	if currentSize != 0 {
+		if currentR, elementCount, err = basictl.TL2ParseSize(currentR); err != nil {
+			return r, err
+		}
+		if elementCount > len(currentR) {
+			return r, basictl.TL2ElementCountError(elementCount, currentR)
+		}
+	}
+
+	if cap(*vec) < elementCount {
+		*vec = make([]int32, elementCount)
+	}
+	*vec = (*vec)[:elementCount]
+	for i := 0; i < elementCount; i++ {
+		if currentR, err = basictl.IntRead(currentR, &(*vec)[i]); err != nil {
+			return currentR, err
+		}
+	}
+	return r, nil
+}
+
+func BuiltinVectorIntReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]int32) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -193,9 +313,10 @@ func BuiltinVectorIntReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *
 }
 
 func BuiltinVectorIntWriteJSON(w []byte, vec []int32) []byte {
-	return BuiltinVectorIntWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorIntWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorIntWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []int32) []byte {
+func BuiltinVectorIntWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []int32) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -214,12 +335,16 @@ func (item *Int) Reset() {
 	*ptr = 0
 }
 
+func (item *Int) FillRandom(rg *basictl.RandGenerator) {
+	ptr := (*int32)(item)
+	*ptr = basictl.RandomInt(rg)
+}
+
 func (item *Int) Read(w []byte) (_ []byte, err error) {
 	ptr := (*int32)(item)
 	return basictl.IntRead(w, ptr)
 }
 
-// This method is general version of Write, use it instead!
 func (item *Int) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -236,7 +361,6 @@ func (item *Int) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *Int) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -249,8 +373,12 @@ func (item *Int) WriteBoxed(w []byte) []byte {
 func (item Int) String() string {
 	return string(item.WriteJSON(nil))
 }
-
 func (item *Int) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *Int) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	ptr := (*int32)(item)
 	if err := Json2ReadInt32(in, ptr); err != nil {
 		return err
@@ -259,15 +387,16 @@ func (item *Int) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *Int) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSON(w), nil
+func (item *Int) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *Int) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
 
-func (item *Int) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *Int) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	ptr := (*int32)(item)
 	w = basictl.JSONWriteInt32(w, *ptr)
 	return w
@@ -281,4 +410,16 @@ func (item *Int) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("int", err.Error())
 	}
 	return nil
+}
+
+func (item *Int) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("int"))
+}
+
+func (item *Int) InternalReadTL2(r []byte) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("int")
+}
+
+func (item *Int) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return item.InternalReadTL2(r)
 }

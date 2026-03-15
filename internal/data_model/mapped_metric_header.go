@@ -8,6 +8,7 @@ package data_model
 
 import (
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
@@ -28,8 +29,7 @@ type MappedMetricHeader struct {
 	ReceiveTime time.Time // Saved at mapping start and used where we need time.Now. This is different to MetricBatch.T, which is sent by clients
 	MetricMeta  *format.MetricMetaValue
 	Key         Key
-	TopValue    TagUnionBytes // reference to memory inside tlstatshouse.MetricBytes.
-	HostTag     TagUnionBytes // reference to memory inside tlstatshouse.MetricBytes.
+	HostTag     TagUnion // allocates, if not mapped
 
 	CheckedTagIndex int  // we check tags one by one, remembering position here, between invocations of mapTags
 	ValuesChecked   bool // infs, nans, etc. This might be expensive, so done only once
@@ -39,7 +39,6 @@ type MappedMetricHeader struct {
 	// mappings, so used as a resolution hash to deterministically place same rows into same resolution buckets
 
 	IsTagSet  [format.MaxTags]bool // report setting tags more than once.
-	IsSKeySet bool
 	IsHKeySet bool
 
 	// errors below
@@ -56,31 +55,16 @@ type MappedMetricHeader struct {
 	InvalidRawTagKey      int32  // key of InvalidRawValue
 }
 
-func (h *MappedMetricHeader) SetTag(index int32, id int32, tagIDKey int32) {
+func (h *MappedMetricHeader) SetTag(index int32, value TagUnion, tagIDKey int32) {
 	if index == format.HostTagIndex {
-		h.HostTag.I = id
+		h.HostTag = value
 		if h.IsHKeySet {
 			h.TagSetTwiceKey = tagIDKey
 		}
 		h.IsHKeySet = true
 	} else {
-		h.Key.Tags[index] = id
-		if h.IsTagSet[index] {
-			h.TagSetTwiceKey = tagIDKey
-		}
-		h.IsTagSet[index] = true
-	}
-}
-
-func (h *MappedMetricHeader) SetSTag(index int32, value []byte, tagIDKey int32) {
-	if index == format.HostTagIndex {
-		h.HostTag.S = value
-		if h.IsHKeySet {
-			h.TagSetTwiceKey = tagIDKey
-		}
-		h.IsHKeySet = true
-	} else {
-		h.Key.SetSTag(int(index), string(value))
+		h.Key.Tags[index] = value.I
+		h.Key.STags[index] = value.S
 		if h.IsTagSet[index] {
 			h.TagSetTwiceKey = tagIDKey
 		}
@@ -102,8 +86,13 @@ func (h *MappedMetricHeader) OriginalMarshalAppend(buffer []byte) []byte {
 	// tagsCount is explicit, so we can add more fields to the right of tags if we need them.
 	// we use separator between tags instead of tag length, so we can increase tags length beyond 1 byte without using varint
 
-	const _ = uint(255 - len(h.OriginalTagValues)) // compile time assert to ensure that 1 byte is enough for tags count
-	tagsCount := len(h.OriginalTagValues)          // ignore empty tags
+	// compile time assert to ensure that 1 byte is enough for tags count
+	const _ = uint(255 - len(h.OriginalTagValues))
+	// "_s" tag is mapped to column 47, and not part of resolution hash.
+	// if we need to add more tags in the future, this code should be modified to skip format.StringTopTagIndexV3 tag
+	var _ [0]struct{} = [len(h.OriginalTagValues) - 1 - format.StringTopTagIndexV3]struct{}{}
+	tagsCount := len(h.OriginalTagValues) - 1
+	// ignore empty tags suffix
 	for ; tagsCount > 0 && len(h.OriginalTagValues[tagsCount-1]) == 0; tagsCount-- {
 	}
 	buffer = binary.LittleEndian.AppendUint32(buffer, uint32(h.MetricMeta.MetricID))
@@ -119,4 +108,56 @@ func (h *MappedMetricHeader) OriginalMarshalAppend(buffer []byte) []byte {
 func (h *MappedMetricHeader) OriginalHash(scratch []byte) ([]byte, uint64) {
 	scratch = h.OriginalMarshalAppend(scratch[:0])
 	return scratch, xxh3.Hash(scratch)
+}
+
+func (h *MappedMetricHeader) MapErrorFromHeader(m tlstatshouse.MetricBytes) error {
+	if h.IngestionStatus == 0 { // no errors
+		return nil
+	}
+	ingestionTagName := format.TagIDTagToTagID(h.IngestionTagKey)
+	envTag := h.Key.Tags[0] // TODO - we do not want to remember original string value somewhere yet (to print better errors here)
+	switch h.IngestionStatus {
+	case format.TagValueIDSrcIngestionStatusErrMetricNotFound:
+		return fmt.Errorf("metric %q not found (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrNanInfValue:
+		return fmt.Errorf("NaN/Inf value for metric %q (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrNanInfCounter:
+		return fmt.Errorf("NaN/Inf counter for metric %q (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrNegativeCounter:
+		return fmt.Errorf("negative counter for metric %q (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMapOther:
+		return nil // not written
+	case format.TagValueIDSrcIngestionStatusErrMapInvalidRawTagValue:
+		return fmt.Errorf("invalid raw tag value %q for key %q of metric %q (envTag %d)", h.InvalidString, ingestionTagName, m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMapTagValueCached:
+		return fmt.Errorf("error mapping tag value (cached) %q for key %q of metric %q (envTag %d)", h.InvalidString, ingestionTagName, m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMapTagValue:
+		return fmt.Errorf("failed to map tag value %q for key %q of metric %q (envTag %d)", h.InvalidString, ingestionTagName, m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMapGlobalQueueOverload:
+		return fmt.Errorf("failed to map metric %q: too many metrics in queue (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMapPerMetricQueueOverload:
+		return fmt.Errorf("failed to map metric %q: per-metric mapping queue overloaded (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMapTagValueEncoding:
+		return fmt.Errorf("not utf-8 value %q (hex) for for key %q of metric %q (envTag %d)", h.InvalidString, ingestionTagName, m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusOKLegacy:
+		return nil // not written
+	case format.TagValueIDSrcIngestionStatusErrMetricNonCanonical:
+		return nil // not written
+	case format.TagValueIDSrcIngestionStatusErrMetricDisabled:
+		return fmt.Errorf("metric %q is disabled (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrLegacyProtocol:
+		return nil // not written
+	case format.TagValueIDSrcIngestionStatusErrMetricNameEncoding:
+		return fmt.Errorf("not utf-8 metric name %q (hex) (envTag %d)", h.InvalidString, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMapTagNameEncoding:
+		return fmt.Errorf("not utf-8 name %q (hex) for key of metric %q (envTag %d)", h.InvalidString, m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrValueUniqueBothSet:
+		return fmt.Errorf("both value and unique fields set in metric event %q (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrShardingFailed:
+		return fmt.Errorf("metric %q shard is beyond configured shards (envTag %d)", m.Name, envTag)
+	case format.TagValueIDSrcIngestionStatusErrMetricBuiltin:
+		return fmt.Errorf("metric %q is builtin (envTag %d)", m.Name, envTag)
+	default:
+		return fmt.Errorf("unexpected error status %d with invalid string value %q for key %q of metric %q (envTag %d)", h.IngestionStatus, h.InvalidString, ingestionTagName, m.Name, envTag)
+	}
 }

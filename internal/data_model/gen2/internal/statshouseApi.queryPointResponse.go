@@ -28,6 +28,12 @@ func (item *StatshouseApiGetQueryPointResponse) Reset() {
 	item.Meta = item.Meta[:0]
 }
 
+func (item *StatshouseApiGetQueryPointResponse) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomUint(rg)
+	BuiltinVectorDoubleFillRandom(rg, &item.Data)
+	BuiltinVectorStatshouseApiPointMetaFillRandom(rg, &item.Meta)
+}
+
 func (item *StatshouseApiGetQueryPointResponse) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
@@ -38,7 +44,6 @@ func (item *StatshouseApiGetQueryPointResponse) Read(w []byte) (_ []byte, err er
 	return BuiltinVectorStatshouseApiPointMetaRead(w, &item.Meta)
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseApiGetQueryPointResponse) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -57,7 +62,6 @@ func (item *StatshouseApiGetQueryPointResponse) ReadBoxed(w []byte) (_ []byte, e
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseApiGetQueryPointResponse) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -72,6 +76,11 @@ func (item StatshouseApiGetQueryPointResponse) String() string {
 }
 
 func (item *StatshouseApiGetQueryPointResponse) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *StatshouseApiGetQueryPointResponse) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propDataPresented bool
 	var propMetaPresented bool
@@ -97,7 +106,7 @@ func (item *StatshouseApiGetQueryPointResponse) ReadJSON(legacyTypeNames bool, i
 				if propDataPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouseApi.queryPointResponse", "data")
 				}
-				if err := BuiltinVectorDoubleReadJSON(legacyTypeNames, in, &item.Data); err != nil {
+				if err := BuiltinVectorDoubleReadJSONGeneral(tctx, in, &item.Data); err != nil {
 					return err
 				}
 				propDataPresented = true
@@ -105,7 +114,7 @@ func (item *StatshouseApiGetQueryPointResponse) ReadJSON(legacyTypeNames bool, i
 				if propMetaPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouseApi.queryPointResponse", "meta")
 				}
-				if err := BuiltinVectorStatshouseApiPointMetaReadJSON(legacyTypeNames, in, &item.Meta); err != nil {
+				if err := BuiltinVectorStatshouseApiPointMetaReadJSONGeneral(tctx, in, &item.Meta); err != nil {
 					return err
 				}
 				propMetaPresented = true
@@ -132,14 +141,15 @@ func (item *StatshouseApiGetQueryPointResponse) ReadJSON(legacyTypeNames bool, i
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseApiGetQueryPointResponse) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *StatshouseApiGetQueryPointResponse) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *StatshouseApiGetQueryPointResponse) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *StatshouseApiGetQueryPointResponse) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *StatshouseApiGetQueryPointResponse) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -151,14 +161,14 @@ func (item *StatshouseApiGetQueryPointResponse) WriteJSONOpt(newTypeNames bool, 
 	backupIndexData := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"data":`...)
-	w = BuiltinVectorDoubleWriteJSONOpt(newTypeNames, short, w, item.Data)
+	w = BuiltinVectorDoubleWriteJSONOpt(tctx, w, item.Data)
 	if (len(item.Data) != 0) == false {
 		w = w[:backupIndexData]
 	}
 	backupIndexMeta := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"meta":`...)
-	w = BuiltinVectorStatshouseApiPointMetaWriteJSONOpt(newTypeNames, short, w, item.Meta)
+	w = BuiltinVectorStatshouseApiPointMetaWriteJSONOpt(tctx, w, item.Meta)
 	if (len(item.Meta) != 0) == false {
 		w = w[:backupIndexMeta]
 	}
@@ -174,4 +184,153 @@ func (item *StatshouseApiGetQueryPointResponse) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("statshouseApi.queryPointResponse", err.Error())
 	}
 	return nil
+}
+
+func (item *StatshouseApiGetQueryPointResponse) CalculateLayout(sizes []int, optimizeEmpty bool) ([]int, int) {
+	sizes = append(sizes, 1149756442)
+	sizePosition := len(sizes)
+	sizes = append(sizes, 0)
+
+	currentSize := 1
+	lastUsedByte := 0
+	var sz int
+
+	if item.FieldsMask != 0 {
+		currentSize += 4
+		lastUsedByte = currentSize
+	}
+	if sizes, sz = BuiltinVectorDoubleCalculateLayout(sizes, true, &item.Data); sz != 0 {
+		currentSize += sz
+		lastUsedByte = currentSize
+	}
+	if sizes, sz = BuiltinVectorStatshouseApiPointMetaCalculateLayout(sizes, true, &item.Meta); sz != 0 {
+		currentSize += sz
+		lastUsedByte = currentSize
+	}
+
+	if lastUsedByte < currentSize {
+		currentSize = lastUsedByte
+	}
+	sizes[sizePosition] = currentSize
+	if currentSize == 0 {
+		sizes = sizes[:sizePosition+1]
+	}
+	if !optimizeEmpty || currentSize != 0 {
+		currentSize += basictl.TL2CalculateSize(currentSize)
+	}
+	Unused(sz)
+	return sizes, currentSize
+}
+
+func (item *StatshouseApiGetQueryPointResponse) InternalWriteTL2(w []byte, sizes []int, optimizeEmpty bool) ([]byte, []int, int) {
+	if sizes[0] != 1149756442 {
+		panic("tl2: tag mismatch between calculate and write")
+	}
+	currentSize := sizes[1]
+	sizes = sizes[2:]
+	if optimizeEmpty && currentSize == 0 {
+		return w, sizes, 0
+	}
+	w = basictl.TL2WriteSize(w, currentSize)
+	if currentSize == 0 {
+		return w, sizes, 1
+	}
+	oldLen := len(w)
+	var sz int
+	var currentBlock byte
+	currentBlockPosition := len(w)
+	w = append(w, 0)
+	if item.FieldsMask != 0 {
+		w = basictl.NatWrite(w, item.FieldsMask)
+		currentBlock |= 2
+	}
+	if w, sizes, sz = BuiltinVectorDoubleInternalWriteTL2(w, sizes, true, &item.Data); sz != 0 {
+		currentBlock |= 4
+	}
+	if w, sizes, sz = BuiltinVectorStatshouseApiPointMetaInternalWriteTL2(w, sizes, true, &item.Meta); sz != 0 {
+		currentBlock |= 8
+	}
+	if currentBlockPosition < len(w) {
+		w[currentBlockPosition] = currentBlock
+	}
+	if len(w)-oldLen != currentSize {
+		panic("tl2: mismatch between calculate and write")
+	}
+	Unused(sz)
+	return w, sizes, 1
+}
+
+func (item *StatshouseApiGetQueryPointResponse) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	var sizes, sizes2 []int
+	if ctx != nil {
+		sizes = ctx.SizeBuffer[:0]
+	}
+	sizes, _ = item.CalculateLayout(sizes, false)
+	w, sizes2, _ = item.InternalWriteTL2(w, sizes, false)
+	if len(sizes2) != 0 {
+		panic("tl2: internal write did not consume all size data")
+	}
+	if ctx != nil {
+		ctx.SizeBuffer = sizes
+	}
+	return w
+}
+
+func (item *StatshouseApiGetQueryPointResponse) InternalReadTL2(r []byte) (_ []byte, err error) {
+	currentSize := 0
+	if r, currentSize, err = basictl.TL2ParseSize(r); err != nil {
+		return r, err
+	}
+	if currentSize == 0 {
+		item.Reset()
+		return r, nil
+	}
+	if len(r) < currentSize {
+		return r, basictl.TL2Error("not enough data: expected %d, got %d", currentSize, len(r))
+	}
+
+	currentR := r[:currentSize]
+	r = r[currentSize:]
+
+	var block byte
+	if currentR, err = basictl.ByteReadTL2(currentR, &block); err != nil {
+		return currentR, err
+	}
+	// read No of constructor
+	if block&1 != 0 {
+		var index int
+		if currentR, index, err = basictl.TL2ParseSize(currentR); err != nil {
+			return currentR, err
+		}
+		if index != 0 {
+			return r, ErrorInvalidUnionIndex("statshouseApi.queryPointResponse", index)
+		}
+	}
+	if block&2 != 0 {
+		if currentR, err = basictl.NatRead(currentR, &item.FieldsMask); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.FieldsMask = 0
+	}
+	if block&4 != 0 {
+		if currentR, err = BuiltinVectorDoubleInternalReadTL2(currentR, &item.Data); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.Data = item.Data[:0]
+	}
+	if block&8 != 0 {
+		if currentR, err = BuiltinVectorStatshouseApiPointMetaInternalReadTL2(currentR, &item.Meta); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.Meta = item.Meta[:0]
+	}
+	Unused(currentR)
+	return r, nil
+}
+
+func (item *StatshouseApiGetQueryPointResponse) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return item.InternalReadTL2(r)
 }

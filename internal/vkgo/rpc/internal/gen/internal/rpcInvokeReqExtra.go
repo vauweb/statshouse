@@ -21,21 +21,36 @@ type RpcInvokeReqExtra struct {
 	// ReturnRequestSizes (TrueType) // Conditional: item.Flags.3
 	// ReturnFailedSubqueries (TrueType) // Conditional: item.Flags.4
 	// ReturnQueryStats (TrueType) // Conditional: item.Flags.6
+	// Currently for proxy only. Client goes to proxy, it clears this bit and sends query to engine. Client does not wait for answer.
 	// NoResult (TrueType) // Conditional: item.Flags.7
+	// The engine should execute the query only if it is ready master, otherwise it should respond with TL_ERROR_NOT_MASTER error
+	// MustBeMaster (TrueType) // Conditional: item.Flags.8
+	RequesterId int64 // Conditional: item.Flags.9
 	// ReturnShardsBinlogPos (TrueType) // Conditional: item.Flags.14
-	WaitShardsBinlogPos         map[string]int64 // Conditional: item.Flags.15
-	WaitBinlogPos               int64            // Conditional: item.Flags.16
-	StringForwardKeys           []string         // Conditional: item.Flags.18
-	IntForwardKeys              []int64          // Conditional: item.Flags.19
-	StringForward               string           // Conditional: item.Flags.20
-	IntForward                  int64            // Conditional: item.Flags.21
-	CustomTimeoutMs             int32            // Conditional: item.Flags.23
-	SupportedCompressionVersion int32            // Conditional: item.Flags.25
-	RandomDelay                 float64          // Conditional: item.Flags.26
+	// Bits 17, 22, 24 was used in before, but their support was dropped
+	WaitShardsBinlogPos map[string]int64 // Conditional: item.Flags.15
+	// Perform query only after position in binlog is at least this
+	WaitBinlogPos int64 // Conditional: item.Flags.16
+	// For cluster that are split by string (like pmemcached in some modes) - first specified string is used to choose target, then it is deleted from vector
+	StringForwardKeys []string // Conditional: item.Flags.18
+	// First long is used to choose target. Then it is deleted from vector
+	IntForwardKeys []int64 // Conditional: item.Flags.19
+	// Same as string_forward_keys, but it is not deleted
+	StringForward string // Conditional: item.Flags.20
+	// Same as int_forward_keys, but it is not deleted
+	IntForward int64 // Conditional: item.Flags.21
+	// Custom timeout for query
+	CustomTimeoutMs int32 // Conditional: item.Flags.23
+	// note, that client support compression, to possibly compress answers
+	SupportedCompressionVersion int32 // Conditional: item.Flags.25
+	// starting query would be delayed by random number, not grater than given
+	RandomDelay float64 // Conditional: item.Flags.26
+	// Barsic related parameter: return view number in response
 	// ReturnViewNumber (TrueType) // Conditional: item.Flags.27
-	PersistentQuery  ExactlyOncePersistentRequest // Conditional: item.Flags.28
-	TraceContext     TracingTraceContext          // Conditional: item.Flags.29
-	ExecutionContext string                       // Conditional: item.Flags.30
+	PersistentQuery ExactlyOncePersistentRequest // Conditional: item.Flags.28
+	TraceContext    TracingTraceContext          // Conditional: item.Flags.29
+	// contains serialized execution context.
+	ExecutionContext string // Conditional: item.Flags.30
 }
 
 func (RpcInvokeReqExtra) TLName() string { return "rpcInvokeReqExtra" }
@@ -104,6 +119,25 @@ func (item *RpcInvokeReqExtra) SetNoResult(v bool) {
 }
 func (item *RpcInvokeReqExtra) IsSetNoResult() bool { return item.Flags&(1<<7) != 0 }
 
+func (item *RpcInvokeReqExtra) SetMustBeMaster(v bool) {
+	if v {
+		item.Flags |= 1 << 8
+	} else {
+		item.Flags &^= 1 << 8
+	}
+}
+func (item *RpcInvokeReqExtra) IsSetMustBeMaster() bool { return item.Flags&(1<<8) != 0 }
+
+func (item *RpcInvokeReqExtra) SetRequesterId(v int64) {
+	item.RequesterId = v
+	item.Flags |= 1 << 9
+}
+func (item *RpcInvokeReqExtra) ClearRequesterId() {
+	item.RequesterId = 0
+	item.Flags &^= 1 << 9
+}
+func (item *RpcInvokeReqExtra) IsSetRequesterId() bool { return item.Flags&(1<<9) != 0 }
+
 func (item *RpcInvokeReqExtra) SetReturnShardsBinlogPos(v bool) {
 	if v {
 		item.Flags |= 1 << 14
@@ -118,7 +152,7 @@ func (item *RpcInvokeReqExtra) SetWaitShardsBinlogPos(v map[string]int64) {
 	item.Flags |= 1 << 15
 }
 func (item *RpcInvokeReqExtra) ClearWaitShardsBinlogPos() {
-	BuiltinVectorDictionaryFieldLongReset(item.WaitShardsBinlogPos)
+	BuiltinDictStringLongReset(item.WaitShardsBinlogPos)
 	item.Flags &^= 1 << 15
 }
 func (item *RpcInvokeReqExtra) IsSetWaitShardsBinlogPos() bool { return item.Flags&(1<<15) != 0 }
@@ -246,7 +280,8 @@ func (item *RpcInvokeReqExtra) IsSetExecutionContext() bool { return item.Flags&
 
 func (item *RpcInvokeReqExtra) Reset() {
 	item.Flags = 0
-	BuiltinVectorDictionaryFieldLongReset(item.WaitShardsBinlogPos)
+	item.RequesterId = 0
+	BuiltinDictStringLongReset(item.WaitShardsBinlogPos)
 	item.WaitBinlogPos = 0
 	item.StringForwardKeys = item.StringForwardKeys[:0]
 	item.IntForwardKeys = item.IntForwardKeys[:0]
@@ -261,76 +296,16 @@ func (item *RpcInvokeReqExtra) Reset() {
 }
 
 func (item *RpcInvokeReqExtra) FillRandom(rg *basictl.RandGenerator) {
-	var maskFlags uint32
-	maskFlags = basictl.RandomUint(rg)
-	item.Flags = 0
-	if maskFlags&(1<<0) != 0 {
-		item.Flags |= (1 << 0)
-	}
-	if maskFlags&(1<<1) != 0 {
-		item.Flags |= (1 << 1)
-	}
-	if maskFlags&(1<<2) != 0 {
-		item.Flags |= (1 << 2)
-	}
-	if maskFlags&(1<<3) != 0 {
-		item.Flags |= (1 << 3)
-	}
-	if maskFlags&(1<<4) != 0 {
-		item.Flags |= (1 << 4)
-	}
-	if maskFlags&(1<<5) != 0 {
-		item.Flags |= (1 << 6)
-	}
-	if maskFlags&(1<<6) != 0 {
-		item.Flags |= (1 << 7)
-	}
-	if maskFlags&(1<<7) != 0 {
-		item.Flags |= (1 << 14)
-	}
-	if maskFlags&(1<<8) != 0 {
-		item.Flags |= (1 << 15)
-	}
-	if maskFlags&(1<<9) != 0 {
-		item.Flags |= (1 << 16)
-	}
-	if maskFlags&(1<<10) != 0 {
-		item.Flags |= (1 << 18)
-	}
-	if maskFlags&(1<<11) != 0 {
-		item.Flags |= (1 << 19)
-	}
-	if maskFlags&(1<<12) != 0 {
-		item.Flags |= (1 << 20)
-	}
-	if maskFlags&(1<<13) != 0 {
-		item.Flags |= (1 << 21)
-	}
-	if maskFlags&(1<<14) != 0 {
-		item.Flags |= (1 << 23)
-	}
-	if maskFlags&(1<<15) != 0 {
-		item.Flags |= (1 << 25)
-	}
-	if maskFlags&(1<<16) != 0 {
-		item.Flags |= (1 << 26)
-	}
-	if maskFlags&(1<<17) != 0 {
-		item.Flags |= (1 << 27)
-	}
-	if maskFlags&(1<<18) != 0 {
-		item.Flags |= (1 << 28)
-	}
-	if maskFlags&(1<<19) != 0 {
-		item.Flags |= (1 << 29)
-	}
-	if maskFlags&(1<<20) != 0 {
-		item.Flags |= (1 << 30)
+	item.Flags = basictl.RandomFieldMask(rg, 0b1111110101111011100001111011111)
+	if item.Flags&(1<<9) != 0 {
+		item.RequesterId = basictl.RandomLong(rg)
+	} else {
+		item.RequesterId = 0
 	}
 	if item.Flags&(1<<15) != 0 {
-		BuiltinVectorDictionaryFieldLongFillRandom(rg, &item.WaitShardsBinlogPos)
+		BuiltinDictStringLongFillRandom(rg, &item.WaitShardsBinlogPos)
 	} else {
-		BuiltinVectorDictionaryFieldLongReset(item.WaitShardsBinlogPos)
+		BuiltinDictStringLongReset(item.WaitShardsBinlogPos)
 	}
 	if item.Flags&(1<<16) != 0 {
 		item.WaitBinlogPos = basictl.RandomLong(rg)
@@ -390,15 +365,25 @@ func (item *RpcInvokeReqExtra) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *RpcInvokeReqExtra) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *RpcInvokeReqExtra) ReadTL1(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.Flags); err != nil {
 		return w, err
 	}
-	if item.Flags&(1<<15) != 0 {
-		if w, err = BuiltinVectorDictionaryFieldLongRead(w, &item.WaitShardsBinlogPos); err != nil {
+	if item.Flags&(1<<9) != 0 {
+		if w, err = basictl.LongRead(w, &item.RequesterId); err != nil {
 			return w, err
 		}
 	} else {
-		BuiltinVectorDictionaryFieldLongReset(item.WaitShardsBinlogPos)
+		item.RequesterId = 0
+	}
+	if item.Flags&(1<<15) != 0 {
+		if w, err = BuiltinDictStringLongReadTL1(w, &item.WaitShardsBinlogPos); err != nil {
+			return w, err
+		}
+	} else {
+		BuiltinDictStringLongReset(item.WaitShardsBinlogPos)
 	}
 	if item.Flags&(1<<16) != 0 {
 		if w, err = basictl.LongRead(w, &item.WaitBinlogPos); err != nil {
@@ -408,14 +393,14 @@ func (item *RpcInvokeReqExtra) Read(w []byte) (_ []byte, err error) {
 		item.WaitBinlogPos = 0
 	}
 	if item.Flags&(1<<18) != 0 {
-		if w, err = BuiltinVectorStringRead(w, &item.StringForwardKeys); err != nil {
+		if w, err = BuiltinVectorStringReadTL1(w, &item.StringForwardKeys); err != nil {
 			return w, err
 		}
 	} else {
 		item.StringForwardKeys = item.StringForwardKeys[:0]
 	}
 	if item.Flags&(1<<19) != 0 {
-		if w, err = BuiltinVectorLongRead(w, &item.IntForwardKeys); err != nil {
+		if w, err = BuiltinVectorLongReadTL1(w, &item.IntForwardKeys); err != nil {
 			return w, err
 		}
 	} else {
@@ -457,14 +442,14 @@ func (item *RpcInvokeReqExtra) Read(w []byte) (_ []byte, err error) {
 		item.RandomDelay = 0
 	}
 	if item.Flags&(1<<28) != 0 {
-		if w, err = item.PersistentQuery.ReadBoxed(w); err != nil {
+		if w, err = item.PersistentQuery.ReadTL1Boxed(w); err != nil {
 			return w, err
 		}
 	} else {
 		item.PersistentQuery.Reset()
 	}
 	if item.Flags&(1<<29) != 0 {
-		if w, err = item.TraceContext.Read(w); err != nil {
+		if w, err = item.TraceContext.ReadTL1(w); err != nil {
 			return w, err
 		}
 	} else {
@@ -481,22 +466,31 @@ func (item *RpcInvokeReqExtra) Read(w []byte) (_ []byte, err error) {
 }
 
 func (item *RpcInvokeReqExtra) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *RpcInvokeReqExtra) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *RpcInvokeReqExtra) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *RpcInvokeReqExtra) WriteTL1(w []byte) []byte {
 	w = basictl.NatWrite(w, item.Flags)
+	if item.Flags&(1<<9) != 0 {
+		w = basictl.LongWrite(w, item.RequesterId)
+	}
 	if item.Flags&(1<<15) != 0 {
-		w = BuiltinVectorDictionaryFieldLongWrite(w, item.WaitShardsBinlogPos)
+		w = BuiltinDictStringLongWriteTL1(w, item.WaitShardsBinlogPos)
 	}
 	if item.Flags&(1<<16) != 0 {
 		w = basictl.LongWrite(w, item.WaitBinlogPos)
 	}
 	if item.Flags&(1<<18) != 0 {
-		w = BuiltinVectorStringWrite(w, item.StringForwardKeys)
+		w = BuiltinVectorStringWriteTL1(w, item.StringForwardKeys)
 	}
 	if item.Flags&(1<<19) != 0 {
-		w = BuiltinVectorLongWrite(w, item.IntForwardKeys)
+		w = BuiltinVectorLongWriteTL1(w, item.IntForwardKeys)
 	}
 	if item.Flags&(1<<20) != 0 {
 		w = basictl.StringWrite(w, item.StringForward)
@@ -514,10 +508,10 @@ func (item *RpcInvokeReqExtra) Write(w []byte) []byte {
 		w = basictl.DoubleWrite(w, item.RandomDelay)
 	}
 	if item.Flags&(1<<28) != 0 {
-		w = item.PersistentQuery.WriteBoxed(w)
+		w = item.PersistentQuery.WriteTL1Boxed(w)
 	}
 	if item.Flags&(1<<29) != 0 {
-		w = item.TraceContext.Write(w)
+		w = item.TraceContext.WriteTL1(w)
 	}
 	if item.Flags&(1<<30) != 0 {
 		w = basictl.StringWrite(w, item.ExecutionContext)
@@ -526,19 +520,28 @@ func (item *RpcInvokeReqExtra) Write(w []byte) []byte {
 }
 
 func (item *RpcInvokeReqExtra) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *RpcInvokeReqExtra) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xf3ef81a9); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *RpcInvokeReqExtra) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *RpcInvokeReqExtra) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *RpcInvokeReqExtra) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *RpcInvokeReqExtra) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0xf3ef81a9)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item RpcInvokeReqExtra) String() string {
@@ -546,6 +549,11 @@ func (item RpcInvokeReqExtra) String() string {
 }
 
 func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *RpcInvokeReqExtra) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFlagsPresented bool
 	var trueTypeReturnBinlogPosPresented bool
 	var trueTypeReturnBinlogPosValue bool
@@ -561,6 +569,9 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 	var trueTypeReturnQueryStatsValue bool
 	var trueTypeNoResultPresented bool
 	var trueTypeNoResultValue bool
+	var trueTypeMustBeMasterPresented bool
+	var trueTypeMustBeMasterValue bool
+	var propRequesterIdPresented bool
 	var trueTypeReturnShardsBinlogPosPresented bool
 	var trueTypeReturnShardsBinlogPosValue bool
 	var propWaitShardsBinlogPosPresented bool
@@ -651,6 +662,22 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 					return err
 				}
 				trueTypeNoResultPresented = true
+			case "must_be_master":
+				if trueTypeMustBeMasterPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "must_be_master")
+				}
+				if err := Json2ReadBool(in, &trueTypeMustBeMasterValue); err != nil {
+					return err
+				}
+				trueTypeMustBeMasterPresented = true
+			case "requester_id":
+				if propRequesterIdPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "requester_id")
+				}
+				if err := Json2ReadInt64(in, &item.RequesterId); err != nil {
+					return err
+				}
+				propRequesterIdPresented = true
 			case "return_shards_binlog_pos":
 				if trueTypeReturnShardsBinlogPosPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "return_shards_binlog_pos")
@@ -663,7 +690,7 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 				if propWaitShardsBinlogPosPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "wait_shards_binlog_pos")
 				}
-				if err := BuiltinVectorDictionaryFieldLongReadJSON(legacyTypeNames, in, &item.WaitShardsBinlogPos); err != nil {
+				if err := BuiltinDictStringLongReadJSONGeneral(tctx, in, &item.WaitShardsBinlogPos); err != nil {
 					return err
 				}
 				propWaitShardsBinlogPosPresented = true
@@ -679,7 +706,7 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 				if propStringForwardKeysPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "string_forward_keys")
 				}
-				if err := BuiltinVectorStringReadJSON(legacyTypeNames, in, &item.StringForwardKeys); err != nil {
+				if err := BuiltinVectorStringReadJSONGeneral(tctx, in, &item.StringForwardKeys); err != nil {
 					return err
 				}
 				propStringForwardKeysPresented = true
@@ -687,7 +714,7 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 				if propIntForwardKeysPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "int_forward_keys")
 				}
-				if err := BuiltinVectorLongReadJSON(legacyTypeNames, in, &item.IntForwardKeys); err != nil {
+				if err := BuiltinVectorLongReadJSONGeneral(tctx, in, &item.IntForwardKeys); err != nil {
 					return err
 				}
 				propIntForwardKeysPresented = true
@@ -743,7 +770,7 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 				if propPersistentQueryPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "persistent_query")
 				}
-				if err := item.PersistentQuery.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.PersistentQuery.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propPersistentQueryPresented = true
@@ -751,7 +778,7 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 				if propTraceContextPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("rpcInvokeReqExtra", "trace_context")
 				}
-				if err := item.TraceContext.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.TraceContext.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propTraceContextPresented = true
@@ -776,8 +803,11 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 	if !propFlagsPresented {
 		item.Flags = 0
 	}
+	if !propRequesterIdPresented {
+		item.RequesterId = 0
+	}
 	if !propWaitShardsBinlogPosPresented {
-		BuiltinVectorDictionaryFieldLongReset(item.WaitShardsBinlogPos)
+		BuiltinDictStringLongReset(item.WaitShardsBinlogPos)
 	}
 	if !propWaitBinlogPosPresented {
 		item.WaitBinlogPos = 0
@@ -847,6 +877,14 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 			item.Flags |= 1 << 7
 		}
 	}
+	if trueTypeMustBeMasterPresented {
+		if trueTypeMustBeMasterValue {
+			item.Flags |= 1 << 8
+		}
+	}
+	if propRequesterIdPresented {
+		item.Flags |= 1 << 9
+	}
 	if trueTypeReturnShardsBinlogPosPresented {
 		if trueTypeReturnShardsBinlogPosValue {
 			item.Flags |= 1 << 14
@@ -895,52 +933,57 @@ func (item *RpcInvokeReqExtra) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnBinlogPosPresented && !trueTypeReturnBinlogPosValue && (item.Flags&(1<<0) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.0 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnBinlogTimePresented && !trueTypeReturnBinlogTimeValue && (item.Flags&(1<<1) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.1 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnPidPresented && !trueTypeReturnPidValue && (item.Flags&(1<<2) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.2 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnRequestSizesPresented && !trueTypeReturnRequestSizesValue && (item.Flags&(1<<3) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.3 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnFailedSubqueriesPresented && !trueTypeReturnFailedSubqueriesValue && (item.Flags&(1<<4) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.4 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnQueryStatsPresented && !trueTypeReturnQueryStatsValue && (item.Flags&(1<<6) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.6 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeNoResultPresented && !trueTypeNoResultValue && (item.Flags&(1<<7) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.7 is indefinite because of the contradictions in values")
+	}
+	// tries to set bit to zero if it is 1
+	if trueTypeMustBeMasterPresented && !trueTypeMustBeMasterValue && (item.Flags&(1<<8) != 0) {
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.8 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnShardsBinlogPosPresented && !trueTypeReturnShardsBinlogPosValue && (item.Flags&(1<<14) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.14 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeReturnViewNumberPresented && !trueTypeReturnViewNumberValue && (item.Flags&(1<<27) != 0) {
-		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit flags.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("rpcInvokeReqExtra", "fieldmask bit item.Flags.27 is indefinite because of the contradictions in values")
 	}
 	return nil
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *RpcInvokeReqExtra) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *RpcInvokeReqExtra) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *RpcInvokeReqExtra) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *RpcInvokeReqExtra) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *RpcInvokeReqExtra) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFlags := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -977,6 +1020,15 @@ func (item *RpcInvokeReqExtra) WriteJSONOpt(newTypeNames bool, short bool, w []b
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"no_result":true`...)
 	}
+	if item.Flags&(1<<8) != 0 {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = append(w, `"must_be_master":true`...)
+	}
+	if item.Flags&(1<<9) != 0 {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = append(w, `"requester_id":`...)
+		w = basictl.JSONWriteInt64(w, item.RequesterId)
+	}
 	if item.Flags&(1<<14) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"return_shards_binlog_pos":true`...)
@@ -984,7 +1036,7 @@ func (item *RpcInvokeReqExtra) WriteJSONOpt(newTypeNames bool, short bool, w []b
 	if item.Flags&(1<<15) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"wait_shards_binlog_pos":`...)
-		w = BuiltinVectorDictionaryFieldLongWriteJSONOpt(newTypeNames, short, w, item.WaitShardsBinlogPos)
+		w = BuiltinDictStringLongWriteJSONOpt(tctx, w, item.WaitShardsBinlogPos)
 	}
 	if item.Flags&(1<<16) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -994,12 +1046,12 @@ func (item *RpcInvokeReqExtra) WriteJSONOpt(newTypeNames bool, short bool, w []b
 	if item.Flags&(1<<18) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"string_forward_keys":`...)
-		w = BuiltinVectorStringWriteJSONOpt(newTypeNames, short, w, item.StringForwardKeys)
+		w = BuiltinVectorStringWriteJSONOpt(tctx, w, item.StringForwardKeys)
 	}
 	if item.Flags&(1<<19) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"int_forward_keys":`...)
-		w = BuiltinVectorLongWriteJSONOpt(newTypeNames, short, w, item.IntForwardKeys)
+		w = BuiltinVectorLongWriteJSONOpt(tctx, w, item.IntForwardKeys)
 	}
 	if item.Flags&(1<<20) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -1033,12 +1085,12 @@ func (item *RpcInvokeReqExtra) WriteJSONOpt(newTypeNames bool, short bool, w []b
 	if item.Flags&(1<<28) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"persistent_query":`...)
-		w = item.PersistentQuery.WriteJSONOpt(newTypeNames, short, w)
+		w = item.PersistentQuery.WriteJSONOpt(tctx, w)
 	}
 	if item.Flags&(1<<29) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"trace_context":`...)
-		w = item.TraceContext.WriteJSONOpt(newTypeNames, short, w)
+		w = item.TraceContext.WriteJSONOpt(tctx, w)
 	}
 	if item.Flags&(1<<30) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)

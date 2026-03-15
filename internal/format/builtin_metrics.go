@@ -30,7 +30,8 @@ Set only if greater than 1.`,
 		Description: "agent_shard",
 		RawKind:     "int",
 	}},
-	PreKeyTagID: "1",
+	PreKeyTagID:   "1",
+	ShardStrategy: ShardBuiltinDist, // sharded the same way as metric it describes
 }
 
 const BuiltinMetricIDAggBucketReceiveDelaySec = -2 // Also approximates insert delay, interesting for historic buckets
@@ -59,28 +60,6 @@ Set by aggregator.`,
 			TagValueIDSecondPhantom: "phantom",
 		}),
 	}, {}},
-}
-
-// If all contributors come on time, count will be 1 (per shard). If some come through historic conveyor, can be larger.
-var BuiltinMetricMetaAggInsertSizeLegacy = &MetricMetaValue{
-	Name:                    "__agg_insert_size_legacy",
-	Kind:                    MetricKindValue,
-	Description:             "Size of aggregated bucket inserted into clickhouse. Written when second is inserted, which can be much later.",
-	MetricType:              MetricByte,
-	NoSampleAgent:           true, // generated on aggregators, must be delivered without losses
-	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
-	WithAggregatorID:        true,
-	Tags: []MetricMetaTag{{}, {}, {}, {
-		Description:   "conveyor",
-		ValueComments: convertToValueComments(conveyorToValue),
-	}, {
-		Description:   "type",
-		ValueComments: convertToValueComments(insertKindToValue),
-	}, {}, {}, {
-		Description:   "table",
-		ValueComments: convertToValueComments(tableFormatToValue),
-	}},
 }
 
 var BuiltinMetricMetaTLByteSizePerInflightType = &MetricMetaValue{
@@ -174,8 +153,7 @@ So avg() of this metric shows estimated full cardinality with or without groupin
 		BuiltinKind: BuiltinKindMetric,
 	}},
 	PreKeyTagID:   "4",
-	ShardStrategy: ShardBuiltin, // sharded the same way as metric it describes
-	MetricTagID:   4,
+	ShardStrategy: ShardBuiltinDist, // sharded the same way as metric it describes
 }
 
 const BuiltinMetricIDAggSamplingFactor = -10
@@ -200,8 +178,7 @@ Set only if greater than 1.`,
 		}),
 	}},
 	PreKeyTagID:   "4",
-	ShardStrategy: ShardBuiltin, // sharded the same way as metrtic it describes
-	MetricTagID:   4,
+	ShardStrategy: ShardBuiltinDist, // sharded the same way as metrtic it describes
 }
 
 const BuiltinMetricIDIngestionStatus = -11
@@ -225,46 +202,46 @@ This metric uses sampling budgets of metric it refers to, so flooding by errors 
 	}, {
 		Description: "status",
 		ValueComments: convertToValueComments(map[int32]string{
-			TagValueIDSrcIngestionStatusOKCached:                     "ok_cached",
-			TagValueIDSrcIngestionStatusOKUncached:                   "ok_uncached",
-			TagValueIDSrcIngestionStatusErrMetricNotFound:            "err_metric_not_found",
-			TagValueIDSrcIngestionStatusErrNanInfValue:               "err_nan_inf_value",
-			TagValueIDSrcIngestionStatusErrNanInfCounter:             "err_nan_inf_counter",
-			TagValueIDSrcIngestionStatusErrNegativeCounter:           "err_negative_counter",
-			TagValueIDSrcIngestionStatusErrMapOther:                  "err_map_other",
-			TagValueIDSrcIngestionStatusWarnMapTagNameNotFound:       "warn_tag_not_found",
-			TagValueIDSrcIngestionStatusErrMapInvalidRawTagValue:     "err_map_invalid_raw_tag_value",
-			TagValueIDSrcIngestionStatusErrMapTagValueCached:         "err_map_tag_value_cached",
-			TagValueIDSrcIngestionStatusErrMapTagValue:               "err_map_tag_value",
-			TagValueIDSrcIngestionStatusErrMapGlobalQueueOverload:    "err_map_global_queue_overload",
-			TagValueIDSrcIngestionStatusErrMapPerMetricQueueOverload: "err_map_per_metric_queue_overload",
-			TagValueIDSrcIngestionStatusErrMapTagValueEncoding:       "err_validate_tag_value_utf8",
-			TagValueIDSrcIngestionStatusOKLegacy:                     "ok_legacy_protocol",
-			TagValueIDSrcIngestionStatusErrMetricNonCanonical:        "non_canonical_name",
-			TagValueIDSrcIngestionStatusErrMetricDisabled:            "err_metric_disabled",
-			TagValueIDSrcIngestionStatusErrLegacyProtocol:            "err_legacy_protocol",
-			TagValueIDSrcIngestionStatusWarnDeprecatedT:              "warn_deprecated_field_t",
-			TagValueIDSrcIngestionStatusWarnDeprecatedStop:           "warn_deprecated_field_stop",
-			TagValueIDSrcIngestionStatusWarnMapTagSetTwice:           "warn_map_tag_set_twice",
-			TagValueIDSrcIngestionStatusWarnDeprecatedKeyName:        "warn_deprecated_tag_name",
-			TagValueIDSrcIngestionStatusErrMetricNameEncoding:        "err_validate_metric_utf8",
-			TagValueIDSrcIngestionStatusErrMapTagNameEncoding:        "err_validate_tag_name_utf8",
-			TagValueIDSrcIngestionStatusErrValueUniqueBothSet:        "err_value_unique_both_set",
-			TagValueIDSrcIngestionStatusWarnOldCounterSemantic:       "warn_deprecated_counter_semantic",
-			TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue:    "warn_map_invalid_raw_tag_value",
-			TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft:     "warn_tag_draft_found",
-			TagValueIDSrcIngestionStatusErrShardingFailed:            "err_metric_sharding_failed",
-			TagValueIDSrcIngestionStatusWarnTimestampClampedPast:     "warn_timestamp_clamped_past",
-			TagValueIDSrcIngestionStatusWarnTimestampClampedFuture:   "warn_timestamp_clamped_future",
-			TagValueIDSrcIngestionStatusErrMetricBuiltin:             "err_metric_builtin",
-			TagValueIDSrcIngestionStatusOKDup:                        "ok_dup",
+			TagValueIDSrcIngestionStatusOKCached:                      "ok_cached",
+			TagValueIDSrcIngestionStatusOKUncached:                    "ok_uncached",
+			TagValueIDSrcIngestionStatusErrMetricNotFound:             "err_metric_not_found",
+			TagValueIDSrcIngestionStatusErrNanInfValue:                "err_nan_inf_value",
+			TagValueIDSrcIngestionStatusErrNanInfCounter:              "err_nan_inf_counter",
+			TagValueIDSrcIngestionStatusErrNegativeCounter:            "err_negative_counter",
+			TagValueIDSrcIngestionStatusErrMapOther:                   "err_map_other",
+			TagValueIDSrcIngestionStatusWarnMapTagNameNotFound:        "warn_tag_not_found",
+			TagValueIDSrcIngestionStatusErrMapInvalidRawTagValue:      "err_map_invalid_raw_tag_value",
+			TagValueIDSrcIngestionStatusErrMapTagValueCached:          "err_map_tag_value_cached",
+			TagValueIDSrcIngestionStatusErrMapTagValue:                "err_map_tag_value",
+			TagValueIDSrcIngestionStatusErrMapGlobalQueueOverload:     "err_map_global_queue_overload",
+			TagValueIDSrcIngestionStatusErrMapPerMetricQueueOverload:  "err_map_per_metric_queue_overload",
+			TagValueIDSrcIngestionStatusErrMapTagValueEncoding:        "err_validate_tag_value_utf8",
+			TagValueIDSrcIngestionStatusOKLegacy:                      "ok_legacy_protocol",
+			TagValueIDSrcIngestionStatusErrMetricNonCanonical:         "non_canonical_name",
+			TagValueIDSrcIngestionStatusErrMetricDisabled:             "err_metric_disabled",
+			TagValueIDSrcIngestionStatusErrLegacyProtocol:             "err_legacy_protocol",
+			TagValueIDSrcIngestionStatusWarnDeprecatedT:               "warn_deprecated_field_t",
+			TagValueIDSrcIngestionStatusWarnDeprecatedStop:            "warn_deprecated_field_stop",
+			TagValueIDSrcIngestionStatusWarnMapTagSetTwice:            "warn_map_tag_set_twice",
+			TagValueIDSrcIngestionStatusWarnDeprecatedKeyName:         "warn_deprecated_tag_name",
+			TagValueIDSrcIngestionStatusErrMetricNameEncoding:         "err_validate_metric_utf8",
+			TagValueIDSrcIngestionStatusErrMapTagNameEncoding:         "err_validate_tag_name_utf8",
+			TagValueIDSrcIngestionStatusErrValueUniqueBothSet:         "err_value_unique_both_set",
+			TagValueIDSrcIngestionStatusWarnOldCounterSemantic:        "warn_deprecated_counter_semantic",
+			TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue:     "warn_map_invalid_raw_tag_value",
+			TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft:      "warn_tag_draft_found",
+			TagValueIDSrcIngestionStatusErrShardingFailed:             "err_metric_sharding_failed",
+			TagValueIDSrcIngestionStatusWarnTimestampClampedPast:      "warn_timestamp_clamped_past",
+			TagValueIDSrcIngestionStatusWarnTimestampClampedFutureAgg: "warn_timestamp_clamped_future_agg",
+			TagValueIDSrcIngestionStatusErrMetricBuiltin:              "err_metric_builtin",
+			TagValueIDSrcIngestionStatusOKDup:                         "ok_dup",
+			TagValueIDSrcIngestionStatusWarnTimestampClampedFuture:    "warn_timestamp_clamped_future",
 		}),
 	}, {
 		Description: "tag_id",
 	}},
 	PreKeyTagID:   "1",
-	ShardStrategy: ShardBuiltin, // sharded the same way as metrtic it describes
-	MetricTagID:   1,
+	ShardStrategy: ShardBuiltinDist, // sharded the same way as metrtic it describes
 }
 
 var BuiltinMetricMetaAggInsertTime = &MetricMetaValue{
@@ -363,8 +340,18 @@ var BuiltinMetricMetaAggOutdatedAgents = &MetricMetaValue{
 	}, {
 		Description: "host",
 	}, {
-		Description: "remote_ip",
+		Description: "remote_ip", // TODO - remove this tag after all agents are December2025 version
 		RawKind:     "ip",
+	}, 15: {
+		Description: "remote_addr_kind",
+		ValueComments: convertToValueComments(map[int32]string{
+			4: "ipv4",
+			6: "ipv6"}),
+	}, 16: {
+		Description: "remote_addr_v4",
+		RawKind:     "ip",
+	}, 17: {
+		Description: "remote_addr_v6",
 	}},
 }
 
@@ -394,7 +381,7 @@ var BuiltinMetricMetaTimingErrors = &MetricMetaValue{
 	Description: `Timing errors - sending data too early or too late.
 Set by either agent or aggregator, depending on status.`,
 	NoSampleAgent:           true,
-	BuiltinAllowedToReceive: true,
+	BuiltinAllowedToReceive: false,
 	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        true,
 	Tags: []MetricMetaTag{{
@@ -442,7 +429,7 @@ var BuiltinMetricMetaAggMapping = &MetricMetaValue{
 	Name:                    "__agg_mapping_status",
 	Kind:                    MetricKindCounter,
 	Description:             "Status of mapping on aggregator side.",
-	NoSampleAgent:           false,
+	NoSampleAgent:           true, // fixed cardinality
 	BuiltinAllowedToReceive: false,
 	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        true,
@@ -722,8 +709,7 @@ var BuiltinMetricMetaBadges = &MetricMetaValue{
 		BuiltinKind: BuiltinKindMetric,
 	}},
 	PreKeyTagID:   "2",
-	ShardStrategy: ShardBuiltin, // sharded the same way as metrtic it describes
-	MetricTagID:   2,
+	ShardStrategy: ShardBuiltinDist, // sharded the same way as metrtic it describes
 }
 
 var BuiltinMetricMetaAutoConfig = &MetricMetaValue{
@@ -743,12 +729,19 @@ Ingress proxies first proxy request (to record host and IP of agent), then repla
 			TagValueIDAutoConfigErrorSend:      "err_send",
 			TagValueIDAutoConfigErrorKeepAlive: "err_keep_alive",
 			TagValueIDAutoConfigWrongCluster:   "err_config_cluster",
+			TagValueIDAutoConfigLongpoll:       "ok_longpoll",
 		}),
 	}, {
 		Description: "shard_replica",
 		RawKind:     "int",
 	}, {
 		Description: "total_shard_replicas",
+		RawKind:     "int",
+	}, {
+		Description: "our_shard_replica",
+		RawKind:     "int",
+	}, {
+		Description: "our_total_shard_replicas",
 		RawKind:     "int",
 	}},
 }
@@ -877,15 +870,27 @@ var BuiltinMetricMetaHeartbeatVersion = &MetricMetaValue{
 	}, {
 		Description: "host",
 	}, {
-		Description: "remote_ip",
+		Description: "remote_ip", // TODO - remove this tag after all agents are December2025 version
 		RawKind:     "ip",
 	}, {
 		Description: "owner",
+	}, 15: {
+		Description: "remote_addr_kind",
+		ValueComments: convertToValueComments(map[int32]string{
+			4: "ipv4",
+			6: "ipv6"}),
+	}, 16: {
+		Description: "remote_addr_v4",
+		RawKind:     "ip",
+	}, 17: {
+		Description: "remote_addr_v6",
+	}, 18: {
+		Description: "connected_to",
 	}},
 }
 
-const BuiltinMetricIDHeartbeatArgs = -48 // this metric was writing larger than allowed strings to DB in the past
-var BuiltinMetricMetaHeartbeatArgs = &MetricMetaValue{
+const BuiltinMetricIDHeartbeatArgs = -48               // this metric was writing larger than allowed strings to DB in the past
+var BuiltinMetricMetaHeartbeatArgs = &MetricMetaValue{ // TODO: REMOVE
 	Name:                    "__heartbeat_args",
 	Kind:                    MetricKindValue,
 	Description:             "Commandline of statshouse components.\nHeartbeat value is uptime.",
@@ -916,7 +921,7 @@ var BuiltinMetricMetaHeartbeatArgs = &MetricMetaValue{
 	}, {
 		Description: "host",
 	}, {
-		Description: "remote_ip",
+		Description: "remote_ip", // TODO - remove this tag after all agents are December2025 version
 		RawKind:     "ip",
 	}, {
 		Description: "arguments_length",
@@ -985,6 +990,9 @@ var BuiltinMetricMetaAPIActiveQueries = &MetricMetaValue{
 		}),
 	}, {
 		Description: "host",
+	}, {
+		Description: "shard_num",
+		RawKind:     "int",
 	}},
 }
 
@@ -1026,7 +1034,7 @@ var BuiltinMetricMetaRPCRequests = &MetricMetaValue{
 			TagValueIDRPCRequestsStatusOK:          "ok",
 			TagValueIDRPCRequestsStatusErrLocal:    "err_local",
 			TagValueIDRPCRequestsStatusErrUpstream: "err_upstream",
-			TagValueIDRPCRequestsStatusHijack:      "hijacked",
+			TagValueIDRPCRequestsStatusLongpoll:    "start_longpoll",
 			TagValueIDRPCRequestsStatusNoHandler:   "err_no_handler"}),
 	}, { // in the future - error code
 	}, { // in the future - something
@@ -1072,7 +1080,7 @@ To see which seconds change when, use __contributors_log_rev`,
 		Description: "timestamp",
 		RawKind:     "timestamp",
 	}},
-	ShardStrategy: ShardBuiltin, // marshalled by aggregator but does not have metric tag
+	ShardStrategy: ShardBuiltinDist, // marshalled by aggregator but does not have metric tag
 }
 
 const BuiltinMetricIDContributorsLogRev = -62
@@ -1091,7 +1099,7 @@ Value is delta between second value and time it was inserted.`,
 		Description: "insert_timestamp",
 		RawKind:     "timestamp",
 	}},
-	ShardStrategy: ShardBuiltin, // marshalled by aggregator but does not have metric tag
+	ShardStrategy: ShardBuiltinDist, // marshalled by aggregator but does not have metric tag
 }
 
 var BuiltinMetricMetaGroupSizeBeforeSampling = &MetricMetaValue{
@@ -1142,10 +1150,8 @@ var BuiltinMetricMetaGroupSizeAfterSampling = &MetricMetaValue{
 }
 
 var BuiltinMetricMetaAPISelectBytes = &MetricMetaValue{
-	Name: "__api_ch_select_bytes",
-	Kind: MetricKindValue,
-	// TODO replace with logs
-	StringTopDescription:    "error",
+	Name:                    "__api_ch_select_bytes",
+	Kind:                    MetricKindValue,
 	Description:             "Number of bytes was handled by ClickHouse SELECT query",
 	NoSampleAgent:           false,
 	BuiltinAllowedToReceive: true,
@@ -1153,14 +1159,36 @@ var BuiltinMetricMetaAPISelectBytes = &MetricMetaValue{
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "query type",
+	}, {
+		Description: "metric",
+		BuiltinKind: BuiltinKindMetric,
+	}, {
+		Description: "table",
+	}, {
+		Description: "kind",
+	}, {
+		Description: "status",
+	}, {
+		Description: "token-short",
+	}, {
+		Description: "token-long",
+	}, {
+		Description: "exception",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDAPIResponseExceptionCHUnknown:     "unknown_ch_exception",
+			TagValueIDAPIResponseExceptionCHTimeout:     "timeout_during_ch",
+			TagValueIDAPIResponseExceptionSemTimeout:    "timeout_on_semaphore",
+			TagValueIDAPIResponseExceptionSemError:      "semaphore_error",
+			TagValueIDAPIResponseExceptionLongCHTimeout: "fatal_ch_timeout",
+			TagValueIDAPIResponseExceptionSemTooLate:    "semaphore_too_late",
+			TagValueIDAPIResponseExceptionCtxCanceled:   "context_canceled",
+		}),
 	}},
 }
 
 var BuiltinMetricMetaAPISelectRows = &MetricMetaValue{
-	Name: "__api_ch_select_rows",
-	Kind: MetricKindValue,
-	// TODO replace with logs
-	StringTopDescription:    "error",
+	Name:                    "__api_ch_select_rows",
+	Kind:                    MetricKindValue,
 	Description:             "Number of rows was handled by ClickHouse SELECT query",
 	NoSampleAgent:           false,
 	BuiltinAllowedToReceive: true,
@@ -1168,6 +1196,30 @@ var BuiltinMetricMetaAPISelectRows = &MetricMetaValue{
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "query type",
+	}, {
+		Description: "metric",
+		BuiltinKind: BuiltinKindMetric,
+	}, {
+		Description: "table",
+	}, {
+		Description: "kind",
+	}, {
+		Description: "status",
+	}, {
+		Description: "token-short",
+	}, {
+		Description: "token-long",
+	}, {
+		Description: "exception",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDAPIResponseExceptionCHUnknown:     "unknown_ch_exception",
+			TagValueIDAPIResponseExceptionCHTimeout:     "timeout_during_ch",
+			TagValueIDAPIResponseExceptionSemTimeout:    "timeout_on_semaphore",
+			TagValueIDAPIResponseExceptionSemError:      "semaphore_error",
+			TagValueIDAPIResponseExceptionLongCHTimeout: "fatal_ch_timeout",
+			TagValueIDAPIResponseExceptionSemTooLate:    "semaphore_too_late",
+			TagValueIDAPIResponseExceptionCtxCanceled:   "context_canceled",
+		}),
 	}},
 }
 
@@ -1196,31 +1248,24 @@ var BuiltinMetricMetaAPISelectDuration = &MetricMetaValue{
 	}, {
 		Description: "token-long",
 	}, {
-		Description: "shard", // metric % 16 for now, experimental
+		Description: "shard_key", // metric % 16 + 1 for now, experimental
 		RawKind:     "int",
+	}, {
+		Description: "exception",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDAPIResponseExceptionCHUnknown:     "unknown_ch_exception",
+			TagValueIDAPIResponseExceptionCHTimeout:     "timeout_during_ch",
+			TagValueIDAPIResponseExceptionSemTimeout:    "timeout_on_semaphore",
+			TagValueIDAPIResponseExceptionSemError:      "semaphore_error",
+			TagValueIDAPIResponseExceptionLongCHTimeout: "fatal_ch_timeout",
+			TagValueIDAPIResponseExceptionSemTooLate:    "semaphore_too_late",
+			TagValueIDAPIResponseExceptionCtxCanceled:   "context_canceled",
+		}),
 	}},
 }
 
 // const BuiltinMetricIDAgentHistoricQueueSizeSum = -69 // Removed, not needed after queue size metric is written by agents
-var BuiltinMetricMetaAPISourceSelectRows = &MetricMetaValue{
-	Name:                    "__api_ch_source_select_rows",
-	Kind:                    MetricKindValue,
-	Description:             "Value of this metric number of rows was selected from DB or cache",
-	NoSampleAgent:           false,
-	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
-	WithAggregatorID:        true,
-	Tags: []MetricMetaTag{{
-		Description: "source type",
-	}, {
-		Description: "metric",
-		BuiltinKind: BuiltinKindMetric,
-	}, {
-		Description: "table",
-	}, {
-		Description: "kind",
-	}},
-}
+// const BuiltinMetricIDAPISourceSelectRows = -70 // Removed, was not used
 
 var BuiltinMetricMetaSystemMetricScrapeDuration = &MetricMetaValue{
 	Name:                    "__system_metrics_duration",
@@ -1273,6 +1318,32 @@ var BuiltinMetricMetaMetaClientWaits = &MetricMetaValue{ // TODO - harmonize
 	Name:                    "__meta_load_journal_client_waits",
 	Kind:                    MetricKindValue,
 	Description:             "Number of clients waiting journal updates",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description: "host",
+	}},
+}
+
+var BuiltinMetricMetaMappingClientWaits = &MetricMetaValue{ // TODO - harmonize
+	Name:                    "__meta_load_mapping_client_waits",
+	Kind:                    MetricKindValue,
+	Description:             "Number of clients waiting mapping updates",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description: "host",
+	}},
+}
+
+var BuiltinMetricMetaMappingCacheVersion = &MetricMetaValue{
+	Name:                    "__meta_load_mapping_cache_version",
+	Kind:                    MetricKindValue,
+	Description:             "Last version in metadata mapping cache",
 	NoSampleAgent:           false,
 	BuiltinAllowedToReceive: true,
 	WithAgentEnvRouteArch:   false,
@@ -1639,10 +1710,11 @@ var BuiltinMetricMetaUIErrors = &MetricMetaValue{
 	}},
 }
 
+// TODO - remove this metric (?)
 var BuiltinMetricMetaStatsHouseErrors = &MetricMetaValue{
 	Name:                    "__statshouse_errors",
 	Kind:                    MetricKindCounter,
-	Description:             `Always empty metric because SH don't have errors'`,
+	Description:             "Always empty metric because SH has no errors'",
 	StringTopDescription:    "error_string",
 	NoSampleAgent:           false,
 	BuiltinAllowedToReceive: true,
@@ -2221,10 +2293,11 @@ var BuiltinMetricMetaAggSamplingEngineKeys = &MetricMetaValue{
 	}},
 }
 
+// TODO - not used, remove?
 var BuiltinMetricMetaProxyAcceptHandshakeError = &MetricMetaValue{
 	Name:                    "__igp_accept_handshake_error",
 	Kind:                    MetricKindCounter,
-	Description:             "Proxy refused to accept incoming connection because of failed  handshake.",
+	Description:             "Proxy refused to accept incoming connection because of failed handshake.",
 	StringTopDescription:    "remote_ip",
 	NoSampleAgent:           false,
 	BuiltinAllowedToReceive: true,
@@ -2239,6 +2312,8 @@ var BuiltinMetricMetaProxyAcceptHandshakeError = &MetricMetaValue{
 	}},
 }
 
+const BuiltinMetricIDProxyVmSize = -114
+
 var BuiltinMetricMetaProxyVmSize = &MetricMetaValue{
 	Name:                    "__igp_vm_size",
 	Kind:                    MetricKindValue,
@@ -2246,12 +2321,14 @@ var BuiltinMetricMetaProxyVmSize = &MetricMetaValue{
 	Resolution:              60,
 	NoSampleAgent:           true, // low cardinality
 	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
+	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "host",
 	}},
 }
+
+const BuiltinMetricIDProxyVmRSS = -115
 
 var BuiltinMetricMetaProxyVmRSS = &MetricMetaValue{
 	Name:                    "__igp_vm_rss",
@@ -2260,12 +2337,14 @@ var BuiltinMetricMetaProxyVmRSS = &MetricMetaValue{
 	Resolution:              60,
 	NoSampleAgent:           true, // low cardinality
 	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
+	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "host",
 	}},
 }
+
+const BuiltinMetricIDProxyHeapAlloc = -116
 
 var BuiltinMetricMetaProxyHeapAlloc = &MetricMetaValue{
 	Name:                    "__igp_heap_alloc",
@@ -2274,12 +2353,14 @@ var BuiltinMetricMetaProxyHeapAlloc = &MetricMetaValue{
 	Resolution:              60,
 	NoSampleAgent:           true, // low cardinality
 	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
+	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "host",
 	}},
 }
+
+const BuiltinMetricIDProxyHeapSys = -117
 
 var BuiltinMetricMetaProxyHeapSys = &MetricMetaValue{
 	Name:                    "__igp_heap_sys",
@@ -2288,12 +2369,14 @@ var BuiltinMetricMetaProxyHeapSys = &MetricMetaValue{
 	Resolution:              60,
 	NoSampleAgent:           true, // low cardinality
 	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
+	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "host",
 	}},
 }
+
+const BuiltinMetricIDProxyHeapIdle = -118
 
 var BuiltinMetricMetaProxyHeapIdle = &MetricMetaValue{
 	Name:                    "__igp_heap_idle",
@@ -2302,12 +2385,14 @@ var BuiltinMetricMetaProxyHeapIdle = &MetricMetaValue{
 	Resolution:              60,
 	NoSampleAgent:           true, // low cardinality
 	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
+	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "host",
 	}},
 }
+
+const BuiltinMetricIDProxyHeapInuse = -119
 
 var BuiltinMetricMetaProxyHeapInuse = &MetricMetaValue{
 	Name:                    "__igp_heap_inuse",
@@ -2316,7 +2401,7 @@ var BuiltinMetricMetaProxyHeapInuse = &MetricMetaValue{
 	Resolution:              60,
 	NoSampleAgent:           true, // low cardinality
 	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
+	WithAgentEnvRouteArch:   true,
 	WithAggregatorID:        false,
 	Tags: []MetricMetaTag{{
 		Description: "host",
@@ -2420,6 +2505,8 @@ var BuiltinMetricMetaClientWriteError = &MetricMetaValue{
 		Description: "lang",
 		ValueComments: convertToValueComments(map[int32]string{
 			1: "golang",
+			2: "python",
+			3: "rust",
 		}),
 	}, {
 		Description: "cause",
@@ -2592,6 +2679,44 @@ var BuiltinMetricMetaMappingQueueRemovedHitsAvg = &MetricMetaValue{
 	}},
 }
 
+var BuiltinMetricMappingStorageVersion = &MetricMetaValue{
+	Name:                    "__mapping_storage_version",
+	Kind:                    MetricKindValue,
+	Description:             "Current and last known mapping versions observed by mapping storage.",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description:   "component",
+		ValueComments: convertToValueComments(componentToValue),
+	}, {
+		Description: "host",
+	}, {
+		Description: "version",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDMappingStorageVersionCurrent:   "current",
+			TagValueIDMappingStorageVersionLastKnown: "last_known",
+		}),
+	}},
+}
+
+var BuiltinMetricMappingStoragePending = &MetricMetaValue{
+	Name:                    "__mapping_storage_pending",
+	Kind:                    MetricKindValue,
+	Description:             "Byte size of pending mappings before drop to disk.",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description:   "component",
+		ValueComments: convertToValueComments(componentToValue),
+	}, {
+		Description: "host",
+	}},
+}
+
 var BuiltinMetricMetaAgentTimings = &MetricMetaValue{
 	Name:                    "__src_timings",
 	Kind:                    MetricKindValue,
@@ -2709,6 +2834,17 @@ var BuiltinMetricMetaApiChRequests = &MetricMetaValue{
 			TagValueIDStatusOK:    "ok",
 			TagValueIDStatusError: "error",
 		}),
+	}, {
+		Description: "exception",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDAPIResponseExceptionCHUnknown:     "unknown_ch_exception",
+			TagValueIDAPIResponseExceptionCHTimeout:     "timeout_during_ch",
+			TagValueIDAPIResponseExceptionSemTimeout:    "timeout_on_semaphore",
+			TagValueIDAPIResponseExceptionSemError:      "semaphore_error",
+			TagValueIDAPIResponseExceptionLongCHTimeout: "fatal_ch_timeout",
+			TagValueIDAPIResponseExceptionSemTooLate:    "semaphore_too_late",
+			TagValueIDAPIResponseExceptionCtxCanceled:   "context_canceled",
+		}),
 	}},
 }
 
@@ -2725,5 +2861,239 @@ var BuiltinMetricMetaMigrationLog = &MetricMetaValue{
 	Tags: []MetricMetaTag{{
 		Description: "migration_timestamp",
 		RawKind:     "timestamp",
+	}, {
+		Description: "source",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDMigrationSourceV2:   "v2",
+			TagValueIDMigrationSourceV1:   "v1",
+			TagValueIDMigrationSourceStop: "stop",
+		}),
+	}},
+}
+
+var BuiltinMetricMetaAPISelectOSCPUVirtualTime = &MetricMetaValue{
+	Name:                    "__api_ch_select_os_cpu_virtual_time",
+	Kind:                    MetricKindValue,
+	MetricType:              MetricSecond,
+	Description:             "OS CPU virtual time in seconds reported by ClickHouse ProfileEvents for SELECT",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        false,
+	Tags: []MetricMetaTag{{
+		Description: "query type",
+	}, {
+		Description: "metric",
+		BuiltinKind: BuiltinKindMetric,
+	}, {
+		Description: "table",
+	}, {
+		Description: "kind",
+	}, {
+		Description: "status",
+	}, {
+		Description: "token-short",
+	}, {
+		Description: "token-long",
+	}, {
+		Description: "exception",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDAPIResponseExceptionCHUnknown:     "unknown_ch_exception",
+			TagValueIDAPIResponseExceptionCHTimeout:     "timeout_during_ch",
+			TagValueIDAPIResponseExceptionSemTimeout:    "timeout_on_semaphore",
+			TagValueIDAPIResponseExceptionSemError:      "semaphore_error",
+			TagValueIDAPIResponseExceptionLongCHTimeout: "fatal_ch_timeout",
+			TagValueIDAPIResponseExceptionSemTooLate:    "semaphore_too_late",
+			TagValueIDAPIResponseExceptionCtxCanceled:   "context_canceled",
+		}),
+	}},
+}
+
+var BuiltinMetricMetaAPIRateLimit = &MetricMetaValue{
+	Name:                    "__api_rate_limit",
+	Kind:                    MetricKindValue,
+	Description:             "Number of inflight requests to ClickHouse tracked for rate limiting.\nWritten by API.",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        false,
+	ShardStrategy:           ShardFixed,
+	ShardNum:                0,
+	Tags: []MetricMetaTag{{ // if we need another component
+	}, {
+		Description: "version",
+	}, {
+		Description: "stage",
+	}, {
+		Description: "inflight_weight",
+		RawKind:     "int",
+	}, {
+		Description: "shard_key",
+		RawKind:     "int",
+	}, {
+		Description: "replica_key",
+		RawKind:     "int",
+	}, {
+		Description: "host",
+	}},
+}
+
+const BuiltinMetricIDIngestionStatusNoShard = -148
+
+var BuiltinMetricMetaIngestionStatusNoShard = &MetricMetaValue{
+	Name:                    "__src_ingestion_status_no_shard",
+	Kind:                    MetricKindCounter,
+	Description:             `Status of receiving metrics by agent, when shard cannot be determined.`,
+	StringTopDescription:    "string_value",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: false,
+	WithAgentEnvRouteArch:   true,
+	WithAggregatorID:        false,
+	Tags: []MetricMetaTag{{
+		Description: "metric",
+		BuiltinKind: BuiltinKindMetric,
+	}, {
+		Description: "status",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDSrcIngestionStatusErrMetricNotFound:     "err_metric_not_found",
+			TagValueIDSrcIngestionStatusErrMetricNonCanonical: "non_canonical_name",
+			TagValueIDSrcIngestionStatusErrMetricDisabled:     "err_metric_disabled",
+			TagValueIDSrcIngestionStatusErrMetricNameEncoding: "err_validate_metric_utf8",
+			TagValueIDSrcIngestionStatusErrShardingFailed:     "err_metric_sharding_failed",
+			TagValueIDSrcIngestionStatusErrMetricBuiltin:      "err_metric_builtin",
+		}),
+	}, {
+		Description: "tag_id",
+	}},
+	PreKeyTagID:   "1",
+	ShardStrategy: ShardFixed, // always sharded to the zero shard
+	ShardNum:      0,
+}
+
+const BuiltinMetricIDHeartbeatVersionAgent = -149
+
+var BuiltinMetricMetaHeartbeatVersionAgent = &MetricMetaValue{
+	Name:                    "__heartbeat_version_agent",
+	Kind:                    MetricKindValue,
+	Description:             "Heartbeat value is uptime (agent only)",
+	MetricType:              MetricSecond,
+	StringTopDescription:    "Build Commit",
+	Resolution:              60,
+	NoSampleAgent:           true, // limited cardinality, but only on each agent
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   true,
+	WithAggregatorID:        false,
+	Tags: []MetricMetaTag{{
+		Description: "event_type",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDHeartbeatEventStart:     "start",
+			TagValueIDHeartbeatEventHeartbeat: "heartbeat"}),
+	}, {
+		Description: "commit_hash",
+		RawKind:     "hex",
+	}, {
+		Description: "commit_timestamp",
+		RawKind:     "timestamp",
+	}, {
+		Description: "host",
+	}, {
+		Description: "owner",
+	}, {
+		Description: "remote_addr_kind",
+		ValueComments: convertToValueComments(map[int32]string{
+			4: "ipv4",
+			6: "ipv6"}),
+	}, {
+		Description: "remote_addr_v4",
+		RawKind:     "ip",
+	}, {
+		Description: "remote_addr_v6",
+	}, {
+		Description: "connected_to",
+	}, 19: {
+		Description: "arg_truncated_length",
+		RawKind:     "int",
+	}, 20: {
+		Description: "arg_agg_addr",
+	}, 21: {
+		Description: "arg_cache_dir",
+	}, 22: {
+		Description: "arg_listen_addr_ipv6",
+	}, 23: {
+		Description: "arg_listen_addr_unix",
+	}, 24: {
+		Description: "arg_aes_pwd_file",
+	}, 25: {
+		Description: "arg_l",
+	}, 26: {
+		Description: "arg_historic_storage",
+	}, 45: {
+		Description: "arg_other",
+	}},
+}
+
+const BuiltinMetricIDHeartbeatVersionIngress = -150
+
+var BuiltinMetricMetaHeartbeatVersionIngress = &MetricMetaValue{
+	Name:                    "__heartbeat_version_ingress",
+	Kind:                    MetricKindValue,
+	Description:             "Heartbeat value is uptime (ingress only)",
+	MetricType:              MetricSecond,
+	StringTopDescription:    "Build Commit",
+	Resolution:              60,
+	NoSampleAgent:           true, // limited cardinality, but only on each agent
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   true,
+	WithAggregatorID:        false,
+	Tags: []MetricMetaTag{{
+		Description: "event_type",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDHeartbeatEventStart:     "start",
+			TagValueIDHeartbeatEventHeartbeat: "heartbeat"}),
+	}, {
+		Description: "commit_hash",
+		RawKind:     "hex",
+	}, {
+		Description: "commit_timestamp",
+		RawKind:     "timestamp",
+	}, {
+		Description: "host",
+	}, {
+		Description: "owner",
+	}, {
+		Description: "remote_addr_kind",
+		ValueComments: convertToValueComments(map[int32]string{
+			4: "ipv4",
+			6: "ipv6"}),
+	}, {
+		Description: "remote_addr_v4",
+		RawKind:     "ip",
+	}, {
+		Description: "remote_addr_v6",
+	}, {
+		Description: "connected_to",
+	}, 19: {
+		Description: "arg_truncated_length",
+		RawKind:     "int",
+	}, 20: {
+		Description: "arg_agg_addr",
+	}, 21: {
+		Description: "arg_cache_dir",
+	}, 22: {
+		Description: "arg_ingress_addr",
+	}, 23: {
+		Description: "arg_ingress_addr_ipv6",
+	}, 24: {
+		Description: "arg_ingress_external_addr",
+	}, 25: {
+		Description: "arg_ingress_external_addr_ipv6",
+	}, 26: {
+		Description: "arg_ingress_pwd_dir",
+	}, 27: {
+		Description: "arg_aes_pwd_file",
+	}, 28: {
+		Description: "arg_l",
+	}, 45: {
+		Description: "arg_other",
 	}},
 }

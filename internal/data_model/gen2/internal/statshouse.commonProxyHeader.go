@@ -38,7 +38,7 @@ func (item *StatshouseCommonProxyHeader) SetIngressProxy(v bool, nat_fields_mask
 		}
 	}
 }
-func (item StatshouseCommonProxyHeader) IsSetIngressProxy(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeader) IsSetIngressProxy(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<31) != 0
 }
 
@@ -51,7 +51,7 @@ func (item *StatshouseCommonProxyHeader) SetAgentEnvStaging0(v bool, nat_fields_
 		}
 	}
 }
-func (item StatshouseCommonProxyHeader) IsSetAgentEnvStaging0(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeader) IsSetAgentEnvStaging0(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<30) != 0
 }
 
@@ -64,7 +64,7 @@ func (item *StatshouseCommonProxyHeader) SetAgentEnvStaging1(v bool, nat_fields_
 		}
 	}
 }
-func (item StatshouseCommonProxyHeader) IsSetAgentEnvStaging1(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeader) IsSetAgentEnvStaging1(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<29) != 0
 }
 
@@ -80,7 +80,7 @@ func (item *StatshouseCommonProxyHeader) ClearOwner(nat_fields_mask *uint32) {
 		*nat_fields_mask &^= 1 << 28
 	}
 }
-func (item StatshouseCommonProxyHeader) IsSetOwner(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeader) IsSetOwner(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<28) != 0
 }
 
@@ -92,6 +92,20 @@ func (item *StatshouseCommonProxyHeader) Reset() {
 	item.ComponentTag = 0
 	item.BuildArch = 0
 	item.Owner = ""
+}
+
+func (item *StatshouseCommonProxyHeader) FillRandom(rg *basictl.RandGenerator, nat_fields_mask uint32) {
+	item.ShardReplica = basictl.RandomInt(rg)
+	item.ShardReplicaTotal = basictl.RandomInt(rg)
+	BuiltinTuple4IntFillRandom(rg, &item.AgentIp)
+	item.HostName = basictl.RandomString(rg)
+	item.ComponentTag = basictl.RandomInt(rg)
+	item.BuildArch = basictl.RandomInt(rg)
+	if nat_fields_mask&(1<<28) != 0 {
+		item.Owner = basictl.RandomString(rg)
+	} else {
+		item.Owner = ""
+	}
 }
 
 func (item *StatshouseCommonProxyHeader) Read(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
@@ -123,7 +137,6 @@ func (item *StatshouseCommonProxyHeader) Read(w []byte, nat_fields_mask uint32) 
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseCommonProxyHeader) WriteGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_fields_mask), nil
 }
@@ -148,7 +161,6 @@ func (item *StatshouseCommonProxyHeader) ReadBoxed(w []byte, nat_fields_mask uin
 	return item.Read(w, nat_fields_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseCommonProxyHeader) WriteBoxedGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_fields_mask), nil
 }
@@ -158,7 +170,7 @@ func (item *StatshouseCommonProxyHeader) WriteBoxed(w []byte, nat_fields_mask ui
 	return item.Write(w, nat_fields_mask)
 }
 
-func (item *StatshouseCommonProxyHeader) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask uint32) error {
+func (item *StatshouseCommonProxyHeader) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_fields_mask uint32) error {
 	var propShardReplicaPresented bool
 	var propShardReplicaTotalPresented bool
 	var propAgentIpPresented bool
@@ -202,7 +214,7 @@ func (item *StatshouseCommonProxyHeader) ReadJSON(legacyTypeNames bool, in *basi
 				if propAgentIpPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "agent_ip")
 				}
-				if err := BuiltinTuple4IntReadJSON(legacyTypeNames, in, &item.AgentIp); err != nil {
+				if err := BuiltinTuple4IntReadJSONGeneral(tctx, in, &item.AgentIp); err != nil {
 					return err
 				}
 				propAgentIpPresented = true
@@ -276,14 +288,15 @@ func (item *StatshouseCommonProxyHeader) ReadJSON(legacyTypeNames bool, in *basi
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseCommonProxyHeader) WriteJSONGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask), nil
+func (item *StatshouseCommonProxyHeader) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_fields_mask), nil
 }
 
 func (item *StatshouseCommonProxyHeader) WriteJSON(w []byte, nat_fields_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_fields_mask)
 }
-func (item *StatshouseCommonProxyHeader) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask uint32) []byte {
+func (item *StatshouseCommonProxyHeader) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) []byte {
 	w = append(w, '{')
 	backupIndexShardReplica := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -301,7 +314,7 @@ func (item *StatshouseCommonProxyHeader) WriteJSONOpt(newTypeNames bool, short b
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"agent_ip":`...)
-	w = BuiltinTuple4IntWriteJSONOpt(newTypeNames, short, w, &item.AgentIp)
+	w = BuiltinTuple4IntWriteJSONOpt(tctx, w, &item.AgentIp)
 	backupIndexHostName := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"host_name":`...)
@@ -331,6 +344,14 @@ func (item *StatshouseCommonProxyHeader) WriteJSONOpt(newTypeNames bool, short b
 	return append(w, '}')
 }
 
+func (item *StatshouseCommonProxyHeader) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.commonProxyHeader"))
+}
+
+func (item *StatshouseCommonProxyHeader) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.commonProxyHeader")
+}
+
 type StatshouseCommonProxyHeaderBytes struct {
 	// IngressProxy (TrueType) // Conditional: nat_fields_mask.31
 	// AgentEnvStaging0 (TrueType) // Conditional: nat_fields_mask.30
@@ -356,7 +377,7 @@ func (item *StatshouseCommonProxyHeaderBytes) SetIngressProxy(v bool, nat_fields
 		}
 	}
 }
-func (item StatshouseCommonProxyHeaderBytes) IsSetIngressProxy(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeaderBytes) IsSetIngressProxy(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<31) != 0
 }
 
@@ -369,7 +390,7 @@ func (item *StatshouseCommonProxyHeaderBytes) SetAgentEnvStaging0(v bool, nat_fi
 		}
 	}
 }
-func (item StatshouseCommonProxyHeaderBytes) IsSetAgentEnvStaging0(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeaderBytes) IsSetAgentEnvStaging0(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<30) != 0
 }
 
@@ -382,7 +403,7 @@ func (item *StatshouseCommonProxyHeaderBytes) SetAgentEnvStaging1(v bool, nat_fi
 		}
 	}
 }
-func (item StatshouseCommonProxyHeaderBytes) IsSetAgentEnvStaging1(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeaderBytes) IsSetAgentEnvStaging1(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<29) != 0
 }
 
@@ -398,7 +419,7 @@ func (item *StatshouseCommonProxyHeaderBytes) ClearOwner(nat_fields_mask *uint32
 		*nat_fields_mask &^= 1 << 28
 	}
 }
-func (item StatshouseCommonProxyHeaderBytes) IsSetOwner(nat_fields_mask uint32) bool {
+func (item *StatshouseCommonProxyHeaderBytes) IsSetOwner(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<28) != 0
 }
 
@@ -410,6 +431,20 @@ func (item *StatshouseCommonProxyHeaderBytes) Reset() {
 	item.ComponentTag = 0
 	item.BuildArch = 0
 	item.Owner = item.Owner[:0]
+}
+
+func (item *StatshouseCommonProxyHeaderBytes) FillRandom(rg *basictl.RandGenerator, nat_fields_mask uint32) {
+	item.ShardReplica = basictl.RandomInt(rg)
+	item.ShardReplicaTotal = basictl.RandomInt(rg)
+	BuiltinTuple4IntFillRandom(rg, &item.AgentIp)
+	item.HostName = basictl.RandomStringBytes(rg)
+	item.ComponentTag = basictl.RandomInt(rg)
+	item.BuildArch = basictl.RandomInt(rg)
+	if nat_fields_mask&(1<<28) != 0 {
+		item.Owner = basictl.RandomStringBytes(rg)
+	} else {
+		item.Owner = item.Owner[:0]
+	}
 }
 
 func (item *StatshouseCommonProxyHeaderBytes) Read(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
@@ -441,7 +476,6 @@ func (item *StatshouseCommonProxyHeaderBytes) Read(w []byte, nat_fields_mask uin
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseCommonProxyHeaderBytes) WriteGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_fields_mask), nil
 }
@@ -466,7 +500,6 @@ func (item *StatshouseCommonProxyHeaderBytes) ReadBoxed(w []byte, nat_fields_mas
 	return item.Read(w, nat_fields_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseCommonProxyHeaderBytes) WriteBoxedGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_fields_mask), nil
 }
@@ -476,7 +509,7 @@ func (item *StatshouseCommonProxyHeaderBytes) WriteBoxed(w []byte, nat_fields_ma
 	return item.Write(w, nat_fields_mask)
 }
 
-func (item *StatshouseCommonProxyHeaderBytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask uint32) error {
+func (item *StatshouseCommonProxyHeaderBytes) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_fields_mask uint32) error {
 	var propShardReplicaPresented bool
 	var propShardReplicaTotalPresented bool
 	var propAgentIpPresented bool
@@ -520,7 +553,7 @@ func (item *StatshouseCommonProxyHeaderBytes) ReadJSON(legacyTypeNames bool, in 
 				if propAgentIpPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.commonProxyHeader", "agent_ip")
 				}
-				if err := BuiltinTuple4IntReadJSON(legacyTypeNames, in, &item.AgentIp); err != nil {
+				if err := BuiltinTuple4IntReadJSONGeneral(tctx, in, &item.AgentIp); err != nil {
 					return err
 				}
 				propAgentIpPresented = true
@@ -594,14 +627,15 @@ func (item *StatshouseCommonProxyHeaderBytes) ReadJSON(legacyTypeNames bool, in 
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseCommonProxyHeaderBytes) WriteJSONGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask), nil
+func (item *StatshouseCommonProxyHeaderBytes) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_fields_mask), nil
 }
 
 func (item *StatshouseCommonProxyHeaderBytes) WriteJSON(w []byte, nat_fields_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_fields_mask)
 }
-func (item *StatshouseCommonProxyHeaderBytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask uint32) []byte {
+func (item *StatshouseCommonProxyHeaderBytes) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) []byte {
 	w = append(w, '{')
 	backupIndexShardReplica := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -619,7 +653,7 @@ func (item *StatshouseCommonProxyHeaderBytes) WriteJSONOpt(newTypeNames bool, sh
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"agent_ip":`...)
-	w = BuiltinTuple4IntWriteJSONOpt(newTypeNames, short, w, &item.AgentIp)
+	w = BuiltinTuple4IntWriteJSONOpt(tctx, w, &item.AgentIp)
 	backupIndexHostName := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"host_name":`...)
@@ -647,4 +681,12 @@ func (item *StatshouseCommonProxyHeaderBytes) WriteJSONOpt(newTypeNames bool, sh
 		w = basictl.JSONWriteStringBytes(w, item.Owner)
 	}
 	return append(w, '}')
+}
+
+func (item *StatshouseCommonProxyHeaderBytes) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.commonProxyHeader"))
+}
+
+func (item *StatshouseCommonProxyHeaderBytes) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.commonProxyHeader")
 }

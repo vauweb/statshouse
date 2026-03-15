@@ -12,20 +12,26 @@ import (
 )
 
 type ClientOptions struct {
-	Logf                LoggerFunc // defaults to log.Printf; set to NoopLogf to disable all logging
-	Hooks               func() ClientHooks
-	TracingInject       TracingInjectFunc
-	TrustedSubnetGroups [][]*net.IPNet
-	ForceEncryption     bool
-	CryptoKey           string
-	ConnReadBufSize     int
-	ConnWriteBufSize    int
-	PacketTimeout       time.Duration
-	ProtocolVersion     uint32        // if >0, will send modified nonce packet. Server must be upgraded to at least ignore higher bits of nonce.Schema
-	DefaultTimeout      time.Duration // has no effect if <= 0
-	localUDPAddress     string        // experimental, for tests only
-	MaxReconnectDelay   time.Duration
-	DebugUdp            int
+	Logf                    LoggerFunc // defaults to log.Printf; set to NoopLogf to disable all logging
+	TracingInject           TracingInjectFunc
+	TrustedSubnetGroups     [][]*net.IPNet
+	ForceEncryption         bool
+	CryptoKey               string
+	ConnReadBufSize         int
+	ConnWriteBufSize        int
+	PacketTimeout           time.Duration
+	ProtocolVersion         uint32        // if >0, will send modified nonce packet. Server must be upgraded to at least ignore higher bits of nonce.Schema
+	DefaultTimeout          time.Duration // has no effect if <= 0
+	localUDPAddress         string        // experimental, for tests only
+	MaxReconnectDelay       time.Duration
+	DebugUdp                int
+	PrintKeysGenerationInfo bool
+	HookMaker               func() ClientHook
+
+	beforeSendHookLatencyHandler LatencyHandler
+	sendLatencyHandler           LatencyHandler
+	proxyLatencyHandler          LatencyHandler
+	receiveLatencyHandler        LatencyHandler
 
 	trustedSubnetGroupsParseErrors []error
 }
@@ -38,9 +44,9 @@ func ClientWithLogf(f LoggerFunc) ClientOptionsFunc {
 	}
 }
 
-func ClientWithHooks(hooks func() ClientHooks) ClientOptionsFunc {
+func ClientWithHooks(hookMaker func() ClientHook) ClientOptionsFunc {
 	return func(o *ClientOptions) {
-		o.Hooks = hooks
+		o.HookMaker = hookMaker
 	}
 }
 
@@ -126,6 +132,30 @@ func ClientWithExperimentalLocalUDPAddress(localUDPAddress string) ClientOptions
 func ClientWithDebugUdp(DebugUdp int) ClientOptionsFunc {
 	return func(o *ClientOptions) {
 		o.DebugUdp = DebugUdp
+	}
+}
+
+func ClientWithDebugBeforeSendHookLatencyHandler(h LatencyHandler) ClientOptionsFunc {
+	return func(o *ClientOptions) {
+		o.beforeSendHookLatencyHandler = h
+	}
+}
+
+func ClientWithDebugSendLatencyHandler(h LatencyHandler) ClientOptionsFunc {
+	return func(o *ClientOptions) {
+		o.sendLatencyHandler = h
+	}
+}
+
+func ClientWithDebugProxyLatencyHandler(h LatencyHandler) ClientOptionsFunc {
+	return func(o *ClientOptions) {
+		o.proxyLatencyHandler = h
+	}
+}
+
+func ClientWithDebugReceiveLatencyHandler(h LatencyHandler) ClientOptionsFunc {
+	return func(o *ClientOptions) {
+		o.receiveLatencyHandler = h
 	}
 }
 

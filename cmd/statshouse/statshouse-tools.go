@@ -225,7 +225,7 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 		}
 	*/
 	metricStorage := metajournal.MakeMetricsStorage(nil)
-	journal := metajournal.MakeJournal("", data_model.JournalDDOSProtectionTimeout, nil, []metajournal.ApplyEvent{metricStorage.ApplyEvent})
+	journal := metajournal.MakeJournalFast(data_model.NewChunkedStorageNop(), data_model.JournalDDOSProtectionTimeout, false, []metajournal.ApplyEvent{metricStorage.ApplyEvent})
 	journal.Start(nil, nil, dolphinLoader)
 
 	recv, err := receiver.ListenUDP("udp", listenAddr, receiver.DefaultConnBufSize, true, nil, nil, nil)
@@ -354,13 +354,52 @@ func mainModules() int {
 	return 0
 }
 
-func mainTLClientAPI() int {
+// statshouse$ echo '{"fields_mask":24, "access_token":"","intValue":1}' | target/statshouse tlclient.api --api-addr=127.0.0.1:10889 --tl2
+// 2025/12/23 16:39:18 {"intValue":0,"stringValue":"boot3879"}
+// statshouse$ echo '{"fields_mask":24, "access_token":"","intValue":1}' | target/statshouse tlclient.api --api-addr=127.0.0.1:10889 --tl2
+// statshouseApi.getMapping failed - statshouseApi.getMapping request to tcp4://0@127.0.0.1:10889 failed: context deadline exceeded
+func mainTLClientAPI(preferTL2 bool) int {
 	client, _ := argvCreateClient()
 
 	tlapiclient := tlstatshouseApi.Client{
 		Client:  client,
-		Network: "tcp4",
-		Address: "127.0.0.1:13347",
+		Network: argv.statshouseNet,
+		Address: argv.statshouseAddr,
+	}
+	pkt, err := io.ReadAll(os.Stdin)
+	if err != nil && err != io.EOF {
+		_, _ = fmt.Fprintf(os.Stderr, "read JSON from stdin failed - %v", err)
+		return 1
+	}
+	var batch tlstatshouseApi.GetMapping
+	if err := batch.UnmarshalJSON(pkt); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "parsing statshouseApi.getMapping failed - %v", err)
+		return 1
+	}
+	var ret tlstatshouseApi.GetMappingResponse
+	extra := rpc.InvokeReqExtra{FailIfNoConnection: true, PreferTL2: preferTL2}
+	ctx, cancel := context.WithTimeout(context.Background(), argv.tlclientTimeout)
+	defer cancel()
+	if err := tlapiclient.GetMapping(ctx, batch, &extra, &ret); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "statshouseApi.getMapping failed - %v", err)
+		return 1
+	}
+	str, err := batch.WriteResultJSON(nil, ret)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "statshouseApi.getMapping result failed to serialize into JSON - %v", err)
+	}
+
+	log.Printf("%s\n", str)
+	return 0
+}
+
+func mainTLClientAPIStub(preferTL2 bool) int {
+	client, _ := argvCreateClient()
+
+	tlapiclient := tlstatshouseApi.Client{
+		Client:  client,
+		Network: argv.statshouseNet,
+		Address: argv.statshouseAddr,
 	}
 	var requests []tlstatshouseApi.GetQuery
 	query := tlstatshouseApi.Query{
@@ -398,8 +437,9 @@ func mainTLClientAPI() int {
 
 	ctx := context.Background()
 	for _, request := range requests {
+		extra := rpc.InvokeReqExtra{FailIfNoConnection: true, PreferTL2: preferTL2}
 		var ret tlstatshouseApi.GetQueryResponse
-		if err := tlapiclient.GetQuery(ctx, request, nil, &ret); err != nil {
+		if err := tlapiclient.GetQuery(ctx, request, &extra, &ret); err != nil {
 			log.Fatalf("tlapiclient.GetQuery failed - %v", err)
 		}
 
@@ -431,7 +471,11 @@ func mainTagMapping() int {
 	var (
 		aesPwd = readAESPwd()
 		client = tlmetadata.Client{
-			Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(aesPwd), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+			Client: rpc.NewClient(
+				// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
+				rpc.ClientWithLogf(log.Printf),
+				rpc.ClientWithCryptoKey(aesPwd),
+				rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
 			Network: argv.metadataNet,
 			Address: argv.metadataAddr,
 			ActorID: argv.metadataActorID,
@@ -487,7 +531,11 @@ func mainPutTagBootstrap() int {
 
 	aesPwd := readAESPwd()
 	client := tlmetadata.Client{
-		Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(aesPwd), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+		Client: rpc.NewClient(
+			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
+			rpc.ClientWithLogf(log.Printf),
+			rpc.ClientWithCryptoKey(aesPwd),
+			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
 		Network: argv.metadataNet,
 		Address: argv.metadataAddr,
 		ActorID: argv.metadataActorID,
@@ -514,8 +562,9 @@ func mainPutTagBootstrap() int {
 func mainPublishTagDrafts() int {
 	client := tlmetadata.Client{
 		Client: rpc.NewClient(
+			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 			rpc.ClientWithCryptoKey(readAESPwd()),
-			rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
 		Network: argv.metadataNet,
 		Address: argv.metadataAddr,
 		ActorID: argv.metadataActorID,
@@ -576,7 +625,7 @@ func mainPublishTagDrafts() int {
 		}
 	}
 	storage = metajournal.MakeMetricsStorage(applyPromConfig)
-	journal := metajournal.MakeJournal("", data_model.JournalDDOSProtectionTimeout, nil,
+	journal := metajournal.MakeJournalFast(data_model.NewChunkedStorageNop(), data_model.JournalDDOSProtectionTimeout, false,
 		[]metajournal.ApplyEvent{storage.ApplyEvent, applyEvents}) // order important
 	journal.Start(nil, nil, loader.LoadJournal)
 	fmt.Println("Press <Enter> to start publishing tag drafts")
@@ -635,7 +684,7 @@ func mainPublishTagDrafts() int {
 		}
 
 		var err error
-		meta, err = loader.SaveMetric(context.Background(), meta, "")
+		meta, err = storage.SaveMetric(context.Background(), loader, meta, "")
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			continue
@@ -647,11 +696,53 @@ func mainPublishTagDrafts() int {
 	}
 }
 
+// check memory consumption in htop, on December 2025 it is around 150 MB.
+// if m.name2Tag is completely removed, it will drop to 130 MB.
+
+//func massUpdateMetadata2() int {
+//	client := tlmetadata.Client{
+//		Client: rpc.NewClient(
+//			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
+//			rpc.ClientWithCryptoKey(readAESPwd()),
+//			rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+//		Network: argv.metadataNet,
+//		Address: argv.metadataAddr,
+//		ActorID: argv.metadataActorID,
+//	}
+//	loader := metajournal.NewMetricMetaLoader(&client, metajournal.DefaultMetaTimeout)
+//	storage := metajournal.MakeMetricsStorage(nil)
+//	journal := metajournal.MakeJournalFast(data_model.NewChunkedStorageNop(), data_model.JournalDDOSProtectionTimeout, true,
+//		[]metajournal.ApplyEvent{storage.ApplyEvent})
+//	journal.Start(nil, nil, loader.LoadJournal)
+//	fmt.Println("Press <Enter> to start updating metadata")
+//	if argv.dryRun {
+//		fmt.Println("DRY RUN!")
+//	}
+//	ctx, cancel := context.WithCancel(context.Background())
+//	go func() {
+//		for {
+//			v, h := journal.VersionHash()
+//			fmt.Printf("journal compact version %d/%d hash %s\n",
+//				v, journal.LastKnownVersion(), h)
+//			select {
+//			case <-time.After(time.Second):
+//			case <-ctx.Done():
+//				return
+//			}
+//		}
+//	}()
+//	fmt.Println()
+//	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+//	cancel()
+//	return 0
+//}
+
 func massUpdateMetadata() int {
 	client := tlmetadata.Client{
 		Client: rpc.NewClient(
+			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 			rpc.ClientWithCryptoKey(readAESPwd()),
-			rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
 		Network: argv.metadataNet,
 		Address: argv.metadataAddr,
 		ActorID: argv.metadataActorID,
@@ -659,10 +750,10 @@ func massUpdateMetadata() int {
 	loader := metajournal.NewMetricMetaLoader(&client, metajournal.DefaultMetaTimeout)
 	storage := metajournal.MakeMetricsStorage(nil)
 	storage2 := metajournal.MakeMetricsStorage(nil)
-	journal := metajournal.MakeJournalFast(data_model.JournalDDOSProtectionTimeout, true,
+	journal := metajournal.MakeJournalFast(data_model.NewChunkedStorageNop(), data_model.JournalDDOSProtectionTimeout, false,
 		[]metajournal.ApplyEvent{storage.ApplyEvent})
 	journal.Start(nil, nil, loader.LoadJournal)
-	journalCompact := metajournal.MakeJournalFast(data_model.JournalDDOSProtectionTimeout, true,
+	journalCompact := metajournal.MakeJournalFast(data_model.NewChunkedStorageNop(), data_model.JournalDDOSProtectionTimeout, true,
 		[]metajournal.ApplyEvent{storage2.ApplyEvent})
 	journalCompact.Start(nil, nil, loader.LoadJournal)
 	fmt.Println("Press <Enter> to start updating metadata")
@@ -696,24 +787,130 @@ func massUpdateMetadata() int {
 	})
 	_, _ = fmt.Fprintf(os.Stderr, "Starting list of %d metrics\n", len(list))
 	found := 0
-	//fixMeta := func(meta *format.MetricMetaValue) (shouldUpdate bool) {
-	//	//if meta.Disable != !meta.Visible {
-	//	//	meta.Disable = !meta.Visible
-	//	//	shouldUpdate = true
+	//for _, meta := range list {
+	//	//if !strings.HasPrefix(meta.Name, "gbuteyko") {
+	//	//	continue
 	//	//}
-	//	//for i := range meta.Tags {
-	//	//	tag := &meta.Tags[i]
-	//	//	if !tag.Raw && tag.RawKind != "" {
-	//	//		shouldUpdate = true
-	//	//		tag.RawKind = ""
-	//	//	}
-	//	//	if tag.Raw && tag.RawKind == "" {
-	//	//		shouldUpdate = true
-	//	//		tag.RawKind = "int"
-	//	//	}
-	//	//}
-	//	return
+	//	shardNum := uint32(meta.MetricID) % 16
+	//	switch meta.ShardStrategy {
+	//	case format.ShardFixed: // great, our favorite
+	//		//if meta.ShardNum != shardNum { // all new metrics assigned randomly
+	//		//	_, _ = fmt.Fprintf(os.Stderr, "info: Metric %d (%q) fixed shard_key (%d) != automatic fixed shard_key (%d)\n", meta.MetricID, meta.Name, meta.ShardNum+1, shardNum+1)
+	//		//}
+	//		continue
+	//	case format.ShardByTagsHash, format.ShardBuiltinDist:
+	//		_, _ = fmt.Fprintf(os.Stderr, "warning: Metric %d (%q) uncommon strategy %s shard_key %d\n", meta.MetricID, meta.Name, meta.ShardStrategy, meta.ShardNum+1)
+	//		continue
+	//	case "": // break to code below
+	//	default:
+	//		_, _ = fmt.Fprintf(os.Stderr, "alarm: Metric %d (%q) unknown strategy %s shard_key %d\n", meta.MetricID, meta.Name, meta.ShardStrategy, meta.ShardNum+1)
+	//		continue
+	//	}
+	//	if found >= argv.maxUpdates {
+	//		break
+	//	}
+	//	found++
+	//	_, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) old strategy %s shard_key %d move to shard_key %d\n", meta.MetricID, meta.Name, meta.ShardStrategy, meta.ShardNum+1, shardNum+1)
+	//	if argv.dryRun {
+	//		continue
+	//	}
+	//	meta2 := *meta
+	//	meta2.ShardNum = shardNum
+	//	meta2.ShardStrategy = format.ShardFixed
+	//	_, _ = fmt.Fprintf(os.Stderr, "SAVING!!!\n")
+	//	var err error
+	//	meta2, err = loader.SaveMetric(context.Background(), meta2, "")
+	//	if err != nil {
+	//		_, _ = fmt.Fprintln(os.Stderr, err)
+	//		continue
+	//	}
+	//	err = storage.WaitVersion(context.Background(), meta.Version)
+	//	if err != nil {
+	//		log.Fatal(err)
+	//	}
 	//}
+	checkSameTag := func(meta *format.MetricMetaValue, name string) bool {
+		nameBytes := []byte(name)
+		t1, legacy1 := meta.Name2TagAgentFastBytes(nameBytes)
+		t2, legacy2 := meta.APICompatGetTagFromBytes(nameBytes)
+		if t1 == nil && t2 == nil {
+			return true
+		}
+		if t1 != nil && t2 == nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) tag=%s t1=%d t2=nil\n", meta.MetricID, meta.Name, name, t1.Index)
+			return false
+		}
+		if t1 == nil && t2 != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) tag=%s t1=nil t2=%d\n", meta.MetricID, meta.Name, name, t2.Index)
+			return false
+		}
+		if t1.Index != t2.Index && (t1.Index != 47 || t2.Index != -1) {
+			_, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) tag=%s t1=%d t2=%d\n", meta.MetricID, meta.Name, name, t1.Index, t2.Index)
+			return false
+		}
+		if legacy1 != legacy2 {
+			_, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) tag=%s legacy1=%v legacy2=%v\n", meta.MetricID, meta.Name, name, legacy1, legacy2)
+			return false
+		}
+		return true
+	}
+	for _, meta := range list {
+		//if !strings.HasPrefix(meta.Name, "gbuteyko_test") {
+		//	continue
+		//}
+		special := !checkSameTag(meta, "0")
+		special = !checkSameTag(meta, "1") || special
+		special = !checkSameTag(meta, "15") || special
+		special = !checkSameTag(meta, "45") || special
+		special = !checkSameTag(meta, "47") || special
+		special = !checkSameTag(meta, "key0") || special
+		special = !checkSameTag(meta, "key1") || special
+		special = !checkSameTag(meta, "key15") || special
+		// special = !checkSameTag(meta, "key45") || special
+		special = !checkSameTag(meta, "_s") || special
+		// special = !checkSameTag(meta, "skey") || special
+		special = !checkSameTag(meta, "_h") || special
+		special = !checkSameTag(meta, meta.StringTopName) || special
+		for _, t := range meta.Tags {
+			special = !checkSameTag(meta, t.Name) || special
+		}
+		//if meta.StringTopName != "" {
+		//	_, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) StringTopName description: %q\n", meta.MetricID, meta.Name, meta.StringTopName)
+		//	special = true
+		//}
+		//if meta.StringTopDescription != "" {
+		//	_, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) StringTopDescription description: %q\n", meta.MetricID, meta.Name, meta.StringTopDescription)
+		//	special = true
+		//}
+		if !special {
+			continue
+		}
+		if found >= argv.maxUpdates {
+			break
+		}
+		found++
+		// metricBytes, _ := easyjson.Marshal(meta)
+		// _, _ = fmt.Fprintf(os.Stderr, "Metric %d (%q) will edit\n%s\n", meta.MetricID, meta.Name, metricBytes)
+		if argv.dryRun {
+			continue
+		}
+		meta2 := *meta
+		//meta2.ShardFixedKey = 2
+		//meta2.ShardFixedKey2 = 0
+		//meta2.ShardFixedKey2Timestamp = 0 //uint32((time.Now().Unix()+60+59)/60) * 60
+		metricBytes, _ := easyjson.Marshal(meta2)
+		_, _ = fmt.Fprintf(os.Stderr, "SAVING!!!\n%s\n", metricBytes)
+		var err error
+		_, err = storage.SaveMetric(context.Background(), loader, meta2, "")
+		if err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+		err = storage.WaitVersion(context.Background(), meta.Version)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 	for _, meta := range list {
 		meta2 := storage2.GetMetaMetric(meta.MetricID)
 		if meta2 != nil && format.SameCompactMetric(meta, meta2) {
@@ -786,6 +983,6 @@ func massUpdateMetadata() int {
 		_, _ = fmt.Fprintf(os.Stderr, "Not in normal journal: %d %s\n", meta2.MetricID, meta2.Name)
 	}
 	_, _ = fmt.Fprintf(os.Stderr, "Finished list of %d metrics, %d found of %d --max-updates\n", len(list), found, argv.maxUpdates)
-	journal.Compare(journalCompact)
+	// journal.Compare(journalCompact)
 	return 0
 }

@@ -19,8 +19,6 @@ import (
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
-
 	"pgregory.net/rand"
 )
 
@@ -44,8 +42,8 @@ func (s *Shard) flushBuckets(now time.Time) (gap int64, sendTime uint32) {
 	}
 	// We want PreprocessingBucketTime to strictly increase, so that historic conveyor is strictly ordered
 
-	if s.SendTime < s.CurrentTime-superQueueLen { // efficient jump ahead after long machine sleep, etc.
-		s.SendTime += ((s.CurrentTime - superQueueLen - s.SendTime + superQueueLen - 1) / superQueueLen) * superQueueLen // not simplified for clear correctness
+	if s.SendTime < s.CurrentTime-(superQueueLen-superQueueFutureSlots) { // efficient jump ahead after long machine sleep, etc.
+		s.SendTime += ((s.CurrentTime - (superQueueLen - superQueueFutureSlots) - s.SendTime + superQueueLen - 1) / superQueueLen) * superQueueLen // not simplified for clear correctness
 	}
 
 	sendUpToTime := uint32(now.Add(-data_model.AgentWindow).Unix())
@@ -134,7 +132,6 @@ func (s *Shard) sampleBucket(bucket *data_model.MetricsBucket, sb *tlstatshouse.
 
 	keepF := func(v *data_model.MultiItem, _ uint32, sampling int) {
 		item := v.Key.TLMultiItemFromKey(bucket.Time)
-		item.SetWeightMultiplier(v.WeightMultiplier > 1) // we do not need actual values, it is either 1 or numshards
 		scratch = v.Tail.MultiValueToTL(v.MetricMeta, &item.Tail, v.SF, &item.FieldsMask, scratch)
 		scratch = item.Write(scratch[:0])
 
@@ -215,8 +212,14 @@ func (s *Shard) sampleBucket(bucket *data_model.MetricsBucket, sb *tlstatshouse.
 			MetricID:    accountMetric,
 		})
 	}
-	numShards := s.agent.NumShards()
-	remainingBudget := int64((config.SampleBudget + numShards - 1) / numShards)
+	clear(bucket.MultiItems) // help GC by splitting bucket dependency cluster into individual items
+	var remainingBudget int64
+	if budget, ok := config.ShardSampleBudget[int(s.ShardKey)]; ok {
+		remainingBudget = int64(budget)
+	} else {
+		numShards := int(s.agent.shardByMetricCount)
+		remainingBudget = int64((config.SampleBudget + numShards - 1) / numShards)
+	}
 	if remainingBudget > data_model.MaxUncompressedBucketSize/2 { // Algorithm is not exact
 		remainingBudget = data_model.MaxUncompressedBucketSize / 2
 	}
@@ -313,7 +316,7 @@ func (s *Shard) sendRecent(cancelCtx context.Context, cbd compressedBucketData, 
 	var respV3 tlstatshouse.SendSourceBucket3Response
 	err := shardReplica.sendSourceBucket3Compressed(ctx, cbd, sendMoreBytes, false, spare, &respV3)
 	if !spare {
-		shardReplica.recordSendResult(!isShardDeadError(err))
+		shardReplica.recordSendResult(err == nil)
 	}
 	if err != nil {
 		shardReplica.stats.recentSendFailed.Add(1)
@@ -362,7 +365,11 @@ func (s *Shard) goSendRecent(num int, wg *sync.WaitGroup, recentSendersSema *sem
 func (s *Shard) sendHistoric(cancelCtx context.Context, cbd compressedBucketData, scratchPad *[]byte) {
 	for {
 		nowUnix := uint32(time.Now().Unix())
-		if s.checkOutOfWindow(nowUnix, cbd) { // should check in for because time passes with attempts
+		s.mu.Lock()
+		historicWindow := uint32(s.config.HistoricWindow)
+		s.mu.Unlock()
+
+		if s.checkOutOfWindow(nowUnix, cbd, historicWindow) { // should check inside loop, because time passes with attempts
 			time.Sleep(200 * time.Millisecond)
 			// Deleting 5 seconds per second is good for us, and does not spin CPU too much
 			// This sleep will not affect shutdown time, so we keep it simple without timer+context.
@@ -543,8 +550,8 @@ func (s *Shard) popOldestHistoricSecondLocked(nowUnix uint32) (_ compressedBucke
 	return cbd, true
 }
 
-func (s *Shard) checkOutOfWindow(nowUnix uint32, cbd compressedBucketData) bool {
-	if nowUnix < data_model.MaxHistoricWindow || cbd.time >= nowUnix-data_model.MaxHistoricWindow { // Not bother sending, will receive error anyway
+func (s *Shard) checkOutOfWindow(nowUnix uint32, cbd compressedBucketData, historicWindow uint32) bool {
+	if nowUnix < historicWindow || cbd.time >= nowUnix-historicWindow { // Not bother sending, will receive error anyway
 		return false
 	}
 	s.agent.logF("Send Disaster: Bucket %d for shard %d does not fit into full admission window (now is %d), throwing out",
@@ -590,9 +597,10 @@ func (s *Shard) goEraseHistoric(wg *sync.WaitGroup, cancelCtx context.Context) {
 			continue
 		}
 		diskLimit := s.config.MaxHistoricDiskSize / int64(s.agent.NumShards())
+		historicWindow := uint32(s.config.HistoricWindow)
 		s.mu.Unlock()
 
-		if s.checkOutOfWindow(nowUnix, cbd) { // should check, because time passes with attempts
+		if s.checkOutOfWindow(nowUnix, cbd, historicWindow) { // should check here, because time passes with attempts
 			time.Sleep(200 * time.Millisecond)
 			// Deleting 5 seconds per second is good for us, and does not spin CPU too much
 			// This sleep will not affect shutdown time, so we keep it simple without timer+context.
@@ -634,15 +642,4 @@ func (s *Shard) DisableNewSends() {
 	s.BucketsToSend = nil
 	s.mu.Unlock()
 	s.cond.Broadcast()
-}
-
-func isShardDeadError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var rpcError *rpc.Error
-	if !errors.As(err, &rpcError) {
-		return true
-	}
-	return rpcError.Code != data_model.RPCErrorMissedRecentConveyor
 }

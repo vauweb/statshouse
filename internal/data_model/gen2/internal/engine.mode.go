@@ -33,7 +33,7 @@ func (item *EngineReadWriteMode) ClearReadEnabled(nat_fields_mask *uint32) {
 		*nat_fields_mask &^= 1 << 0
 	}
 }
-func (item EngineReadWriteMode) IsSetReadEnabled(nat_fields_mask uint32) bool {
+func (item *EngineReadWriteMode) IsSetReadEnabled(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<0) != 0
 }
 
@@ -49,13 +49,26 @@ func (item *EngineReadWriteMode) ClearWriteEnabled(nat_fields_mask *uint32) {
 		*nat_fields_mask &^= 1 << 1
 	}
 }
-func (item EngineReadWriteMode) IsSetWriteEnabled(nat_fields_mask uint32) bool {
+func (item *EngineReadWriteMode) IsSetWriteEnabled(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<1) != 0
 }
 
 func (item *EngineReadWriteMode) Reset() {
 	item.ReadEnabled = false
 	item.WriteEnabled = false
+}
+
+func (item *EngineReadWriteMode) FillRandom(rg *basictl.RandGenerator, nat_fields_mask uint32) {
+	if nat_fields_mask&(1<<0) != 0 {
+		item.ReadEnabled = basictl.RandomUint(rg)&1 == 1
+	} else {
+		item.ReadEnabled = false
+	}
+	if nat_fields_mask&(1<<1) != 0 {
+		item.WriteEnabled = basictl.RandomUint(rg)&1 == 1
+	} else {
+		item.WriteEnabled = false
+	}
 }
 
 func (item *EngineReadWriteMode) Read(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
@@ -76,7 +89,6 @@ func (item *EngineReadWriteMode) Read(w []byte, nat_fields_mask uint32) (_ []byt
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineReadWriteMode) WriteGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_fields_mask), nil
 }
@@ -98,7 +110,6 @@ func (item *EngineReadWriteMode) ReadBoxed(w []byte, nat_fields_mask uint32) (_ 
 	return item.Read(w, nat_fields_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineReadWriteMode) WriteBoxedGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_fields_mask), nil
 }
@@ -108,7 +119,7 @@ func (item *EngineReadWriteMode) WriteBoxed(w []byte, nat_fields_mask uint32) []
 	return item.Write(w, nat_fields_mask)
 }
 
-func (item *EngineReadWriteMode) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask uint32) error {
+func (item *EngineReadWriteMode) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_fields_mask uint32) error {
 	var propReadEnabledPresented bool
 	var propWriteEnabledPresented bool
 
@@ -163,14 +174,15 @@ func (item *EngineReadWriteMode) ReadJSON(legacyTypeNames bool, in *basictl.Json
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineReadWriteMode) WriteJSONGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask), nil
+func (item *EngineReadWriteMode) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_fields_mask), nil
 }
 
 func (item *EngineReadWriteMode) WriteJSON(w []byte, nat_fields_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_fields_mask)
 }
-func (item *EngineReadWriteMode) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask uint32) []byte {
+func (item *EngineReadWriteMode) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) []byte {
 	w = append(w, '{')
 	if nat_fields_mask&(1<<0) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -183,4 +195,12 @@ func (item *EngineReadWriteMode) WriteJSONOpt(newTypeNames bool, short bool, w [
 		w = basictl.JSONWriteBool(w, item.WriteEnabled)
 	}
 	return append(w, '}')
+}
+
+func (item *EngineReadWriteMode) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.mode"))
+}
+
+func (item *EngineReadWriteMode) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.mode")
 }

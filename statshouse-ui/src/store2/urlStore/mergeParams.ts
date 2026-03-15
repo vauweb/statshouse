@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import type { PlotParams, QueryParams } from '@/url2';
+import { PlotParams, QueryParams, sortUniqueKeys } from '@/url2';
 import { dequal } from 'dequal/lite';
 
 export function mergeParams(target: QueryParams, value: QueryParams): QueryParams {
@@ -22,7 +22,7 @@ export function mergeParams(target: QueryParams, value: QueryParams): QueryParam
     },
     { ...value.plots }
   );
-  let changeGroups = false;
+  let changeGroups = !dequal(target.orderGroup, value.orderGroup);
   const nextGroups = value.orderGroup.reduce(
     (res, gK) => {
       if (dequal(target.groups[gK], value.groups[gK])) {
@@ -34,7 +34,7 @@ export function mergeParams(target: QueryParams, value: QueryParams): QueryParam
     },
     { ...value.groups }
   );
-  let changeVariables = false;
+  let changeVariables = !dequal(target.orderVariables, value.orderVariables);
   const nextVariables = value.orderVariables.reduce(
     (res, gK) => {
       if (dequal(target.variables[gK], value.variables[gK])) {
@@ -54,9 +54,9 @@ export function mergeParams(target: QueryParams, value: QueryParams): QueryParam
     timeShifts: dequal(target.timeShifts, nextTimeShifts) ? target.timeShifts : nextTimeShifts,
     orderPlot: [],
     plots: changePlots ? nextPlots : target.plots,
-    orderGroup: dequal(target.orderGroup, value.orderGroup) ? target.orderGroup : value.orderGroup,
+    orderGroup: changeGroups ? value.orderGroup : target.orderGroup,
     groups: changeGroups ? nextGroups : target.groups,
-    orderVariables: dequal(target.orderVariables, value.orderVariables) ? target.orderVariables : value.orderVariables,
+    orderVariables: changeVariables ? value.orderVariables : target.orderVariables,
     variables: changeVariables ? nextVariables : target.variables,
   };
 }
@@ -70,13 +70,14 @@ function mergePlot(target: PlotParams | undefined = undefined, value: PlotParams
   }
   return {
     ...value,
-    groupBy: dequal(target.groupBy, value.groupBy) ? target.groupBy : value.groupBy.slice().sort(),
+    groupBy: dequal(target.groupBy, value.groupBy) ? target.groupBy : sortUniqueKeys(value.groupBy),
     filterIn: dequal(target.filterIn, value.filterIn) ? target.filterIn : value.filterIn,
     filterNotIn: dequal(target.filterNotIn, value.filterNotIn) ? target.filterNotIn : value.filterNotIn,
     what: dequal(target.what, value.what) ? target.what : value.what.slice().sort(),
-    events: dequal(target.events, value.events) ? target.events : value.events.slice().sort(),
-    eventsHide: dequal(target.eventsHide, value.eventsHide) ? target.eventsHide : value.eventsHide.slice().sort(),
-    eventsBy: dequal(target.eventsBy, value.eventsBy) ? target.eventsBy : value.eventsBy.slice().sort(),
+    events: dequal(target.events, value.events) ? target.events : sortUniqueKeys(value.events),
+    eventsHide: dequal(target.eventsHide, value.eventsHide) ? target.eventsHide : sortUniqueKeys(value.eventsHide),
+    eventsBy: dequal(target.eventsBy, value.eventsBy) ? target.eventsBy : sortUniqueKeys(value.eventsBy),
     yLock: dequal(target.yLock, value.yLock) ? target.yLock : value.yLock,
+    layout: dequal(target.layout, value.layout) ? target.layout : value.layout,
   };
 }

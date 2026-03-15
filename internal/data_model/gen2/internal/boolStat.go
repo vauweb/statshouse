@@ -28,6 +28,12 @@ func (item *BoolStat) Reset() {
 	item.StatUnknown = 0
 }
 
+func (item *BoolStat) FillRandom(rg *basictl.RandGenerator) {
+	item.StatTrue = basictl.RandomInt(rg)
+	item.StatFalse = basictl.RandomInt(rg)
+	item.StatUnknown = basictl.RandomInt(rg)
+}
+
 func (item *BoolStat) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.IntRead(w, &item.StatTrue); err != nil {
 		return w, err
@@ -38,7 +44,6 @@ func (item *BoolStat) Read(w []byte) (_ []byte, err error) {
 	return basictl.IntRead(w, &item.StatUnknown)
 }
 
-// This method is general version of Write, use it instead!
 func (item *BoolStat) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -57,7 +62,6 @@ func (item *BoolStat) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *BoolStat) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -72,6 +76,11 @@ func (item BoolStat) String() string {
 }
 
 func (item *BoolStat) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *BoolStat) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propStatTruePresented bool
 	var propStatFalsePresented bool
 	var propStatUnknownPresented bool
@@ -132,14 +141,15 @@ func (item *BoolStat) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) erro
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *BoolStat) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *BoolStat) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *BoolStat) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *BoolStat) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *BoolStat) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexStatTrue := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -174,4 +184,12 @@ func (item *BoolStat) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("boolStat", err.Error())
 	}
 	return nil
+}
+
+func (item *BoolStat) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("boolStat"))
+}
+
+func (item *BoolStat) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("boolStat")
 }

@@ -28,6 +28,12 @@ func (item *EngineRecordNextQueries) Reset() {
 	item.Append = false
 }
 
+func (item *EngineRecordNextQueries) FillRandom(rg *basictl.RandGenerator) {
+	item.Binlogname = basictl.RandomString(rg)
+	item.NumQueries = basictl.RandomInt(rg)
+	item.Append = basictl.RandomUint(rg)&1 == 1
+}
+
 func (item *EngineRecordNextQueries) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.StringRead(w, &item.Binlogname); err != nil {
 		return w, err
@@ -38,7 +44,6 @@ func (item *EngineRecordNextQueries) Read(w []byte) (_ []byte, err error) {
 	return BoolReadBoxed(w, &item.Append)
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineRecordNextQueries) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -57,7 +62,6 @@ func (item *EngineRecordNextQueries) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineRecordNextQueries) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -84,40 +88,53 @@ func (item *EngineRecordNextQueries) ReadResultJSON(legacyTypeNames bool, in *ba
 }
 
 func (item *EngineRecordNextQueries) WriteResultJSON(w []byte, ret bool) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *EngineRecordNextQueries) writeResultJSON(newTypeNames bool, short bool, w []byte, ret bool) (_ []byte, err error) {
+func (item *EngineRecordNextQueries) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret bool) (_ []byte, err error) {
 	w = basictl.JSONWriteBool(w, ret)
 	return w, nil
 }
 
-func (item *EngineRecordNextQueries) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineRecordNextQueries) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret bool
+	ret = basictl.RandomUint(rg)&1 == 1
+	return item.WriteResult(w, ret)
+}
+
+func (item *EngineRecordNextQueries) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret bool
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *EngineRecordNextQueries) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineRecordNextQueries) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret bool
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *EngineRecordNextQueries) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret bool
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *EngineRecordNextQueries) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.recordNextQueries")
+}
+
+func (item *EngineRecordNextQueries) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.recordNextQueries")
+}
+
+func (item *EngineRecordNextQueries) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.recordNextQueries")
+}
+
+func (item *EngineRecordNextQueries) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.recordNextQueries")
 }
 
 func (item EngineRecordNextQueries) String() string {
@@ -125,6 +142,11 @@ func (item EngineRecordNextQueries) String() string {
 }
 
 func (item *EngineRecordNextQueries) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineRecordNextQueries) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propBinlognamePresented bool
 	var propNumQueriesPresented bool
 	var propAppendPresented bool
@@ -185,14 +207,15 @@ func (item *EngineRecordNextQueries) ReadJSON(legacyTypeNames bool, in *basictl.
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineRecordNextQueries) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineRecordNextQueries) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineRecordNextQueries) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineRecordNextQueries) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineRecordNextQueries) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexBinlogname := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -227,4 +250,12 @@ func (item *EngineRecordNextQueries) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.recordNextQueries", err.Error())
 	}
 	return nil
+}
+
+func (item *EngineRecordNextQueries) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.recordNextQueries"))
+}
+
+func (item *EngineRecordNextQueries) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.recordNextQueries")
 }

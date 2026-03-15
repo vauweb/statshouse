@@ -13,6 +13,15 @@ import (
 
 var _ = basictl.NatWrite
 
+func BuiltinVectorLongFillRandom(rg *basictl.RandGenerator, vec *[]int64) {
+	rg.IncreaseDepth()
+	l := basictl.RandomSize(rg)
+	*vec = make([]int64, l)
+	for i := range *vec {
+		(*vec)[i] = basictl.RandomLong(rg)
+	}
+	rg.DecreaseDepth()
+}
 func BuiltinVectorLongRead(w []byte, vec *[]int64) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
@@ -42,7 +51,92 @@ func BuiltinVectorLongWrite(w []byte, vec []int64) []byte {
 	return w
 }
 
-func BuiltinVectorLongReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]int64) error {
+func BuiltinVectorLongCalculateLayout(sizes []int, optimizeEmpty bool, vec *[]int64) ([]int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return sizes, 0
+		}
+		return sizes, 1
+	}
+	sizePosition := len(sizes)
+	sizes = append(sizes, 0)
+
+	currentSize := 0
+	var sz int
+
+	currentSize += basictl.TL2CalculateSize(len(*vec))
+	for i := 0; i < len(*vec); i++ {
+		currentSize += 8
+	}
+	sizes[sizePosition] = currentSize
+	currentSize += basictl.TL2CalculateSize(currentSize)
+	Unused(sz)
+	return sizes, currentSize
+}
+
+func BuiltinVectorLongInternalWriteTL2(w []byte, sizes []int, optimizeEmpty bool, vec *[]int64) ([]byte, []int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return w, sizes, 0
+		}
+		w = append(w, 0)
+		return w, sizes, 1
+	}
+	currentSize := sizes[0]
+	sizes = sizes[1:]
+	w = basictl.TL2WriteSize(w, currentSize)
+	if currentSize == 0 {
+		return w, sizes, 1
+	}
+	oldLen := len(w)
+	w = basictl.TL2WriteSize(w, len(*vec))
+
+	var sz int
+	for i := 0; i < len(*vec); i++ {
+		w = basictl.LongWrite(w, (*vec)[i])
+	}
+	Unused(sz)
+	if len(w)-oldLen != currentSize {
+		panic("tl2: mismatch between calculate and write")
+	}
+	return w, sizes, currentSize
+}
+
+func BuiltinVectorLongInternalReadTL2(r []byte, vec *[]int64) (_ []byte, err error) {
+	currentSize := 0
+	if r, currentSize, err = basictl.TL2ParseSize(r); err != nil {
+		return r, err
+	}
+	if len(r) < currentSize {
+		return r, basictl.TL2Error("not enough data: expected %d, got %d", currentSize, len(r))
+	}
+
+	currentR := r[:currentSize]
+	r = r[currentSize:]
+
+	elementCount := 0
+	if currentSize != 0 {
+		if currentR, elementCount, err = basictl.TL2ParseSize(currentR); err != nil {
+			return r, err
+		}
+		if elementCount > len(currentR) {
+			return r, basictl.TL2ElementCountError(elementCount, currentR)
+		}
+	}
+
+	if cap(*vec) < elementCount {
+		*vec = make([]int64, elementCount)
+	}
+	*vec = (*vec)[:elementCount]
+	for i := 0; i < elementCount; i++ {
+		if currentR, err = basictl.LongRead(currentR, &(*vec)[i]); err != nil {
+			return currentR, err
+		}
+	}
+	return r, nil
+}
+
+func BuiltinVectorLongReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]int64) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -71,9 +165,10 @@ func BuiltinVectorLongReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec 
 }
 
 func BuiltinVectorLongWriteJSON(w []byte, vec []int64) []byte {
-	return BuiltinVectorLongWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorLongWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorLongWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []int64) []byte {
+func BuiltinVectorLongWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []int64) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)

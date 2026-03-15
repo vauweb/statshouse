@@ -7,15 +7,15 @@
 
 ---types---
 
-statshouse.sample_factor metric:int value:float = statshouse.SampleFactor;
+statshouse.sampleFactor metric:int value:float = statshouse.SampleFactor;
 
-statshouse.ingestion_status2 env:int metric:int value:float = statshouse.IngestionStatus2;
+statshouse.ingestionStatus2 env:int metric:int value:float = statshouse.IngestionStatus2;
 
 statshouse.centroidFloat#73fd01e0 value:float count:float = statshouse.CentroidFloat;
 
 statshouse.mapping str:string value:int = statshouse.Mapping;
 
-statshouse.multi_value#0c803e06 {fields_mask:#}
+statshouse.multiValue#0c803e06 {fields_mask:#}
     counter: fields_mask.0?double // no counter means counter equal to 0
     counter_eq_1: fields_mask.1?true // optimization for most common value
 
@@ -36,15 +36,15 @@ statshouse.multi_value#0c803e06 {fields_mask:#}
     // optimization for single values: if max_host_tag is set and *_host_tag below is not set, it is equal to max_host_tag
     min_host_tag: fields_mask.8?int
     max_counter_host_tag: fields_mask.9?int
-    // field mask bits 10 - 12 are used in statshouse.multi_item
+    // field mask bits 10 - 12 are used in statshouse.multiItem
     max_host_stag: fields_mask.14?string
     min_host_stag: fields_mask.15?string
     max_counter_host_stag: fields_mask.16?string
     = statshouse.MultiValue fields_mask;
 
-statshouse.top_element#9ffdea42 stag:string fields_mask:# tag:fields_mask.10?int value:(statshouse.multi_value fields_mask) = statshouse.TopElement;
+statshouse.topElement#9ffdea42 stag:string fields_mask:# tag:fields_mask.10?int value:(statshouse.multiValue fields_mask) = statshouse.TopElement;
 
-statshouse.multi_item#0c803e07
+statshouse.multiItem#0c803e07
     fields_mask: # // conveyor V2 agents send shard num in top 8 bits here
     metric: int
     keys: (vector int)
@@ -53,17 +53,17 @@ statshouse.multi_item#0c803e07
 
     t: fields_mask.10?# // timestamp, should be rare
 
-    tail: (statshouse.multi_value fields_mask) // no fields_mask, because anyway uses 0 bytes if counter with 0.0 or 1.0
+    tail: (statshouse.multiValue fields_mask) // no fields_mask, because anyway uses 0 bytes if counter with 0.0 or 1.0
     // won't be set in a v3 pipeline
-    top: fields_mask.11?(vector (statshouse.top_element)) // most items are without string keys, so we save 4 bytes using fields_mask
+    top: fields_mask.11?(vector (statshouse.topElement)) // most items are without string keys, so we save 4 bytes using fields_mask
     = statshouse.MultiItem;
 
 statshouse.sourceBucket3#16c4dd7b
     fields_mask: #
     // TODO: check how it is used and maybe change to a new version
-    metrics: (vector (statshouse.multi_item)) // must be sorted by metric (but for now order is not used)
-    sample_factors: (vector statshouse.sample_factor) // We need as compact representation as possible.
-    ingestion_status_ok2: (vector statshouse.ingestion_status2) // We need as compact representation as possible.
+    metrics: (vector (statshouse.multiItem)) // must be sorted by metric (but for now order is not used)
+    sample_factors: (vector statshouse.sampleFactor) // We need as compact representation as possible.
+    ingestion_status_ok2: (vector statshouse.ingestionStatus2) // We need as compact representation as possible.
   = statshouse.SourceBucket3;
 
 // TODO - remove ttl_nanosec
@@ -88,8 +88,15 @@ statshouse.getConfigResult#0c803d07 {fields_mask:#}
 statshouse.getConfigResult3#f13698cb
     addresses: (vector string) // 3 replicas for each shard
     shard_by_metric_count: # // should be <= len(addresses), so that we can add 17'th shard without breaking all metrics which are spread automatically between first 16.
-    unused: 12*[int] // arbitrary space for extensions, so we can avoid using fields masks and complications with them
-    unused_s: 4*[string] // arbitrary space for extensions, so we can avoid using fields masks and complications with them
+    fields_mask: #
+    ingress_proxy: fields_mask.0?true
+    agent_ip: 4*[int] // as visible by server during getConfig
+
+    unused: 7*[int] // arbitrary space for extensions, so we can avoid using fields masks and complications with them
+
+    connected_to: string // hostname or other ID of ingress proxy or aggregator
+
+    unused_s: 3*[string] // arbitrary space for extensions, so we can avoid using fields masks and complications with them
 = statshouse.GetConfigResult3;
 
 // proxy uses and fills data in this header for all requests
@@ -164,6 +171,7 @@ statshouse.sendSourceBucket3Response#0e177acc
     header: (statshouse.commonProxyHeader fields_mask) // the only request not passed through proxy. But we make it with common header anyway.
     cluster:string // prevent wrong configuration
     ts: fields_mask.0?true
+    newIngressVersion: fields_mask.1?true // for ingress version without compat
      = statshouse.GetConfigResult fields_mask;
 
 @readwrite statshouse.getConfig3#7d7b4991
@@ -171,6 +179,7 @@ statshouse.sendSourceBucket3Response#0e177acc
     header: (statshouse.commonProxyHeader fields_mask) // the only request not passed through proxy. But we make it with common header anyway.
     cluster:string // prevent wrong configuration
     previousConfig: fields_mask.0?statshouse.getConfigResult3 // if sent, will long poll on it
+    newIngressVersion: fields_mask.1?true // for ingress version without compat
      = statshouse.GetConfigResult3;
 
 // For ingress proxy, we pass shard_replica/shard_total immediately after fields mask

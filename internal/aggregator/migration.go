@@ -8,6 +8,7 @@ package aggregator
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -16,13 +17,14 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/VKCOM/statshouse/internal/chutil"
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/vkgo/rowbinary"
+	"github.com/VKCOM/statshouse/internal/vkgo/kittenhouseclient/rowbinary"
 )
 
 const (
@@ -32,41 +34,44 @@ const (
 	// Migration coordination constants
 	maxRetryAttempts = 10
 	retryDelay       = 5 * time.Second
+
+	migrationSourceV2   = ""
+	migrationSourceV1   = "v1"
+	migrationSourceStop = "v1_stop"
 )
 
-func getBuiltinShardingMetrics() map[int32]int {
-	shardingMetrics := make(map[int32]int)
+func getBuiltinMetricsSorted() []*format.MetricMetaValue {
+	var shardingMetrics []*format.MetricMetaValue
 
-	for metricID, metric := range format.BuiltinMetrics {
-		if metric.ShardStrategy == format.ShardBuiltin {
-			// For metrics with MetricTagID > 0, use the specified tag
-			// For metrics with MetricTagID = 0 (like contributors_log), they appear in all shards
-			if metric.MetricTagID > 0 {
-				shardingMetrics[metricID] = int(metric.MetricTagID)
-			} else {
-				// Special case: metrics with MetricTagID = 0 appear in all shards
-				shardingMetrics[metricID] = -1 // Use -1 to indicate "appears in all shards"
-			}
-		}
+	for _, metric := range format.BuiltinMetrics {
+		shardingMetrics = append(shardingMetrics, metric)
 	}
+	slices.SortFunc(shardingMetrics, func(a, b *format.MetricMetaValue) int {
+		return cmp.Compare(a.MetricID, b.MetricID)
+	})
 
 	return shardingMetrics
 }
 
 // getConditionForSelect returns the complete condition for SELECT queries
-// This handles both regular metrics and ShardBuiltin metrics in a single query
+// This handles both regular metrics and ShardBuiltinDist metrics in a single query
 func getConditionForSelect(totalShards int, shardKey int32, tagPrefix string) string {
 	// Get all builtin metrics with special sharding
-	shardingMetrics := getBuiltinShardingMetrics()
+	shardingMetrics := getBuiltinMetricsSorted()
 
 	// Collect builtin metric IDs to exclude from regular sharding
 	var builtinMetricIDs []string
 	var builtinConditions []string
 
-	for metricID, tagID := range shardingMetrics {
+	for _, metric := range shardingMetrics {
+		if metric.ShardStrategy != format.ShardBuiltinDist {
+			continue
+		}
+		metricID := metric.MetricID
+		tagID := metric.MetricTagIndex()
 		builtinMetricIDs = append(builtinMetricIDs, fmt.Sprintf("%d", metricID))
 
-		if tagID == -1 {
+		if tagID == 0 {
 			// Special case: contributors_log(_rev) appears in all shards, but we don't know where to put it, so we just skip it
 			continue
 		}
@@ -76,22 +81,22 @@ func getConditionForSelect(totalShards int, shardKey int32, tagPrefix string) st
 	}
 
 	// Regular metrics condition: exclude builtin metrics to avoid duplication
-	regularCondition := fmt.Sprintf("(metric %% %d = %d AND metric NOT IN (%s) AND count > 0)",
+	regularCondition := fmt.Sprintf("(metric %% %d = %d AND metric NOT IN (%s))",
 		totalShards, shardKey-1, strings.Join(builtinMetricIDs, ", "))
 
 	// Combine all conditions with OR
 	allConditions := append([]string{regularCondition}, builtinConditions...)
-	return "(" + strings.Join(allConditions, " OR ") + ")"
+	return "((" + strings.Join(allConditions, " OR ") + ") AND count > 0)"
 }
 
 // getConditionForSelectV2 returns the complete condition for SELECT queries on V2 tables
-// This handles both regular metrics and ShardBuiltin metrics in a single query
+// This handles both regular metrics and ShardBuiltinDist metrics in a single query
 func getConditionForSelectV2(totalShards int, shardKey int32) string {
 	return getConditionForSelect(totalShards, shardKey, "key")
 }
 
 // getConditionForSelectV3 returns the complete condition for SELECT queries on V3 tables
-// This handles both regular metrics and ShardBuiltin metrics in a single query
+// This handles both regular metrics and ShardBuiltinDist metrics in a single query
 func getConditionForSelectV3(totalShards int, shardKey int32) string {
 	return getConditionForSelect(totalShards, shardKey, "tag")
 }
@@ -111,8 +116,8 @@ func NewDefaultMigrationConfig() *MigrationConfig {
 	return &MigrationConfig{
 		V2TableName:    "statshouse_value_1h_dist",
 		V3TableName:    "statshouse_v3_1h",
-		StateTableName: "migration_state",
-		LogsTableName:  "migration_logs",
+		StateTableName: "statshouse_migration_state",
+		LogsTableName:  "statshouse_migration_logs",
 		StepDuration:   time.Hour,
 		TotalShards:    16,
 	}
@@ -126,7 +131,9 @@ type MigrationState struct {
 	Ended    *time.Time `json:"ended,omitempty"` // When migration completed
 	V2Rows   uint64     `json:"v2_rows"`         // Rows read from V2 table
 	V3Rows   uint64     `json:"v3_rows"`         // Rows written to V3 table
+	V1Rows   uint64     `json:"v1_rows"`         // Rows read from V1/V1-stop table
 	Retry    uint32     `json:"retry"`           // Number of retries attempted
+	Source   string     `json:"source"`          // Migration source identifier
 }
 
 // MigrationLog represents a log entry for migration operations
@@ -136,11 +143,15 @@ type MigrationLog struct {
 	Ts        time.Time `json:"ts"`      // Migration timestamp
 	Retry     uint32    `json:"retry"`   // Retry attempt number
 	Message   string    `json:"message"` // Error message from ClickHouse (or other info)
+	Source    string    `json:"source"`
 }
 
 // goMigrate runs the migration loop in a goroutine.
 // It coordinates with other shards to migrate data from V2 to V3 format.
 func (a *Aggregator) goMigrate(cancelCtx context.Context) {
+	// DEPRECATED
+	return
+
 	if a.replicaKey != 1 {
 		log.Printf("[migration] Skipping migration: replica key is %d, expected 1", a.replicaKey)
 		return // Only one replica should run migration per shard
@@ -155,15 +166,6 @@ func (a *Aggregator) goMigrate(cancelCtx context.Context) {
 	httpClient := makeHTTPClient()
 
 	log.Printf("[migration] Starting migration routine for shard %d", shardKey)
-
-	// Initialize migration tables
-	if err := a.createMigrationTables(httpClient); err != nil {
-		log.Printf("[migration] Failed to create migration tables: %v", err)
-		return
-	}
-
-	log.Printf("[migration] Starting migration routine for shard %d", shardKey)
-
 	for {
 		// Check if we should continue migrating
 		select {
@@ -183,15 +185,20 @@ func (a *Aggregator) goMigrate(cancelCtx context.Context) {
 		}
 		a.configMu.RUnlock()
 
+		a.migrationMu.Lock()
+		insertTimeEWMA := a.insertTimeEWMA
+		lastErrorTs := a.lastErrorTs
+		a.migrationMu.Unlock()
+
 		// Check system load before proceeding
 		nowUnix := uint32(time.Now().Unix())
-		if a.lastErrorTs != 0 && nowUnix >= a.lastErrorTs && nowUnix-a.lastErrorTs < noErrorsWindow {
-			log.Printf("[migration] Skipping: last error was %d seconds ago", nowUnix-a.lastErrorTs)
-			time.Sleep(time.Duration(noErrorsWindow-(nowUnix-a.lastErrorTs)) * time.Second)
+		if lastErrorTs != 0 && nowUnix >= lastErrorTs && nowUnix-lastErrorTs < noErrorsWindow {
+			log.Printf("[migration] Skipping: last error was %d seconds ago", nowUnix-lastErrorTs)
+			time.Sleep(time.Duration(noErrorsWindow-(nowUnix-lastErrorTs)) * time.Second)
 			continue
 		}
-		if a.insertTimeEWMA > maxInsertTime {
-			log.Printf("[migration] Skipping: EWMA insert time is too high (%.2fs)", a.insertTimeEWMA)
+		if insertTimeEWMA > maxInsertTime {
+			log.Printf("[migration] Skipping: EWMA insert time is too high (%.2fs)", insertTimeEWMA)
 			a.configMu.RLock()
 			delaySec := a.configR.MigrationDelaySec
 			a.configMu.RUnlock()
@@ -242,7 +249,7 @@ func migrateSingleStep(httpClient *http.Client, khAddr, khUser, khPassword strin
 
 	// Step 1: Select data from V2 table for the given timestamp and shard
 	// Include all aggregate fields - our parsers handle ClickHouse internal format correctly
-	// For ShardBuiltin metrics, we need special sharding conditions
+	// For ShardBuiltinDist metrics, we need special sharding conditions
 	shardingCondition := getConditionForSelectV2(config.TotalShards, shardKey)
 	selectQuery := fmt.Sprintf(`
 		SELECT metric, time, key0, key1, key2, key3, key4, key5, key6, key7, key8, key9, key10, key11, key12, key13, key14, key15, skey,
@@ -352,9 +359,10 @@ func processV2Chunk(reader *bufio.Reader, output io.Writer) (rowsProcessed int, 
 	rowData := make([]byte, 0, 4096) // Buffer for single converted row
 	log.Printf("[migration] Starting to process V2 rows...")
 
+	var v2row v2Row
 	for {
 		// Try to parse one V2 row
-		v2Row, parseErr := parseV2Row(reader)
+		parseErr := parseV2Row(reader, &v2row)
 		if parseErr != nil {
 			if errors.Is(parseErr, io.EOF) {
 				// End of input, we're done
@@ -373,7 +381,7 @@ func processV2Chunk(reader *bufio.Reader, output io.Writer) (rowsProcessed int, 
 
 		// Convert to V3 format
 		rowData = rowData[:0] // Reset buffer
-		rowData = convertRowV2ToV3(rowData, v2Row)
+		rowData = convertRowV2ToV3(rowData, &v2row)
 
 		// Write converted row
 		if _, writeErr := output.Write(rowData); writeErr != nil {
@@ -397,45 +405,43 @@ type v2Row struct {
 	max       float64
 	sum       float64
 	sumsquare float64
-	perc      *data_model.ChDigest
-	uniq      *data_model.ChUnique
+	perc      data_model.ChDigest
+	uniq      data_model.ChUnique
 	min_host  data_model.ArgMinInt32Float32
 	max_host  data_model.ArgMaxInt32Float32
 }
 
 // parseV2Row parses a single V2 row from rowbinary data using io.ByteReader
-func parseV2Row(reader *bufio.Reader) (*v2Row, error) {
-	row := &v2Row{}
-
+func parseV2Row(reader *bufio.Reader, row *v2Row) error {
 	// Parse metric (Int32)
 	if err := binary.Read(reader, binary.LittleEndian, &row.metric); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Parse time (DateTime = UInt32)
 	if err := binary.Read(reader, binary.LittleEndian, &row.time); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Parse all 16 keys (key0 through key15)
 	for i := 0; i < 16; i++ {
 		if err := binary.Read(reader, binary.LittleEndian, &row.keys[i]); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// Parse skey (String) - LEB128 varint format
 	skeyLen, err := binary.ReadUvarint(reader)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	// Bounds check for skey in order to avoid huge allocations in case of a bug
 	if skeyLen > 4096 {
-		return nil, fmt.Errorf("invalid skey length: %d", skeyLen)
+		return fmt.Errorf("invalid skey length: %d", skeyLen)
 	}
 	skeyBytes := make([]byte, skeyLen)
 	if _, err := io.ReadFull(reader, skeyBytes); err != nil {
-		return nil, err
+		return err
 	}
 	row.skey = string(skeyBytes)
 	skeyBytes = nil
@@ -443,53 +449,51 @@ func parseV2Row(reader *bufio.Reader) (*v2Row, error) {
 	// Parse simple aggregates (Float64 each)
 	// count
 	if err := binary.Read(reader, binary.LittleEndian, &row.count); err != nil {
-		return nil, err
+		return err
 	}
 
 	// min
 	if err := binary.Read(reader, binary.LittleEndian, &row.min); err != nil {
-		return nil, err
+		return err
 	}
 
 	// max
 	if err := binary.Read(reader, binary.LittleEndian, &row.max); err != nil {
-		return nil, err
+		return err
 	}
 
 	// sum
 	if err := binary.Read(reader, binary.LittleEndian, &row.sum); err != nil {
-		return nil, err
+		return err
 	}
 
 	// sumsquare
 	if err := binary.Read(reader, binary.LittleEndian, &row.sumsquare); err != nil {
-		return nil, err
+		return err
 	}
 
 	// Parse aggregate fields from ClickHouse internal format
 	// percentiles
-	row.perc = &data_model.ChDigest{}
 	if err := row.perc.ReadFrom(reader); err != nil {
-		return nil, fmt.Errorf("failed to parse percentiles: %w", err)
+		return fmt.Errorf("failed to parse percentiles: %w", err)
 	}
 
 	// uniq_state
-	row.uniq = &data_model.ChUnique{}
 	if err := row.uniq.ReadFrom(reader); err != nil {
-		return nil, fmt.Errorf("failed to parse uniq_state: %w", err)
+		return fmt.Errorf("failed to parse uniq_state: %w", err)
 	}
 
 	// min_host
 	if err := row.min_host.ReadFrom(reader); err != nil {
-		return nil, fmt.Errorf("failed to parse min_host: %w", err)
+		return fmt.Errorf("failed to parse min_host: %w", err)
 	}
 
 	// max_host
 	if err := row.max_host.ReadFrom(reader); err != nil {
-		return nil, fmt.Errorf("failed to parse max_host: %w", err)
+		return fmt.Errorf("failed to parse max_host: %w", err)
 	}
 
-	return row, nil
+	return nil
 }
 
 // convertRowV2ToV3 converts a single V2 row to V3 rowbinary format
@@ -539,48 +543,10 @@ func convertRowV2ToV3(buf []byte, row *v2Row) []byte {
 	return buf
 }
 
-// createMigrationTables creates the migration state and log tables if they don't exist
-func (a *Aggregator) createMigrationTables(httpClient *http.Client) error {
-	var config *MigrationConfig = a.migrationConfig
-	stateTableQuery := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			shard_key Int32,
-			ts DateTime,
-			started DateTime,
-			ended Nullable(DateTime),
-			v2_rows UInt64,
-			v3_rows UInt64,
-			retry UInt32
-		) ENGINE = ReplacingMergeTree(retry)
-		ORDER BY (shard_key, ts, started)`, config.StateTableName)
-	req := &chutil.ClickHouseHttpRequest{HttpClient: httpClient, Addr: a.config.KHAddr, User: a.config.KHUser, Password: a.config.KHPassword, Query: stateTableQuery}
-	resp, err := req.Execute(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to create migration_state table: %w", err)
-	}
-	resp.Close()
-	logTableQuery := fmt.Sprintf(`
-		CREATE TABLE IF NOT EXISTS %s (
-			timestamp DateTime,
-			shard_key Int32,
-			ts DateTime,
-			retry UInt32,
-			message String
-		) ENGINE = MergeTree()
-		ORDER BY (timestamp, shard_key, ts, retry)`, config.LogsTableName)
-	req.Query = logTableQuery
-	resp, err = req.Execute(context.Background())
-	if err != nil {
-		return fmt.Errorf("failed to create migration_logs table: %w", err)
-	}
-	resp.Close()
-	return nil
-}
-
 // findNextTimestampToMigrate finds the next timestamp that needs migration for this shard
 func (a *Aggregator) findNextTimestampToMigrate(httpClient *http.Client, shardKey int32) (time.Time, error) {
 	a.configMu.RLock()
-	startTs, endTs := a.configR.ParseMigrationTimeRange()
+	startTs, endTs := a.configR.ParseMigrationTimeRange(a.configR.MigrationTimeRange)
 	a.configMu.RUnlock()
 
 	// If no time range configured, migration is disabled
@@ -593,9 +559,9 @@ func (a *Aggregator) findNextTimestampToMigrate(httpClient *http.Client, shardKe
 	latestMigratedQuery := fmt.Sprintf(`
 		SELECT toUnixTimestamp(ts) as ts_unix
 		FROM %s
-		WHERE shard_key = %d AND ended IS NOT NULL AND ts_unix <= %d AND ts_unix >= %d
+		WHERE shard_key = %d AND source = '%s' AND ended IS NOT NULL AND ts_unix <= %d AND ts_unix >= %d
 		ORDER BY ts ASC
-		LIMIT 1`, a.migrationConfig.StateTableName, shardKey, startTs, endTs)
+		LIMIT 1`, a.migrationConfig.StateTableName, shardKey, migrationSourceV2, startTs, endTs)
 
 	req := &chutil.ClickHouseHttpRequest{
 		HttpClient: httpClient,
@@ -649,7 +615,7 @@ func (a *Aggregator) findNextTimestampToMigrate(httpClient *http.Client, shardKe
 }
 
 // updateMigrationState updates the migration state for a shard and timestamp
-func (a *Aggregator) updateMigrationState(httpClient *http.Client, shardKey int32, ts time.Time, v2Rows, v3Rows uint64, retryCount uint32, started time.Time, ended *time.Time) error {
+func (a *Aggregator) updateMigrationState(httpClient *http.Client, shardKey int32, ts time.Time, sourceRows, v3Rows uint64, retryCount uint32, started time.Time, ended *time.Time, source string) error {
 	endedStr := "NULL"
 	if ended != nil {
 		endedStr = fmt.Sprintf("'%s'", ended.Format("2006-01-02 15:04:05"))
@@ -657,10 +623,10 @@ func (a *Aggregator) updateMigrationState(httpClient *http.Client, shardKey int3
 
 	updateQuery := fmt.Sprintf(`
 		INSERT INTO %s
-		(shard_key, ts, started, ended, v2_rows, v3_rows, retry)
-		VALUES (%d, toDateTime(%d), '%s', %s, %d, %d, %d)`,
+		(shard_key, ts, started, ended, v3_rows, source_rows, retry, source)
+		VALUES (%d, toDateTime(%d), '%s', %s, %d, %d, %d, '%s')`,
 		a.migrationConfig.StateTableName, shardKey, ts.Unix(), started.Format("2006-01-02 15:04:05"),
-		endedStr, v2Rows, v3Rows, retryCount)
+		endedStr, v3Rows, sourceRows, retryCount, source)
 
 	req := &chutil.ClickHouseHttpRequest{
 		HttpClient: httpClient,
@@ -692,7 +658,7 @@ func (a *Aggregator) migrateTimestampWithRetry(httpClient *http.Client, ts time.
 			log.Printf("[migration] Retry attempt %d for timestamp %s", attempt+1, ts.Format("2006-01-02 15:04:05"))
 			time.Sleep(retryDelay * time.Duration(math.Pow(2, float64(attempt))))
 		}
-		a.updateMigrationState(httpClient, shardKey, ts, v2Rows, 0, uint32(attempt), started, nil)
+		a.updateMigrationState(httpClient, shardKey, ts, v2Rows, 0, uint32(attempt), started, nil, migrationSourceV2)
 		err := migrateSingleStep(httpClient, a.config.KHAddr, a.config.KHUser, a.config.KHPassword, uint32(ts.Unix()), shardKey, a.migrationConfig)
 		if err == nil {
 			v3Rows, countErr := a.countV3Rows(httpClient, ts, shardKey)
@@ -701,10 +667,10 @@ func (a *Aggregator) migrateTimestampWithRetry(httpClient *http.Client, ts time.
 				v3Rows = 0
 			}
 			now := time.Now()
-			a.updateMigrationState(httpClient, shardKey, ts, v2Rows, v3Rows, uint32(attempt), started, &now)
+			a.updateMigrationState(httpClient, shardKey, ts, v2Rows, v3Rows, uint32(attempt), started, &now, migrationSourceV2)
 
 			// Write migration log metric
-			migrationTags := []int32{0, int32(ts.Unix())}
+			migrationTags := []int32{0, int32(ts.Unix()), format.TagValueIDMigrationSourceV2}
 			a.sh2.AddValueCounterHost(uint32(now.Unix()), format.BuiltinMetricMetaMigrationLog, migrationTags, float64(v3Rows), 1, a.aggregatorHostTag)
 
 			return v2Rows, v3Rows, nil
@@ -713,14 +679,14 @@ func (a *Aggregator) migrateTimestampWithRetry(httpClient *http.Client, ts time.
 		log.Printf("[migration] Attempt %d failed for timestamp %s: %v", attempt+1, ts.Format("2006-01-02 15:04:05"), err)
 		logQuery := fmt.Sprintf(`
 		INSERT INTO %s
-		(timestamp, shard_key, ts, retry, message)
-		VALUES ('%s', %d, toDateTime(%d), %d, '%s')`, a.migrationConfig.LogsTableName, time.Now().Format("2006-01-02 15:04:05"), shardKey, ts.Unix(), attempt+1, err.Error())
+		(timestamp, shard_key, ts, retry, message, source)
+		VALUES ('%s', %d, toDateTime(%d), %d, '%s', '%s')`, a.migrationConfig.LogsTableName, time.Now().Format("2006-01-02 15:04:05"), shardKey, ts.Unix(), attempt+1, err.Error(), migrationSourceV2)
 		logReq := &chutil.ClickHouseHttpRequest{HttpClient: httpClient, Addr: a.config.KHAddr, User: a.config.KHUser, Password: a.config.KHPassword, Query: logQuery}
 		if logResp, logErr := logReq.Execute(context.Background()); logErr == nil {
 			logResp.Close()
 		}
 	}
-	a.updateMigrationState(httpClient, shardKey, ts, v2Rows, 0, uint32(maxRetryAttempts), started, nil)
+	a.updateMigrationState(httpClient, shardKey, ts, v2Rows, 0, uint32(maxRetryAttempts), started, nil, migrationSourceV2)
 	return 0, 0, fmt.Errorf("migration failed after %d attempts, last error: %w", maxRetryAttempts, lastErr)
 }
 

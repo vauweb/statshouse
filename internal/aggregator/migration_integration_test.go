@@ -21,14 +21,15 @@ import (
 	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/VKCOM/statshouse/internal/chutil"
-	"github.com/VKCOM/statshouse/internal/data_model"
-	"github.com/VKCOM/statshouse/internal/vkgo/rowbinary"
 	"github.com/hrissan/tdigest"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/clickhouse"
 	"pgregory.net/rand"
+
+	"github.com/VKCOM/statshouse/internal/chutil"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/vkgo/kittenhouseclient/rowbinary"
 )
 
 const clickhouseImage = "clickhouse/clickhouse-server:24.3-alpine"
@@ -92,6 +93,22 @@ func TestMain(m *testing.M) {
 	os.Exit(exitCode)
 }
 
+// executeQueryRequest is a helper to execute a ClickHouse query and close the response.
+func executeQueryRequest(query string) error {
+	req := &chutil.ClickHouseHttpRequest{
+		HttpClient: httpClient,
+		Addr:       clickHouseAddr,
+		User:       "default",
+		Password:   "secret",
+		Query:      query,
+	}
+	resp, err := req.Execute(context.Background())
+	if err != nil {
+		return err
+	}
+	return resp.Close()
+}
+
 // ensureTablesCreated creates the necessary tables if they haven't been created yet
 func ensureTablesCreated() error {
 	if tablesCreated {
@@ -99,31 +116,23 @@ func ensureTablesCreated() error {
 	}
 
 	// Create V2 table
-	req := &chutil.ClickHouseHttpRequest{
-		HttpClient: httpClient,
-		Addr:       clickHouseAddr,
-		User:       "default",
-		Password:   "secret",
-		Query:      createV2tableQuery,
-	}
-	resp, err := req.Execute(context.Background())
-	if err != nil {
+	if err := executeQueryRequest(createV2tableQuery); err != nil {
 		return fmt.Errorf("failed to create V2 table: %w", err)
-	}
-	err = resp.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close V2 table creation response: %w", err)
 	}
 
 	// Create V3 table
-	req.Query = createV3tableQuery
-	resp, err = req.Execute(context.Background())
-	if err != nil {
+	if err := executeQueryRequest(createV3tableQuery); err != nil {
 		return fmt.Errorf("failed to create V3 table: %w", err)
 	}
-	err = resp.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close V3 table creation response: %w", err)
+
+	// Create migration state table
+	if err := executeQueryRequest(createMigrationStateTableQuery); err != nil {
+		return fmt.Errorf("failed to create migration state table: %w", err)
+	}
+
+	// Create migration logs table
+	if err := executeQueryRequest(createMigrationLogsTableQuery); err != nil {
+		return fmt.Errorf("failed to create migration logs table: %w", err)
 	}
 
 	tablesCreated = true
@@ -159,6 +168,26 @@ func cleanupTables() error {
 	err = resp.Close()
 	if err != nil {
 		return fmt.Errorf("failed to close V3 table clear response: %w", err)
+	}
+
+	// Clear migration state data
+	req.Query = "TRUNCATE TABLE statshouse_migration_state"
+	resp, err = req.Execute(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to clear migration state table: %w", err)
+	}
+	if err := resp.Close(); err != nil {
+		return fmt.Errorf("failed to close migration state table clear response: %w", err)
+	}
+
+	// Clear migration logs data
+	req.Query = "TRUNCATE TABLE statshouse_migration_logs"
+	resp, err = req.Execute(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to clear migration logs table: %w", err)
+	}
+	if err := resp.Close(); err != nil {
+		return fmt.Errorf("failed to close migration logs table clear response: %w", err)
 	}
 
 	return nil
@@ -213,6 +242,29 @@ const createV3tableQuery = `CREATE TABLE statshouse_v3_1h (
 		uniq_state AggregateFunction(uniq, Int64)
 	) ENGINE = AggregatingMergeTree()
 	ORDER BY (metric, time, tag0, tag1, tag2, tag3, tag4, tag5, tag6, tag7, tag8, tag9, tag10, tag11, tag12, tag13, tag14, tag15, stag47)`
+
+const createMigrationStateTableQuery = `CREATE TABLE IF NOT EXISTS statshouse_migration_state (
+		shard_key Int32,
+		ts DateTime,
+		started DateTime,
+		ended Nullable(DateTime),
+		v2_rows UInt64,
+		v3_rows UInt64,
+		source_rows UInt64,
+		retry UInt32,
+		source String DEFAULT ''
+	) ENGINE = ReplacingMergeTree(retry)
+	ORDER BY (shard_key, ts, started)`
+
+const createMigrationLogsTableQuery = `CREATE TABLE IF NOT EXISTS statshouse_migration_logs (
+		timestamp DateTime,
+		shard_key Int32,
+		ts DateTime,
+		retry UInt32,
+		message String,
+		source String DEFAULT ''
+	) ENGINE = MergeTree()
+	ORDER BY (timestamp, shard_key, ts, retry)`
 
 func TestV2DataParsingIntegration(t *testing.T) {
 	// Use shared container connection details
@@ -278,54 +330,52 @@ func TestV2DataParsingIntegration(t *testing.T) {
 	t.Logf("Step 5: Query executed successfully, starting to read response")
 
 	// Parse the RowBinary response using the complete parseV2Row function
-	var parsedRows []*v2Row
+	var parsedRows int
 	bufReader := bufio.NewReader(resp)
-	for {
-		t.Logf("Step 5: Attempting to parse row %d...", len(parsedRows)+1)
-		row, err := parseV2Row(bufReader)
+	var row v2Row
+	for ; ; parsedRows++ {
+		t.Logf("Step 5: Attempting to parse row %d...", parsedRows+1)
+		err := parseV2Row(bufReader, &row)
 		if err != nil {
-			t.Logf("Step 5: Parse error for row %d: %v", len(parsedRows)+1, err)
+			t.Logf("Step 5: Parse error for row %d: %v", parsedRows+1, err)
 			if errors.Is(err, io.EOF) {
-				t.Logf("Step 5: Reached EOF after parsing %d rows", len(parsedRows))
+				t.Logf("Step 5: Reached EOF after parsing %d rows", parsedRows)
 				break
 			}
 			require.NoError(t, err)
 		}
-		parsedRows = append(parsedRows, row)
 		t.Logf("Step 5: Parsed row %d: metric=%d, time=%d, key0=%d, skey=%s, count=%.2f, min=%.2f, max=%.2f, sum=%.2f, sumsquare=%.2f, min_host=(%d,%.2f), max_host=(%d,%.2f)",
-			len(parsedRows)-1, row.metric, row.time, row.keys[0], row.skey, row.count, row.min, row.max, row.sum, row.sumsquare,
+			parsedRows, row.metric, row.time, row.keys[0], row.skey, row.count, row.min, row.max, row.sum, row.sumsquare,
 			row.min_host.Arg, row.min_host.Val, row.max_host.Arg, row.max_host.Val)
+		expected := testData[parsedRows]
+		actual := row
+		require.Equal(t, expected.metric, actual.metric, "metric mismatch at row %d", parsedRows)
+		require.Equal(t, expected.time, actual.time, "time mismatch at row %d", parsedRows)
+		require.Equal(t, expected.keys, actual.keys, "keys mismatch at row %d", parsedRows)
+		require.Equal(t, expected.skey, actual.skey, "skey mismatch at row %d", parsedRows)
+		require.Equal(t, expected.count, actual.count, "count mismatch at row %d", parsedRows)
+		require.Equal(t, expected.min, actual.min, "min mismatch at row %d", parsedRows)
+		require.Equal(t, expected.max, actual.max, "max mismatch at row %d", parsedRows)
+		require.Equal(t, expected.sum, actual.sum, "sum mismatch at row %d", parsedRows)
+		require.Equal(t, expected.sumsquare, actual.sumsquare, "sumsquare mismatch at row %d", parsedRows)
+		require.Equal(t, expected.min_host.Arg, actual.min_host.Arg, "min_host.Arg mismatch at row %d", parsedRows)
+		require.Equal(t, expected.min_host.Val, actual.min_host.Val, "min_host.Val mismatch at row %d", parsedRows)
+		require.Equal(t, expected.max_host.Arg, actual.max_host.Arg, "max_host.Arg mismatch at row %d", parsedRows)
+		require.Equal(t, expected.max_host.Val, actual.max_host.Val, "max_host.Val mismatch at row %d", parsedRows)
+		// compare two float64s with 1e-6 precision
+		if expected.perc.Digest != nil && actual.perc.Digest != nil {
+			require.InDelta(t, expected.perc.Digest.Quantile(0.5), actual.perc.Digest.Quantile(0.5), 1e-6, "percentile 0.5 mismatch at row %d", parsedRows)
+			require.InDelta(t, expected.perc.Digest.Quantile(0.99), actual.perc.Digest.Quantile(0.99), 1e-6, "percentile 0.99 mismatch at row %d", parsedRows)
+		} else {
+			require.Nil(t, actual.perc.Digest, "percentiles should be nil at row %d", parsedRows)
+		}
+		require.Equal(t, expected.uniq.ItemsCount(), actual.uniq.ItemsCount(), "uniq_state mismatch at row %d", parsedRows)
 	}
 
 	// Validate parsed data matches original
-	require.Equal(t, len(testData), len(parsedRows), "Should parse same number of rows")
+	require.Equal(t, len(testData), parsedRows, "Should parse same number of rows")
 
-	for i, expected := range testData {
-		actual := parsedRows[i]
-		require.Equal(t, expected.metric, actual.metric, "metric mismatch at row %d", i)
-		require.Equal(t, expected.time, actual.time, "time mismatch at row %d", i)
-		require.Equal(t, expected.keys, actual.keys, "keys mismatch at row %d", i)
-		require.Equal(t, expected.skey, actual.skey, "skey mismatch at row %d", i)
-		require.Equal(t, expected.count, actual.count, "count mismatch at row %d", i)
-		require.Equal(t, expected.min, actual.min, "min mismatch at row %d", i)
-		require.Equal(t, expected.max, actual.max, "max mismatch at row %d", i)
-		require.Equal(t, expected.sum, actual.sum, "sum mismatch at row %d", i)
-		require.Equal(t, expected.sumsquare, actual.sumsquare, "sumsquare mismatch at row %d", i)
-		require.Equal(t, expected.min_host.Arg, actual.min_host.Arg, "min_host.Arg mismatch at row %d", i)
-		require.Equal(t, expected.min_host.Val, actual.min_host.Val, "min_host.Val mismatch at row %d", i)
-		require.Equal(t, expected.max_host.Arg, actual.max_host.Arg, "max_host.Arg mismatch at row %d", i)
-		require.Equal(t, expected.max_host.Val, actual.max_host.Val, "max_host.Val mismatch at row %d", i)
-		// compare two float64s with 1e-6 precision
-		if expected.perc.Digest != nil && actual.perc.Digest != nil {
-			require.InDelta(t, expected.perc.Digest.Quantile(0.5), actual.perc.Digest.Quantile(0.5), 1e-6, "percentile 0.5 mismatch at row %d", i)
-			require.InDelta(t, expected.perc.Digest.Quantile(0.99), actual.perc.Digest.Quantile(0.99), 1e-6, "percentile 0.99 mismatch at row %d", i)
-		} else {
-			require.Nil(t, actual.perc.Digest, "percentiles should be nil at row %d", i)
-		}
-		require.Equal(t, expected.uniq.ItemsCount(), actual.uniq.ItemsCount(), "uniq_state mismatch at row %d", i)
-	}
-
-	t.Logf("Step 5 SUCCESS: Validated %d rows with complete parseV2Row function", len(parsedRows))
+	t.Logf("Step 5 SUCCESS: Validated %d rows with complete parseV2Row function", parsedRows)
 }
 
 // TestV2ToV3Conversion tests that convertRowV2ToV3 works correctly and generates data that can be inserted into V3 table
@@ -546,8 +596,8 @@ func generateRandomTDigest(rnd *rand.Rand) *tdigest.TDigest {
 }
 
 // generateRandomUnique creates a random unique state
-func generateRandomUnique(rnd *rand.Rand) *data_model.ChUnique {
-	uniq := &data_model.ChUnique{}
+func generateRandomUnique(rnd *rand.Rand) data_model.ChUnique {
+	uniq := data_model.ChUnique{}
 	numItems := rnd.Intn(100) + 1 // 1-100 unique items
 
 	for i := 0; i < numItems; i++ {
@@ -634,20 +684,20 @@ func createTestData() []*v2Row {
 		minHost, maxHost := generateRandomHostAggregates(rnd)
 
 		// Always initialize pointers, but randomly decide content
-		var perc *data_model.ChDigest
+		var perc data_model.ChDigest
 		if rnd.Float64() < 0.8 { // 80% chance of having percentiles
-			perc = &data_model.ChDigest{Digest: generateRandomTDigest(rnd)}
+			perc = data_model.ChDigest{Digest: generateRandomTDigest(rnd)}
 		} else {
 			// Initialize with empty digest
-			perc = &data_model.ChDigest{Digest: tdigest.New()}
+			perc = data_model.ChDigest{Digest: tdigest.New()}
 		}
 
-		var uniq *data_model.ChUnique
+		var uniq data_model.ChUnique
 		if rnd.Float64() < 0.8 { // 80% chance of having unique state
 			uniq = generateRandomUnique(rnd)
 		} else {
 			// Initialize with empty unique state
-			uniq = &data_model.ChUnique{}
+			uniq = data_model.ChUnique{}
 		}
 
 		// Create row with random data
@@ -850,6 +900,10 @@ func parseV3Row(reader *bufio.Reader, t *testing.T) (*v3Row, error) {
 		t.Logf("[v3parse] percentiles error: %s\n", err)
 		return nil, fmt.Errorf("failed to parse percentiles: %w", err)
 	}
+	// Set to nil if digest is empty
+	if row.perc.Digest == nil {
+		row.perc = nil
+	}
 
 	// uniq_state
 	row.uniq = &data_model.ChUnique{}
@@ -859,46 +913,6 @@ func parseV3Row(reader *bufio.Reader, t *testing.T) (*v3Row, error) {
 	}
 
 	return row, nil
-}
-
-func TestCreateMigrationTablesIntegration(t *testing.T) {
-	aggregator := &Aggregator{
-		config: ConfigAggregator{
-			KHAddr:     clickHouseAddr,
-			KHUser:     "default",
-			KHPassword: "secret",
-		},
-		migrationConfig: NewDefaultMigrationConfig(),
-	}
-
-	// Test creating migration tables
-	err := aggregator.createMigrationTables(httpClient)
-	require.NoError(t, err, "createMigrationTables should succeed")
-	err = aggregator.createMigrationTables(httpClient)
-	require.NoError(t, err, "createMigrationTables should succeed even if tables already exist")
-
-	// Verify tables were created by checking if they exist
-	checkTablesQuery := `
-		SELECT count() as cnt
-		FROM system.tables
-		WHERE database = 'default' AND (name = 'migration_state' OR name = 'migration_logs')`
-
-	req := &chutil.ClickHouseHttpRequest{
-		HttpClient: httpClient,
-		Addr:       clickHouseAddr,
-		User:       "default",
-		Password:   "secret",
-		Query:      checkTablesQuery,
-	}
-	resp, err := req.Execute(context.Background())
-	require.NoError(t, err)
-
-	var tablesCount uint64
-	_, err = fmt.Fscanf(resp, "%d", &tablesCount)
-	require.NoError(t, err)
-	resp.Close()
-
-	require.Equal(t, uint64(2), tablesCount, "migration_state and migration_logs tables should exist")
 }
 
 func TestUpdateMigrationStateIntegration(t *testing.T) {
@@ -911,8 +925,7 @@ func TestUpdateMigrationStateIntegration(t *testing.T) {
 		migrationConfig: NewDefaultMigrationConfig(),
 	}
 
-	err := aggregator.createMigrationTables(httpClient)
-	require.NoError(t, err)
+	cleanupMigrationTables(t)
 
 	// Test updating migration state
 	testShardKey := int32(1)
@@ -920,14 +933,14 @@ func TestUpdateMigrationStateIntegration(t *testing.T) {
 	testStarted := time.Now()
 	testEnded := time.Now().Add(time.Minute)
 
-	err = aggregator.updateMigrationState(httpClient, testShardKey, testTs, 100, 95, 0, testStarted, &testEnded)
+	err := aggregator.updateMigrationState(httpClient, testShardKey, testTs, 100, 95, 0, testStarted, &testEnded, migrationSourceV2)
 	require.NoError(t, err, "updateMigrationState should succeed")
 
 	// Verify the state was recorded correctly
 	verifyQuery := fmt.Sprintf(`
 		SELECT shard_key, ts, v2_rows, v3_rows, retry
-		FROM migration_state
-		WHERE shard_key = %d AND ts = toDateTime(%d)
+		FROM statshouse_migration_state
+		WHERE shard_key = %d AND source = '' AND ts = toDateTime(%d)
 		ORDER BY started DESC
 		LIMIT 1`, testShardKey, testTs.Unix())
 
@@ -941,8 +954,8 @@ func TestUpdateMigrationStateIntegration(t *testing.T) {
 
 	countQuery := fmt.Sprintf(`
 		SELECT count() as cnt
-		FROM migration_state
-		WHERE shard_key = %d AND ts = toDateTime(%d)`, testShardKey, testTs.Unix())
+		FROM statshouse_migration_state
+		WHERE shard_key = %d AND source = '' AND ts = toDateTime(%d)`, testShardKey, testTs.Unix())
 
 	req.Query = countQuery
 	resp, err := req.Execute(context.Background())
@@ -969,9 +982,7 @@ func TestMigrationOrchestration(t *testing.T) {
 		},
 	}
 
-	// Step 1: Create migration tables
-	err := aggregator.createMigrationTables(httpClient)
-	require.NoError(t, err, "Step 1: createMigrationTables should succeed")
+	// Step 1: Clean up migration tables
 	cleanupMigrationTables(t)
 
 	// Step 2: Find first timestamp to migrate
@@ -982,12 +993,12 @@ func TestMigrationOrchestration(t *testing.T) {
 
 	// Step 3: Update migration state for the found timestamp
 	started := time.Now()
-	err = aggregator.updateMigrationState(httpClient, testShardKey, firstTs, 0, 0, 0, started, nil)
+	err = aggregator.updateMigrationState(httpClient, testShardKey, firstTs, 0, 0, 0, started, nil, migrationSourceV2)
 	require.NoError(t, err, "Step 3: updateMigrationState should succeed")
 
 	// Step 4: Mark the migration as completed
 	ended := time.Now()
-	err = aggregator.updateMigrationState(httpClient, testShardKey, firstTs, 100, 95, 0, started, &ended)
+	err = aggregator.updateMigrationState(httpClient, testShardKey, firstTs, 100, 95, 0, started, &ended, migrationSourceV2)
 	require.NoError(t, err, "Step 4: updateMigrationState completion should succeed")
 
 	// Step 5: Find next timestamp - should be the previous hour (backward migration)
@@ -998,8 +1009,8 @@ func TestMigrationOrchestration(t *testing.T) {
 	// Step 6: Verify migration state records
 	countQuery := fmt.Sprintf(`
 		SELECT count() as cnt
-		FROM migration_state
-		WHERE shard_key = %d`, testShardKey)
+		FROM statshouse_migration_state
+		WHERE shard_key = %d AND source = ''`, testShardKey)
 
 	req := &chutil.ClickHouseHttpRequest{
 		HttpClient: httpClient,
@@ -1022,8 +1033,8 @@ func TestMigrationOrchestration(t *testing.T) {
 }
 
 func cleanupMigrationTables(t *testing.T) {
-	cleanupStateQuery := `TRUNCATE TABLE migration_state;`
-	cleanupLogsQuery := `TRUNCATE TABLE migration_logs;`
+	cleanupStateQuery := `TRUNCATE TABLE statshouse_migration_state;`
+	cleanupLogsQuery := `TRUNCATE TABLE statshouse_migration_logs;`
 
 	req := &chutil.ClickHouseHttpRequest{
 		HttpClient: httpClient,
@@ -1062,8 +1073,8 @@ func createShardBuiltinTestData(metricID int32, timestamp int64, shardByTag int3
 			}
 
 			// Create test digest and unique state
-			perc := &data_model.ChDigest{Digest: createTestDigest()}
-			uniq := &data_model.ChUnique{}
+			perc := data_model.ChDigest{Digest: createTestDigest()}
+			uniq := data_model.ChUnique{}
 			uniq.Insert(uint64(shard*1000 + i))
 
 			// Create host aggregates
@@ -1115,8 +1126,8 @@ func createContributorsLogTestData(timestamp int64, numShards int) []*v2Row {
 		}
 
 		// Create test digest and unique state
-		perc := &data_model.ChDigest{Digest: createTestDigest()}
-		uniq := &data_model.ChUnique{}
+		perc := data_model.ChDigest{Digest: createTestDigest()}
+		uniq := data_model.ChUnique{}
 		uniq.Insert(uint64(shard))
 
 		// Create host aggregates

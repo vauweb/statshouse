@@ -7,6 +7,7 @@
 package metadata
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -16,8 +17,6 @@ import (
 	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/VKCOM/statshouse/internal/sqlite"
 	"github.com/VKCOM/statshouse/internal/vkgo/binlog/fsbinlog"
-
-	"context"
 )
 
 type DBV2 struct {
@@ -157,6 +156,7 @@ const metricCountReadLimit int64 = 1000
 const metricBytesReadLimit int64 = 1024 * 1024
 const maxResetLimit = 100_00
 const entityHistoryMaxResponseSize = 1024 * 1024 * 4
+const mappingCountReadLimit int64 = 50000 // we want to catch metricBytesReadLimit
 
 func OpenDB(
 	path string,
@@ -284,6 +284,76 @@ func (db *DBV2) JournalEvents(ctx context.Context, sinceVersion int64, page int6
 	return result, err
 }
 
+func (db *DBV2) GetNewMappings(ctx context.Context, fromID int32, page int32) ([]tlstatshouse.Mapping, int32, error) {
+	limit := mappingCountReadLimit
+	if int64(page) < limit {
+		limit = int64(page)
+	}
+	maxID := fromID
+	result := make([]tlstatshouse.Mapping, 0)
+	var bytesRead = int64(4) // maxID
+	err := db.eng.Do(ctx, "get_new_mapping", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
+		rows := conn.Query("select_mapping", "SELECT id, name FROM mappings WHERE id > $id ORDER BY id asc LIMIT $limit;",
+			sqlite.Int64("$id", int64(fromID)),
+			sqlite.Int64("$limit", limit))
+		if rows.Error() != nil {
+			return cache, fmt.Errorf("failed to select_mapping: %w", rows.Error())
+		}
+		for rows.Next() {
+			id, _ := rows.ColumnInt64(0)
+			name, err := rows.ColumnBlobString(1)
+			if err != nil {
+				return cache, err
+			}
+
+			result = append(result, tlstatshouse.Mapping{
+				Value: int32(id),
+				Str:   name,
+			})
+			bytesRead += int64(len(name)) + 4
+			if bytesRead > metricBytesReadLimit {
+				break
+			}
+		}
+
+		row := conn.Query("select_max_mapping_id", "SELECT MAX(id) FROM mappings")
+		if row.Error() != nil {
+			return cache, fmt.Errorf("failed to select_max_mapping_id: %w", row.Error())
+		}
+		if row.Next() {
+			maxID64, _ := row.ColumnInt64(0)
+			maxID = int32(maxID64)
+		}
+		return cache, nil
+	})
+	return result, maxID, err
+}
+
+func (db *DBV2) GetLastNMappings(ctx context.Context, n int) ([]tlstatshouse.Mapping, error) {
+	result := make([]tlstatshouse.Mapping, 0, n)
+	err := db.eng.Do(ctx, "get_last_n_mappings", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
+		rows := conn.Query("select_mappings", "SELECT * FROM (SELECT id, name FROM mappings ORDER BY id desc LIMIT $limit) ORDER BY id asc;",
+			sqlite.Int64("$limit", int64(n)))
+		if rows.Error() != nil {
+			return cache, fmt.Errorf("failed to select_mappings: %w", rows.Error())
+		}
+		for rows.Next() {
+			id, _ := rows.ColumnInt64(0)
+			name, err := rows.ColumnBlobString(1)
+			if err != nil {
+				return cache, err
+			}
+
+			result = append(result, tlstatshouse.Mapping{
+				Value: int32(id),
+				Str:   name,
+			})
+		}
+		return cache, nil
+	})
+	return result, err
+}
+
 func (db *DBV2) GetEntityVersioned(ctx context.Context, id, version int64) (event tlmetadata.Event, err error) {
 	err = db.eng.Do(ctx, "get_entity", func(conn sqlite.Conn, c []byte) ([]byte, error) {
 		rows := conn.Query("get_entity", "SELECT entity_id,name, data, metadata, updated_at, namespace_id, type FROM entity_history WHERE entity_id = $id AND version = $version",
@@ -318,12 +388,12 @@ func (db *DBV2) GetEntityVersioned(ctx context.Context, id, version int64) (even
 	return event, err
 }
 
-func (db *DBV2) SaveEntity(ctx context.Context, name string, id int64, oldVersion int64, newJson string, createMetric, deleteEntity bool, typ int32, metadata string) (tlmetadata.Event, error) {
+func (db *DBV2) SaveEntity(ctx context.Context, name string, id int64, oldVersion int64, newJson string, createMetric bool, deleteTime uint32, typ int32, metadata string) (tlmetadata.Event, error) {
 	updatedAt := db.now().Unix()
 	var result tlmetadata.Event
 	createFixed := false
 	err := db.eng.Do(ctx, "save_entity", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
-		resolvedNamespaceID, err := resolveEntity(conn, name, id, oldVersion, newJson, createMetric, deleteEntity, typ)
+		resolvedNamespaceID, err := resolveEntity(conn, name, id, oldVersion, newJson, createMetric, typ)
 		if err != nil {
 			return cache, err
 		}
@@ -351,17 +421,13 @@ func (db *DBV2) SaveEntity(ctx context.Context, name string, id int64, oldVersio
 			if !rows.Next() {
 				return cache, errInvalidMetricVersion
 			}
-			deletedAt, _ := rows.ColumnInt64(2)
-			if deleteEntity {
-				deletedAt = time.Now().Unix()
-			}
 			_, err := conn.Exec("update_entity", "UPDATE metrics_v5 SET version = (SELECT IFNULL(MAX(version), 0) + 1 FROM metrics_v5), data = $data, updated_at = $updatedAt, name = $name, deleted_at = $deletedAt, namespace_id = $namespaceId WHERE version = $oldVersion AND id = $id;",
 				sqlite.TextString("$data", newJson),
 				sqlite.Int64("$updatedAt", updatedAt),
 				sqlite.Int64("$oldVersion", oldVersion),
 				sqlite.TextString("$name", name),
 				sqlite.Int64("$id", id),
-				sqlite.Int64("$deletedAt", deletedAt),
+				sqlite.Int64("$deletedAt", int64(deleteTime)),
 				sqlite.Int64("$namespaceId", resolvedNamespaceID))
 
 			if err != nil {
@@ -370,18 +436,20 @@ func (db *DBV2) SaveEntity(ctx context.Context, name string, id int64, oldVersio
 		} else {
 			var err error
 			if !createFixed {
-				id, err = conn.Exec("insert_entity", "INSERT INTO metrics_v5 (version, data, name, updated_at, type, deleted_at, namespace_id) VALUES ( (SELECT IFNULL(MAX(version), 0) + 1 FROM metrics_v5), $data, $name, $updatedAt, $type, 0, $namespaceId);",
+				id, err = conn.Exec("insert_entity", "INSERT INTO metrics_v5 (version, data, name, updated_at, type, deleted_at, namespace_id) VALUES ( (SELECT IFNULL(MAX(version), 0) + 1 FROM metrics_v5), $data, $name, $updatedAt, $type, $deletedAt, $namespaceId);",
 					sqlite.TextString("$data", newJson),
 					sqlite.TextString("$name", name),
 					sqlite.Int64("$updatedAt", updatedAt),
+					sqlite.Int64("$deletedAt", int64(deleteTime)),
 					sqlite.Int64("$type", int64(typ)),
 					sqlite.Int64("$namespaceId", resolvedNamespaceID))
 			} else {
-				id, err = conn.Exec("insert_entity", "INSERT INTO metrics_v5 (id, version, data, name, updated_at, type, deleted_at, namespace_id) VALUES ($id, (SELECT IFNULL(MAX(version), 0) + 1 FROM metrics_v5), $data, $name, $updatedAt, $type, 0, $namespaceId);",
+				id, err = conn.Exec("insert_entity", "INSERT INTO metrics_v5 (id, version, data, name, updated_at, type, deleted_at, namespace_id) VALUES ($id, (SELECT IFNULL(MAX(version), 0) + 1 FROM metrics_v5), $data, $name, $updatedAt, $type, $deletedAt, $namespaceId);",
 					sqlite.Int64("$id", id),
 					sqlite.TextString("$data", newJson),
 					sqlite.TextString("$name", name),
 					sqlite.Int64("$updatedAt", updatedAt),
+					sqlite.Int64("$deletedAt", int64(deleteTime)),
 					sqlite.Int64("$type", int64(typ)),
 					sqlite.Int64("$namespaceId", resolvedNamespaceID))
 			}
@@ -628,7 +696,7 @@ func (db *DBV2) SaveEntityold(ctx context.Context, name string, id int64, oldVer
 	var result tlmetadata.Event
 	createFixed := false
 	err := db.eng.Do(ctx, "save_entity", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
-		_, err := resolveEntity(conn, name, id, oldVersion, newJson, createMetric, deleteEntity, typ)
+		_, err := resolveEntity(conn, name, id, oldVersion, newJson, createMetric, typ)
 		if err != nil {
 			return cache, fmt.Errorf("invalid entity: %w", err)
 		}

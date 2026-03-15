@@ -7,15 +7,18 @@
 import { Dispatch, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { IKind, IMetric, ITagAlias } from '../models/metric';
-import { MetricFormValuesContext, MetricFormValuesStorage } from '../storages/MetricFormValues';
 import { ReactComponent as SVGTrash } from 'bootstrap-icons/icons/trash.svg';
 import { IActions } from '../storages/MetricFormValues/reducer';
 import {
+  METRIC_META_SHARED_STRATEGY,
+  METRIC_META_SHARED_STRATEGY_DESCRIPTION,
   METRIC_META_TAG_RAW_KIND,
   METRIC_TYPE,
   METRIC_TYPE_DESCRIPTION,
+  MetricMetaSharedStrategy,
   type MetricMetaTagRawKind,
   type MetricType,
+  toMetricMetaSharedStrategy,
   toMetricMetaTagRawKind,
 } from '@/api/enum';
 import { maxTagsSize } from '@/common/settings';
@@ -28,15 +31,30 @@ import { produce } from 'immer';
 import { TagDraft } from './TagDraft';
 import { formatInputDate } from '@/view/utils2';
 import { Select } from '@/components/Select';
-
 import { mapEditToMetric, mapMetricToEdit, resetMetricFlood } from '../api/saveMetric';
 import { ConfirmButton } from '@/components/UI/ConfirmButton';
 import { useStateBoolean } from '@/hooks';
 import { useApiMetric, useMutationMetricMeta } from '@/api/metric';
 import { useHistoricalMetricVersion } from '@/hooks/useHistoricalMetricVersion';
+import { MetricFormValuesContext, MetricFormValuesStorage } from '@/admin/storages/MetricFormValues';
 
 const METRIC_TYPE_KEYS: MetricType[] = Object.values(METRIC_TYPE);
 const METRIC_META_TAG_RAW_KIND_KEYS: MetricMetaTagRawKind[] = Object.values(METRIC_META_TAG_RAW_KIND);
+const METRIC_META_SHARED_STRATEGY_KEYS: MetricMetaSharedStrategy[] = Object.values(METRIC_META_SHARED_STRATEGY);
+
+const kindConfig = [
+  { label: 'Counter', value: 'counter' },
+  { label: 'Value', value: 'value' },
+  { label: 'Unique', value: 'unique' },
+  { label: 'Mixed', value: 'mixed' },
+];
+
+const shardStrategyConfig = METRIC_META_SHARED_STRATEGY_KEYS.map((value) => ({
+  label: METRIC_META_SHARED_STRATEGY_DESCRIPTION[value],
+  value: value,
+}));
+
+const tagsConfig = new Array(maxTagsSize).fill(0).map((_v, n) => n + 1);
 
 export function FormPage(props: { yAxisSize: number; adminMode: boolean }) {
   const { adminMode } = props;
@@ -83,13 +101,6 @@ export function FormPage(props: { yAxisSize: number; adminMode: boolean }) {
     </div>
   );
 }
-
-const kindConfig = [
-  { label: 'Counter', value: 'counter' },
-  { label: 'Value', value: 'value' },
-  { label: 'Unique', value: 'unique' },
-  { label: 'Mixed', value: 'mixed' },
-];
 
 export function EditForm(props: { isReadonly: boolean; adminMode: boolean; isHistoricalMetric: boolean }) {
   const { isReadonly, adminMode, isHistoricalMetric } = props;
@@ -168,12 +179,16 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean; isHis
             name="description"
             className="form-control"
             value={values.description}
-            onChange={(e) => dispatch({ description: e.target.value.slice(0, 1024) })}
+            onChange={(e) => dispatch({ description: e.target.value.slice(0, 2048) })}
             disabled={isReadonly}
           />
         </div>
         <div id="descriptionHelpBlock" className="form-text">
-          Description is for UI only. New lines are respected, no other formatting supported yet.
+          Description is for UI only.{' '}
+          <a href="https://commonmark.org/help/" target="_blank" rel="noreferrer">
+            Standard Markdown formatting
+          </a>{' '}
+          is supported.
         </div>
       </div>
       <div className="row align-items-baseline mb-3">
@@ -302,16 +317,11 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean; isHis
                 onChange={(e) => dispatch({ type: 'numTags', num: e.target.value })}
                 disabled={isReadonly}
               >
-                {new Array(maxTagsSize).fill(0).map(
-                  (
-                    _v,
-                    n // TODO - const
-                  ) => (
-                    <option key={n} value={n + 1}>
-                      {n + 1}
-                    </option>
-                  )
-                )}
+                {tagsConfig.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
@@ -460,7 +470,7 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean; isHis
       </div>
       <div className="row mb-3">
         <label htmlFor="resolution" className="col-sm-2 col-form-label">
-          Presort key
+          Presort tag
         </label>
         <div className="col-sm-auto d-flex align-items-center">
           <select
@@ -485,7 +495,7 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean; isHis
       </div>
       <div className="row align-items-baseline mb-3">
         <label htmlFor="pre_key_only" className="col-sm-2 col-form-label">
-          Presort key only
+          Presort tag only
         </label>
         <div className="col-sm-auto pt-1">
           <div className="form-check form-switch">
@@ -573,7 +583,7 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean; isHis
       </div>
       <div className="row align-items-baseline mb-3">
         <label htmlFor="fair_key_tag_ids" className="col-sm-2 col-form-label">
-          Fair key tags
+          Fair tags
         </label>
         <div className="col-sm-auto pt-1">
           {
@@ -609,8 +619,105 @@ export function EditForm(props: { isReadonly: boolean; adminMode: boolean; isHis
         </div>
         <div id="fair_key_tag_idsHelpBlock" className="form-text"></div>
       </div>
+      <div className="row mb-3">
+        <label htmlFor="shard_strategy" className="col-sm-2 col-form-label">
+          Shared strategy
+        </label>
+        <div className="col-sm-auto">
+          <select
+            id="shard_strategy"
+            className="form-select"
+            value={values.shard_strategy}
+            onChange={(e) =>
+              dispatch({
+                shard_strategy: toMetricMetaSharedStrategy(e.target.value, METRIC_META_SHARED_STRATEGY.noStrategy),
+              })
+            }
+            disabled={isReadonly || !adminMode}
+          >
+            {shardStrategyConfig.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div id="shardStrategyHelpBlock" className="form-text"></div>
+      </div>
+      <div className="row mb-3">
+        <label htmlFor="shard_num" className="col-sm-2 col-form-label">
+          Shared num
+        </label>
+        <div className="col-sm-auto">
+          <input
+            id="shard_num"
+            type="number"
+            min={1}
+            step={1}
+            className="form-control"
+            value={toNumber(values.shard_num, 0) + 1}
+            onChange={(e) => dispatch({ shard_num: toNumber(e.target.value, 0) - 1 })}
+            disabled={isReadonly || !adminMode || values.shard_strategy !== 'fixed_shard'}
+          />
+        </div>
+        <div id="shardNumHelpBlock" className="form-text"></div>
+      </div>
+      <div className="row mb-3">
+        <label htmlFor="shard" className="col-sm-2 col-form-label">
+          Fixed shard key
+        </label>
+        <div className="col-sm-auto">
+          <input
+            id="shard"
+            type="number"
+            min={0}
+            step={1}
+            className="form-control"
+            value={toNumber(values.shard, 0)}
+            onChange={(e) => dispatch({ shard: toNumber(e.target.value, 0) })}
+            disabled={isReadonly || !adminMode}
+          />
+        </div>
+        <div id="shardHelpBlock" className="form-text"></div>
+      </div>
+      <div className="row mb-3">
+        <label htmlFor="shard2" className="col-sm-2 col-form-label">
+          Second fixed shard key
+        </label>
+        <div className="col-sm-auto">
+          <input
+            id="shard2"
+            type="number"
+            min={0}
+            step={1}
+            className="form-control"
+            value={toNumber(values.shard2, 0)}
+            onChange={(e) => dispatch({ shard2: toNumber(e.target.value, 0) })}
+            disabled={isReadonly || !adminMode}
+          />
+        </div>
+        <div id="shard2HelpBlock" className="form-text"></div>
+      </div>
+      <div className="row mb-3">
+        <label htmlFor="shard2_timestamp" className="col-sm-2 col-form-label">
+          Second shard ts start
+        </label>
+        <div className="col-sm-auto">
+          <input
+            id="shard2_timestamp"
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            className="form-control"
+            value={String(toNumber(values.shard2_timestamp, 0))}
+            onChange={(e) => dispatch({ shard2_timestamp: toNumber(e.target.value, 0) })}
+            disabled={isReadonly || !adminMode}
+          />
+        </div>
+        <div id="shard2TimestampHelpBlock" className="form-text"></div>
+      </div>
 
-      <div>
+      <div className="sticky-bottom bg-body py-1">
         {/*<button type="button" disabled={isRunning || isReadonly} className="btn btn-primary me-3" onClick={onSubmit}>*/}
         {/*  Save*/}
         {/*</button>*/}
@@ -692,7 +799,7 @@ function AliasField(props: {
               type="text"
               className="form-control"
               value={value.name}
-              placeholder={tagNumber === -1 ? 'tag _s' : `tag ${tagNumber}`}
+              placeholder={tagNumber === -1 ? '_s' : `${tagNumber}`}
               disabled={tagNumber === 0 || disabled}
               onChange={(e) => onChange({ name: e.target.value })}
             />

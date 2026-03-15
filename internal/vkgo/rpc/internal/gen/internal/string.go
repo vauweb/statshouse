@@ -15,14 +15,14 @@ var _ = basictl.NatWrite
 
 func BuiltinVectorStringFillRandom(rg *basictl.RandGenerator, vec *[]string) {
 	rg.IncreaseDepth()
-	l := rg.LimitValue(basictl.RandomUint(rg))
+	l := basictl.RandomSize(rg)
 	*vec = make([]string, l)
 	for i := range *vec {
 		(*vec)[i] = basictl.RandomString(rg)
 	}
 	rg.DecreaseDepth()
 }
-func BuiltinVectorStringRead(w []byte, vec *[]string) (_ []byte, err error) {
+func BuiltinVectorStringReadTL1(w []byte, vec *[]string) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
 		return w, err
@@ -43,7 +43,7 @@ func BuiltinVectorStringRead(w []byte, vec *[]string) (_ []byte, err error) {
 	return w, nil
 }
 
-func BuiltinVectorStringWrite(w []byte, vec []string) []byte {
+func BuiltinVectorStringWriteTL1(w []byte, vec []string) []byte {
 	w = basictl.NatWrite(w, uint32(len(vec)))
 	for _, elem := range vec {
 		w = basictl.StringWrite(w, elem)
@@ -51,7 +51,7 @@ func BuiltinVectorStringWrite(w []byte, vec []string) []byte {
 	return w
 }
 
-func BuiltinVectorStringReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]string) error {
+func BuiltinVectorStringReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]string) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -80,9 +80,10 @@ func BuiltinVectorStringReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, ve
 }
 
 func BuiltinVectorStringWriteJSON(w []byte, vec []string) []byte {
-	return BuiltinVectorStringWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorStringWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorStringWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []string) []byte {
+func BuiltinVectorStringWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []string) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -93,72 +94,93 @@ func BuiltinVectorStringWriteJSONOpt(newTypeNames bool, short bool, w []byte, ve
 
 type String string
 
+func (item *String) ptr() *string { return (*string)(item) }
+
 func (String) TLName() string { return "string" }
 func (String) TLTag() uint32  { return 0xb5286e24 }
 
 func (item *String) Reset() {
-	ptr := (*string)(item)
-	*ptr = ""
+	*item.ptr() = ""
 }
 
 func (item *String) FillRandom(rg *basictl.RandGenerator) {
-	ptr := (*string)(item)
-	*ptr = basictl.RandomString(rg)
+	*item.ptr() = basictl.RandomString(rg)
 }
 
 func (item *String) Read(w []byte) (_ []byte, err error) {
-	ptr := (*string)(item)
-	return basictl.StringRead(w, ptr)
+	return item.ReadTL1(w)
+}
+func (item *String) ReadTL1(w []byte) (_ []byte, err error) {
+	return basictl.StringRead(w, item.ptr())
 }
 
 func (item *String) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *String) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *String) Write(w []byte) []byte {
-	ptr := (*string)(item)
-	return basictl.StringWrite(w, *ptr)
+	return item.WriteTL1(w)
+}
+func (item *String) WriteTL1(w []byte) []byte {
+	w = basictl.StringWrite(w, *item.ptr())
+	return w
 }
 
 func (item *String) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *String) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xb5286e24); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *String) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *String) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *String) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *String) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0xb5286e24)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item String) String() string {
 	return string(item.WriteJSON(nil))
 }
 func (item *String) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
-	ptr := (*string)(item)
-	if err := Json2ReadString(in, ptr); err != nil {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *String) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
+	if err := Json2ReadString(in, item.ptr()); err != nil {
 		return err
 	}
 	return nil
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *String) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSON(w), nil
+func (item *String) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *String) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
 
-func (item *String) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
-	ptr := (*string)(item)
-	w = basictl.JSONWriteString(w, *ptr)
+func (item *String) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
+	w = basictl.JSONWriteString(w, *item.ptr())
 	return w
 }
 func (item *String) MarshalJSON() ([]byte, error) {

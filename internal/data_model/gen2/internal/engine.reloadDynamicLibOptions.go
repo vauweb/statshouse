@@ -31,13 +31,24 @@ func (item *EngineReloadDynamicLibOptions) ClearSlicesPart() {
 	item.SlicesPart = 0
 	item.FieldsMask &^= 1 << 0
 }
-func (item EngineReloadDynamicLibOptions) IsSetSlicesPart() bool { return item.FieldsMask&(1<<0) != 0 }
+func (item *EngineReloadDynamicLibOptions) IsSetSlicesPart() bool { return item.FieldsMask&(1<<0) != 0 }
 
 func (item *EngineReloadDynamicLibOptions) Reset() {
 	item.FieldsMask = 0
 	item.LibId = ""
 	item.LibFileName = ""
 	item.SlicesPart = 0
+}
+
+func (item *EngineReloadDynamicLibOptions) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomFieldMask(rg, 0b1)
+	item.LibId = basictl.RandomString(rg)
+	item.LibFileName = basictl.RandomString(rg)
+	if item.FieldsMask&(1<<0) != 0 {
+		item.SlicesPart = basictl.RandomDouble(rg)
+	} else {
+		item.SlicesPart = 0
+	}
 }
 
 func (item *EngineReloadDynamicLibOptions) Read(w []byte) (_ []byte, err error) {
@@ -60,7 +71,6 @@ func (item *EngineReloadDynamicLibOptions) Read(w []byte) (_ []byte, err error) 
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineReloadDynamicLibOptions) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -82,7 +92,6 @@ func (item *EngineReloadDynamicLibOptions) ReadBoxed(w []byte) (_ []byte, err er
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineReloadDynamicLibOptions) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -97,6 +106,11 @@ func (item EngineReloadDynamicLibOptions) String() string {
 }
 
 func (item *EngineReloadDynamicLibOptions) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineReloadDynamicLibOptions) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propLibIdPresented bool
 	var propLibFileNamePresented bool
@@ -172,14 +186,15 @@ func (item *EngineReloadDynamicLibOptions) ReadJSON(legacyTypeNames bool, in *ba
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineReloadDynamicLibOptions) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineReloadDynamicLibOptions) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineReloadDynamicLibOptions) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineReloadDynamicLibOptions) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineReloadDynamicLibOptions) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -219,4 +234,12 @@ func (item *EngineReloadDynamicLibOptions) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.reloadDynamicLibOptions", err.Error())
 	}
 	return nil
+}
+
+func (item *EngineReloadDynamicLibOptions) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.reloadDynamicLibOptions"))
+}
+
+func (item *EngineReloadDynamicLibOptions) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.reloadDynamicLibOptions")
 }

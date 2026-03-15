@@ -13,40 +13,61 @@ import (
 
 var _ = basictl.NatWrite
 
+// We wrap body of TL2 request with this marker.
+// Any response is parsed in the context of request, so we decided to not wrap response.
+// We will remove all wrapping later as part of rpcInvokeReq2 transition.
 type RpcTL2Marker struct {
 }
 
 func (RpcTL2Marker) TLName() string { return "rpcTL2Marker" }
-func (RpcTL2Marker) TLTag() uint32  { return 0x29324c54 }
+func (RpcTL2Marker) TLTag() uint32  { return 0x30324c54 }
 
 func (item *RpcTL2Marker) Reset() {}
 
 func (item *RpcTL2Marker) FillRandom(rg *basictl.RandGenerator) {}
 
-func (item *RpcTL2Marker) Read(w []byte) (_ []byte, err error) { return w, nil }
+func (item *RpcTL2Marker) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *RpcTL2Marker) ReadTL1(w []byte) (_ []byte, err error) { return w, nil }
 
 func (item *RpcTL2Marker) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *RpcTL2Marker) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *RpcTL2Marker) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *RpcTL2Marker) WriteTL1(w []byte) []byte {
 	return w
 }
 
 func (item *RpcTL2Marker) ReadBoxed(w []byte) (_ []byte, err error) {
-	if w, err = basictl.NatReadExactTag(w, 0x29324c54); err != nil {
+	return item.ReadTL1Boxed(w)
+}
+func (item *RpcTL2Marker) ReadTL1Boxed(w []byte) (_ []byte, err error) {
+	if w, err = basictl.NatReadExactTag(w, 0x30324c54); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *RpcTL2Marker) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *RpcTL2Marker) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *RpcTL2Marker) WriteBoxed(w []byte) []byte {
-	w = basictl.NatWrite(w, 0x29324c54)
-	return item.Write(w)
+	return item.WriteTL1Boxed(w)
+}
+func (item *RpcTL2Marker) WriteTL1Boxed(w []byte) []byte {
+	w = basictl.NatWrite(w, 0x30324c54)
+	return item.WriteTL1(w)
 }
 
 func (item RpcTL2Marker) String() string {
@@ -54,6 +75,11 @@ func (item RpcTL2Marker) String() string {
 }
 
 func (item *RpcTL2Marker) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *RpcTL2Marker) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	if in != nil {
 		in.Delim('{')
 		if !in.Ok() {
@@ -71,14 +97,15 @@ func (item *RpcTL2Marker) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) 
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *RpcTL2Marker) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *RpcTL2Marker) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *RpcTL2Marker) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *RpcTL2Marker) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *RpcTL2Marker) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	return append(w, '}')
 }

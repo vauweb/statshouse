@@ -9,6 +9,7 @@ package agent
 import (
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,12 +20,15 @@ import (
 type Config struct {
 	AggregatorAddresses []string
 	// Sampling Algorithm
-	SampleBudget        int   // for all shards, in bytes
-	MaxHistoricDiskSize int64 // for all shards, in bytes
-	SampleKeepSingle    bool
-	SampleNamespaces    bool
-	SampleGroups        bool
-	SampleKeys          bool
+	SampleBudget         int // for all shards, in bytes
+	OverrideSampleBudget int
+	ShardSampleBudget    map[int]int // pre shard overrides, if not set buget is equal to SampleBudget
+	HistoricWindow       uint
+	MaxHistoricDiskSize  int64 // for all shards, in bytes
+	SampleKeepSingle     bool
+	SampleNamespaces     bool
+	SampleGroups         bool
+	SampleKeys           bool
 
 	// How much strings (per key) is stored and sent to aggregator
 	StringTopCapacity  int
@@ -39,7 +43,6 @@ type Config struct {
 	SendMoreBytes          int
 	StatsHouseEnv          string
 	Cluster                string
-	SkipShards             int // if cluster is extended, first shard might be almost full, so we can skip them for some time.
 	LegacyApplyValues      bool
 
 	MappingCacheSize int64
@@ -51,7 +54,6 @@ type Config struct {
 	RemoteWritePath    string
 
 	AutoCreate           bool
-	DisableRemoteConfig  bool
 	DisableNoSampleAgent bool
 
 	HardwareMetricResolution     int
@@ -61,6 +63,7 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		SampleBudget:                     150000,
+		HistoricWindow:                   6 * 3600, // TODO - after V3 tables dropped, change to 24 hours
 		MaxHistoricDiskSize:              20 << 30, // enough for default SampleBudget per MaxHistoricWindow
 		SampleNamespaces:                 false,
 		SampleGroups:                     false,
@@ -81,17 +84,46 @@ func DefaultConfig() Config {
 		RemoteWriteAddr:              ":13380",
 		RemoteWritePath:              "/write",
 		AutoCreate:                   true,
-		DisableRemoteConfig:          false,
 		DisableNoSampleAgent:         false,
 		HardwareMetricResolution:     5,
 		HardwareSlowMetricResolution: 15,
 	}
 }
 
+func (c *Config) setShardBudget(param string) error {
+	parts := strings.Split(param, ":")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid input format for --shard-sample-budget, expected {shard}:{budget}, got %s", param)
+	}
+	shard, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return fmt.Errorf("invalid shard value in --shard-sample-budget, expected integer, got %s: %v", parts[0], err)
+	}
+	if shard < 1 {
+		return fmt.Errorf("shard value must be >= 0, got %d", shard)
+	}
+	budget, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return fmt.Errorf("invalid budget value in --shard-sample-budget, expected integer, got %s: %v", parts[1], err)
+	}
+	if budget < 1 {
+		return fmt.Errorf("budget value must be >= 0, got %d", budget)
+	}
+	if c.ShardSampleBudget == nil {
+		c.ShardSampleBudget = make(map[int]int)
+	}
+	c.ShardSampleBudget[shard] = budget
+	return nil
+}
+
 func (c *Config) Bind(f *flag.FlagSet, d Config) {
 	f.IntVar(&c.SampleBudget, "sample-budget", d.SampleBudget, "Statshouse will sample all buckets to contain max this number of bytes.")
+	f.IntVar(&c.OverrideSampleBudget, "override-sample-budget", d.OverrideSampleBudget, "Overrides basic sample-budget.")
+	f.Func("shard-sample-budget", "1:200 override budget for 1 shard with 200, shards start with 1", c.setShardBudget)
+	f.UintVar(&c.HistoricWindow, "historic-window", d.HistoricWindow, "If aggregators are unavailable, buckets created outside this window will be discarded.")
 	f.Int64Var(&c.MaxHistoricDiskSize, "max-disk-size", d.MaxHistoricDiskSize, "Statshouse will use no more than this amount of disk space for storing historic data.")
-	f.IntVar(&c.SkipShards, "skip-shards", d.SkipShards, "Skip first shards during sharding. When extending cluster, helps prevent filling disks of already full shards.")
+	var skipShards int // TODO - remove from config
+	f.IntVar(&skipShards, "skip-shards", 0, "Deprecated, not used.")
 
 	f.IntVar(&c.StringTopCapacity, "string-top-capacity", d.StringTopCapacity, "How many different strings per key is stored in string tops.")
 	f.IntVar(&c.StringTopCountSend, "string-top-send", d.StringTopCountSend, "How many different strings per key is sent in string tops.")
@@ -112,7 +144,6 @@ func (c *Config) Bind(f *flag.FlagSet, d Config) {
 	f.StringVar(&c.RemoteWritePath, "remote-write-path", d.RemoteWritePath, "Prometheus remote write path (deprecated).")
 
 	f.BoolVar(&c.AutoCreate, "auto-create", d.AutoCreate, "Enable metric auto-create.")
-	f.BoolVar(&c.DisableRemoteConfig, "disable-remote-config", d.DisableRemoteConfig, "Disable remote configuration.")
 	f.BoolVar(&c.DisableNoSampleAgent, "disable-nosample-agent", d.DisableNoSampleAgent, "Disable NoSampleAgent metric option.")
 	f.BoolVar(&c.SampleKeepSingle, "sample-keep-single", d.SampleKeepSingle, "Statshouse won't sample single series.")
 	f.BoolVar(&c.SampleNamespaces, "sample-namespaces", d.SampleNamespaces, "Statshouse will sample at namespace level.")
@@ -143,6 +174,12 @@ func (c *Config) updateFromRemoteDescription(description string) error {
 func (c *Config) ValidateConfigSource() error {
 	if c.SampleBudget < 1 {
 		return fmt.Errorf("sample-budget (%d) must be >= 1", c.SampleBudget)
+	}
+	if c.OverrideSampleBudget > 0 {
+		c.SampleBudget = c.OverrideSampleBudget
+	}
+	if c.HistoricWindow > data_model.MaxHistoricWindow {
+		return fmt.Errorf("historic-window (%d) must be <= %d", c.HistoricWindow, data_model.MaxHistoricWindow)
 	}
 
 	if c.StringTopCapacity < data_model.MinStringTopCapacity {

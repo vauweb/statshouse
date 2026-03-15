@@ -18,50 +18,37 @@ import (
 	"github.com/VKCOM/statshouse/internal/pcache"
 )
 
-type unknownTag struct { // fits well into cache line
-	time uint32
-	hits uint32
-}
-
-type configTagsMapper2 struct {
-	MaxUnknownTagsInBucket    int // keep for low at first, then increase gradually
-	MaxCreateTagsPerIteration int // keep for low at first, then increase gradually
-	MaxLoadTagsPerIteration   int // keep for low at first, then increase gradually
-	TagHitsToCreate           int // if used in 10 different seconds, then create
-	MaxUnknownTagsToKeep      int
-	MaxSendTagsToAgent        int
-}
-
+// deprecated
 type tagsMapper2 struct {
 	agg           *Aggregator
 	sh2           *agent.Agent
 	metricStorage *metajournal.MetricsStorage
-	loader        *metajournal.MetricMetaLoader
+	loader        metajournal.MetadataLoader
 
 	mu              sync.Mutex
 	unknownTags     map[string]unknownTag // collect statistics here
 	unknownTagsList []string              // ordered list of keys. IF unknownTags is large, but does not change, we will try to load each key once and stop until new keys are added.
-	createTags      map[string]format.CreateMappingExtra
+	createTags      map[string]data_model.CreateMappingExtra
 
-	config configTagsMapper2
+	config configTagsMapper3
 }
 
 // TODO make unknownTagsList algo.CircularSlice[string]
 
-func NewTagsMapper2(agg *Aggregator, sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, loader *metajournal.MetricMetaLoader) *tagsMapper2 {
+func NewTagsMapper2(agg *Aggregator, sh2 *agent.Agent, metricStorage *metajournal.MetricsStorage, loader metajournal.MetadataLoader) *tagsMapper2 {
 	ms := &tagsMapper2{
 		agg:           agg,
 		sh2:           sh2,
 		metricStorage: metricStorage,
 		loader:        loader,
 		unknownTags:   map[string]unknownTag{},
-		createTags:    map[string]format.CreateMappingExtra{},
-		config:        agg.configR.configTagsMapper2,
+		createTags:    map[string]data_model.CreateMappingExtra{},
+		config:        agg.configR.configTagsMapper3,
 	}
 	return ms
 }
 
-func (ms *tagsMapper2) SetConfig(c configTagsMapper2) {
+func (ms *tagsMapper2) SetConfig(c configTagsMapper3) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	ms.config = c
@@ -73,7 +60,7 @@ func (ms *tagsMapper2) UnknownTagsLen() int {
 	return len(ms.unknownTags)
 }
 
-func (ms *tagsMapper2) AddUnknownTags(unknownTags map[string]format.CreateMappingExtra, time uint32) (
+func (ms *tagsMapper2) AddUnknownTags(unknownTags map[string]data_model.CreateMappingExtra, time uint32) (
 	unknownMapRemove int, unknownMapAdd int, unknownListAdd int, createMapAdd int, avgRemovedHits float64) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
@@ -128,9 +115,9 @@ func (ms *tagsMapper2) goRun() {
 			pairs = append(pairs, pcache.MappingPair{Str: str, Value: tagValue})
 		}
 		for _, str := range loadTags { // also limited to maxCreateOrLoadTagsPerIteration
-			extra := format.CreateMappingExtra{
-				Create: false, // for documenting intent
-				Host:   ms.agg.aggregatorHost,
+			extra := data_model.CreateMappingExtra{
+				Create:  false, // for documenting intent
+				HostTag: ms.agg.aggregatorHostTag,
 			}
 			tagValue := ms.createTag(str, extra) // tagValue might be 0 or -1, they are ignored by AddValues
 			pairs = append(pairs, pcache.MappingPair{Str: str, Value: tagValue})
@@ -140,7 +127,7 @@ func (ms *tagsMapper2) goRun() {
 	}
 }
 
-func (ms *tagsMapper2) createTag(str string, extra format.CreateMappingExtra) int32 {
+func (ms *tagsMapper2) createTag(str string, extra data_model.CreateMappingExtra) int32 {
 	var metricID int32
 	metricName := ""
 	var unknownMetricID int32
@@ -161,15 +148,15 @@ func (ms *tagsMapper2) createTag(str string, extra format.CreateMappingExtra) in
 	keyValue, c, _, _ := ms.loader.GetTagMapping(context.Background(), str, metricName, extra.Create)
 	ms.sh2.AddValueCounterHostAERA(0, format.BuiltinMetricMetaAggMappingCreated,
 		[]int32{extra.ClientEnv, 0, 0, 0, metricID, c, extra.TagIDKey, format.TagValueIDAggMappingCreatedConveyorNew, unknownMetricID, keyValue},
-		float64(keyValue), 1, data_model.TagUnionBytes{I: extra.Host}, extra.Aera)
+		float64(keyValue), 1, extra.HostTag, extra.Aera)
 	return keyValue
 }
 
-func (ms *tagsMapper2) getTagsToCreateOrLoad() (map[string]format.CreateMappingExtra, []string, int) {
+func (ms *tagsMapper2) getTagsToCreateOrLoad() (map[string]data_model.CreateMappingExtra, []string, int) {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	createTags := ms.createTags
-	ms.createTags = map[string]format.CreateMappingExtra{}
+	ms.createTags = map[string]data_model.CreateMappingExtra{}
 	loadTags := ms.unknownTagsList
 	if len(loadTags) > ms.config.MaxLoadTagsPerIteration {
 		loadTags = loadTags[:ms.config.MaxLoadTagsPerIteration]

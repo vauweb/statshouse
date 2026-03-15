@@ -13,13 +13,13 @@ import (
 
 var _ = basictl.NatWrite
 
-func BuiltinTuple8Reset(vec *[8]uint32) {
+func BuiltinTuple8NatReset(vec *[8]uint32) {
 	for i := range *vec {
 		(*vec)[i] = 0
 	}
 }
 
-func BuiltinTuple8FillRandom(rg *basictl.RandGenerator, vec *[8]uint32) {
+func BuiltinTuple8NatFillRandom(rg *basictl.RandGenerator, vec *[8]uint32) {
 	rg.IncreaseDepth()
 	for i := range *vec {
 		(*vec)[i] = basictl.RandomUint(rg)
@@ -27,7 +27,7 @@ func BuiltinTuple8FillRandom(rg *basictl.RandGenerator, vec *[8]uint32) {
 	rg.DecreaseDepth()
 }
 
-func BuiltinTuple8Read(w []byte, vec *[8]uint32) (_ []byte, err error) {
+func BuiltinTuple8NatReadTL1(w []byte, vec *[8]uint32) (_ []byte, err error) {
 	for i := range *vec {
 		if w, err = basictl.NatRead(w, &(*vec)[i]); err != nil {
 			return w, err
@@ -36,14 +36,14 @@ func BuiltinTuple8Read(w []byte, vec *[8]uint32) (_ []byte, err error) {
 	return w, nil
 }
 
-func BuiltinTuple8Write(w []byte, vec *[8]uint32) []byte {
+func BuiltinTuple8NatWriteTL1(w []byte, vec *[8]uint32) []byte {
 	for _, elem := range *vec {
 		w = basictl.NatWrite(w, elem)
 	}
 	return w
 }
 
-func BuiltinTuple8ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[8]uint32) error {
+func BuiltinTuple8NatReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[8]uint32) error {
 	index := 0
 	if in != nil {
 		in.Delim('[')
@@ -70,10 +70,11 @@ func BuiltinTuple8ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[8]
 	return nil
 }
 
-func BuiltinTuple8WriteJSON(w []byte, vec *[8]uint32) []byte {
-	return BuiltinTuple8WriteJSONOpt(true, false, w, vec)
+func BuiltinTuple8NatWriteJSON(w []byte, vec *[8]uint32) []byte {
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinTuple8NatWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinTuple8WriteJSONOpt(newTypeNames bool, short bool, w []byte, vec *[8]uint32) []byte {
+func BuiltinTuple8NatWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec *[8]uint32) []byte {
 	w = append(w, '[')
 	for _, elem := range *vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -82,16 +83,16 @@ func BuiltinTuple8WriteJSONOpt(newTypeNames bool, short bool, w []byte, vec *[8]
 	return append(w, ']')
 }
 
-func BuiltinVectorFillRandom(rg *basictl.RandGenerator, vec *[]uint32) {
+func BuiltinVectorNatFillRandom(rg *basictl.RandGenerator, vec *[]uint32) {
 	rg.IncreaseDepth()
-	l := rg.LimitValue(basictl.RandomUint(rg))
+	l := basictl.RandomSize(rg)
 	*vec = make([]uint32, l)
 	for i := range *vec {
 		(*vec)[i] = basictl.RandomUint(rg)
 	}
 	rg.DecreaseDepth()
 }
-func BuiltinVectorRead(w []byte, vec *[]uint32) (_ []byte, err error) {
+func BuiltinVectorNatReadTL1(w []byte, vec *[]uint32) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
 		return w, err
@@ -112,7 +113,7 @@ func BuiltinVectorRead(w []byte, vec *[]uint32) (_ []byte, err error) {
 	return w, nil
 }
 
-func BuiltinVectorWrite(w []byte, vec []uint32) []byte {
+func BuiltinVectorNatWriteTL1(w []byte, vec []uint32) []byte {
 	w = basictl.NatWrite(w, uint32(len(vec)))
 	for _, elem := range vec {
 		w = basictl.NatWrite(w, elem)
@@ -120,7 +121,7 @@ func BuiltinVectorWrite(w []byte, vec []uint32) []byte {
 	return w
 }
 
-func BuiltinVectorReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]uint32) error {
+func BuiltinVectorNatReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]uint32) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -148,10 +149,11 @@ func BuiltinVectorReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]u
 	return nil
 }
 
-func BuiltinVectorWriteJSON(w []byte, vec []uint32) []byte {
-	return BuiltinVectorWriteJSONOpt(true, false, w, vec)
+func BuiltinVectorNatWriteJSON(w []byte, vec []uint32) []byte {
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorNatWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []uint32) []byte {
+func BuiltinVectorNatWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []uint32) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)

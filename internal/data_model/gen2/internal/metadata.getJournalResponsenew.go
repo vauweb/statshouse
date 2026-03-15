@@ -26,6 +26,11 @@ func (item *MetadataGetJournalResponsenew) Reset() {
 	item.Events = item.Events[:0]
 }
 
+func (item *MetadataGetJournalResponsenew) FillRandom(rg *basictl.RandGenerator, nat_field_mask uint32) {
+	item.CurrentVersion = basictl.RandomLong(rg)
+	BuiltinVectorMetadataEventFillRandom(rg, &item.Events)
+}
+
 func (item *MetadataGetJournalResponsenew) Read(w []byte, nat_field_mask uint32) (_ []byte, err error) {
 	if w, err = basictl.LongRead(w, &item.CurrentVersion); err != nil {
 		return w, err
@@ -33,7 +38,6 @@ func (item *MetadataGetJournalResponsenew) Read(w []byte, nat_field_mask uint32)
 	return BuiltinVectorMetadataEventRead(w, &item.Events)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataGetJournalResponsenew) WriteGeneral(w []byte, nat_field_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_field_mask), nil
 }
@@ -51,7 +55,6 @@ func (item *MetadataGetJournalResponsenew) ReadBoxed(w []byte, nat_field_mask ui
 	return item.Read(w, nat_field_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataGetJournalResponsenew) WriteBoxedGeneral(w []byte, nat_field_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_field_mask), nil
 }
@@ -61,7 +64,7 @@ func (item *MetadataGetJournalResponsenew) WriteBoxed(w []byte, nat_field_mask u
 	return item.Write(w, nat_field_mask)
 }
 
-func (item *MetadataGetJournalResponsenew) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_field_mask uint32) error {
+func (item *MetadataGetJournalResponsenew) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_field_mask uint32) error {
 	var propCurrentVersionPresented bool
 	var propEventsPresented bool
 
@@ -86,7 +89,7 @@ func (item *MetadataGetJournalResponsenew) ReadJSON(legacyTypeNames bool, in *ba
 				if propEventsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("metadata.getJournalResponsenew", "events")
 				}
-				if err := BuiltinVectorMetadataEventReadJSON(legacyTypeNames, in, &item.Events); err != nil {
+				if err := BuiltinVectorMetadataEventReadJSONGeneral(tctx, in, &item.Events); err != nil {
 					return err
 				}
 				propEventsPresented = true
@@ -110,14 +113,15 @@ func (item *MetadataGetJournalResponsenew) ReadJSON(legacyTypeNames bool, in *ba
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataGetJournalResponsenew) WriteJSONGeneral(w []byte, nat_field_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_field_mask), nil
+func (item *MetadataGetJournalResponsenew) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_field_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_field_mask), nil
 }
 
 func (item *MetadataGetJournalResponsenew) WriteJSON(w []byte, nat_field_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_field_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_field_mask)
 }
-func (item *MetadataGetJournalResponsenew) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_field_mask uint32) []byte {
+func (item *MetadataGetJournalResponsenew) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_field_mask uint32) []byte {
 	w = append(w, '{')
 	backupIndexCurrentVersion := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -129,11 +133,19 @@ func (item *MetadataGetJournalResponsenew) WriteJSONOpt(newTypeNames bool, short
 	backupIndexEvents := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"events":`...)
-	w = BuiltinVectorMetadataEventWriteJSONOpt(newTypeNames, short, w, item.Events)
+	w = BuiltinVectorMetadataEventWriteJSONOpt(tctx, w, item.Events)
 	if (len(item.Events) != 0) == false {
 		w = w[:backupIndexEvents]
 	}
 	return append(w, '}')
+}
+
+func (item *MetadataGetJournalResponsenew) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.getJournalResponsenew"))
+}
+
+func (item *MetadataGetJournalResponsenew) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.getJournalResponsenew")
 }
 
 type MetadataGetJournalResponsenewBytes struct {
@@ -149,6 +161,11 @@ func (item *MetadataGetJournalResponsenewBytes) Reset() {
 	item.Events = item.Events[:0]
 }
 
+func (item *MetadataGetJournalResponsenewBytes) FillRandom(rg *basictl.RandGenerator, nat_field_mask uint32) {
+	item.CurrentVersion = basictl.RandomLong(rg)
+	BuiltinVectorMetadataEventBytesFillRandom(rg, &item.Events)
+}
+
 func (item *MetadataGetJournalResponsenewBytes) Read(w []byte, nat_field_mask uint32) (_ []byte, err error) {
 	if w, err = basictl.LongRead(w, &item.CurrentVersion); err != nil {
 		return w, err
@@ -156,7 +173,6 @@ func (item *MetadataGetJournalResponsenewBytes) Read(w []byte, nat_field_mask ui
 	return BuiltinVectorMetadataEventBytesRead(w, &item.Events)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataGetJournalResponsenewBytes) WriteGeneral(w []byte, nat_field_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_field_mask), nil
 }
@@ -174,7 +190,6 @@ func (item *MetadataGetJournalResponsenewBytes) ReadBoxed(w []byte, nat_field_ma
 	return item.Read(w, nat_field_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataGetJournalResponsenewBytes) WriteBoxedGeneral(w []byte, nat_field_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_field_mask), nil
 }
@@ -184,7 +199,7 @@ func (item *MetadataGetJournalResponsenewBytes) WriteBoxed(w []byte, nat_field_m
 	return item.Write(w, nat_field_mask)
 }
 
-func (item *MetadataGetJournalResponsenewBytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_field_mask uint32) error {
+func (item *MetadataGetJournalResponsenewBytes) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_field_mask uint32) error {
 	var propCurrentVersionPresented bool
 	var propEventsPresented bool
 
@@ -209,7 +224,7 @@ func (item *MetadataGetJournalResponsenewBytes) ReadJSON(legacyTypeNames bool, i
 				if propEventsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("metadata.getJournalResponsenew", "events")
 				}
-				if err := BuiltinVectorMetadataEventBytesReadJSON(legacyTypeNames, in, &item.Events); err != nil {
+				if err := BuiltinVectorMetadataEventBytesReadJSONGeneral(tctx, in, &item.Events); err != nil {
 					return err
 				}
 				propEventsPresented = true
@@ -233,14 +248,15 @@ func (item *MetadataGetJournalResponsenewBytes) ReadJSON(legacyTypeNames bool, i
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataGetJournalResponsenewBytes) WriteJSONGeneral(w []byte, nat_field_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_field_mask), nil
+func (item *MetadataGetJournalResponsenewBytes) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_field_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_field_mask), nil
 }
 
 func (item *MetadataGetJournalResponsenewBytes) WriteJSON(w []byte, nat_field_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_field_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_field_mask)
 }
-func (item *MetadataGetJournalResponsenewBytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_field_mask uint32) []byte {
+func (item *MetadataGetJournalResponsenewBytes) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_field_mask uint32) []byte {
 	w = append(w, '{')
 	backupIndexCurrentVersion := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -252,9 +268,17 @@ func (item *MetadataGetJournalResponsenewBytes) WriteJSONOpt(newTypeNames bool, 
 	backupIndexEvents := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"events":`...)
-	w = BuiltinVectorMetadataEventBytesWriteJSONOpt(newTypeNames, short, w, item.Events)
+	w = BuiltinVectorMetadataEventBytesWriteJSONOpt(tctx, w, item.Events)
 	if (len(item.Events) != 0) == false {
 		w = w[:backupIndexEvents]
 	}
 	return append(w, '}')
+}
+
+func (item *MetadataGetJournalResponsenewBytes) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.getJournalResponsenew"))
+}
+
+func (item *MetadataGetJournalResponsenewBytes) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.getJournalResponsenew")
 }

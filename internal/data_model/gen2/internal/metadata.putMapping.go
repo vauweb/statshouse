@@ -28,6 +28,12 @@ func (item *MetadataPutMapping) Reset() {
 	item.Value = item.Value[:0]
 }
 
+func (item *MetadataPutMapping) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldMask = basictl.RandomUint(rg)
+	BuiltinVectorStringFillRandom(rg, &item.Keys)
+	BuiltinVectorIntFillRandom(rg, &item.Value)
+}
+
 func (item *MetadataPutMapping) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldMask); err != nil {
 		return w, err
@@ -38,7 +44,6 @@ func (item *MetadataPutMapping) Read(w []byte) (_ []byte, err error) {
 	return BuiltinVectorIntRead(w, &item.Value)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataPutMapping) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -57,7 +62,6 @@ func (item *MetadataPutMapping) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataPutMapping) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -77,47 +81,61 @@ func (item *MetadataPutMapping) WriteResult(w []byte, ret MetadataPutMappingResp
 }
 
 func (item *MetadataPutMapping) ReadResultJSON(legacyTypeNames bool, in *basictl.JsonLexer, ret *MetadataPutMappingResponse) error {
-	if err := ret.ReadJSON(legacyTypeNames, in); err != nil {
+	tctx := &basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	if err := ret.ReadJSONGeneral(tctx, in); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (item *MetadataPutMapping) WriteResultJSON(w []byte, ret MetadataPutMappingResponse) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *MetadataPutMapping) writeResultJSON(newTypeNames bool, short bool, w []byte, ret MetadataPutMappingResponse) (_ []byte, err error) {
-	w = ret.WriteJSONOpt(newTypeNames, short, w)
+func (item *MetadataPutMapping) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret MetadataPutMappingResponse) (_ []byte, err error) {
+	w = ret.WriteJSONOpt(tctx, w)
 	return w, nil
 }
 
-func (item *MetadataPutMapping) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *MetadataPutMapping) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret MetadataPutMappingResponse
+	ret.FillRandom(rg)
+	return item.WriteResult(w, ret)
+}
+
+func (item *MetadataPutMapping) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret MetadataPutMappingResponse
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *MetadataPutMapping) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *MetadataPutMapping) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret MetadataPutMappingResponse
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *MetadataPutMapping) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret MetadataPutMappingResponse
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *MetadataPutMapping) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.putMapping")
+}
+
+func (item *MetadataPutMapping) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.putMapping")
+}
+
+func (item *MetadataPutMapping) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.putMapping")
+}
+
+func (item *MetadataPutMapping) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.putMapping")
 }
 
 func (item MetadataPutMapping) String() string {
@@ -125,6 +143,11 @@ func (item MetadataPutMapping) String() string {
 }
 
 func (item *MetadataPutMapping) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataPutMapping) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldMaskPresented bool
 	var propKeysPresented bool
 	var propValuePresented bool
@@ -150,7 +173,7 @@ func (item *MetadataPutMapping) ReadJSON(legacyTypeNames bool, in *basictl.JsonL
 				if propKeysPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("metadata.putMapping", "keys")
 				}
-				if err := BuiltinVectorStringReadJSON(legacyTypeNames, in, &item.Keys); err != nil {
+				if err := BuiltinVectorStringReadJSONGeneral(tctx, in, &item.Keys); err != nil {
 					return err
 				}
 				propKeysPresented = true
@@ -158,7 +181,7 @@ func (item *MetadataPutMapping) ReadJSON(legacyTypeNames bool, in *basictl.JsonL
 				if propValuePresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("metadata.putMapping", "value")
 				}
-				if err := BuiltinVectorIntReadJSON(legacyTypeNames, in, &item.Value); err != nil {
+				if err := BuiltinVectorIntReadJSONGeneral(tctx, in, &item.Value); err != nil {
 					return err
 				}
 				propValuePresented = true
@@ -185,14 +208,15 @@ func (item *MetadataPutMapping) ReadJSON(legacyTypeNames bool, in *basictl.JsonL
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataPutMapping) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataPutMapping) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataPutMapping) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataPutMapping) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataPutMapping) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -204,14 +228,14 @@ func (item *MetadataPutMapping) WriteJSONOpt(newTypeNames bool, short bool, w []
 	backupIndexKeys := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"keys":`...)
-	w = BuiltinVectorStringWriteJSONOpt(newTypeNames, short, w, item.Keys)
+	w = BuiltinVectorStringWriteJSONOpt(tctx, w, item.Keys)
 	if (len(item.Keys) != 0) == false {
 		w = w[:backupIndexKeys]
 	}
 	backupIndexValue := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"value":`...)
-	w = BuiltinVectorIntWriteJSONOpt(newTypeNames, short, w, item.Value)
+	w = BuiltinVectorIntWriteJSONOpt(tctx, w, item.Value)
 	if (len(item.Value) != 0) == false {
 		w = w[:backupIndexValue]
 	}
@@ -227,4 +251,12 @@ func (item *MetadataPutMapping) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.putMapping", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataPutMapping) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.putMapping"))
+}
+
+func (item *MetadataPutMapping) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.putMapping")
 }

@@ -26,6 +26,11 @@ func (item *MetadataResetFloodResponse2) Reset() {
 	item.BudgetAfter = 0
 }
 
+func (item *MetadataResetFloodResponse2) FillRandom(rg *basictl.RandGenerator) {
+	item.BudgetBefore = basictl.RandomInt(rg)
+	item.BudgetAfter = basictl.RandomInt(rg)
+}
+
 func (item *MetadataResetFloodResponse2) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.IntRead(w, &item.BudgetBefore); err != nil {
 		return w, err
@@ -33,7 +38,6 @@ func (item *MetadataResetFloodResponse2) Read(w []byte) (_ []byte, err error) {
 	return basictl.IntRead(w, &item.BudgetAfter)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataResetFloodResponse2) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -51,7 +55,6 @@ func (item *MetadataResetFloodResponse2) ReadBoxed(w []byte) (_ []byte, err erro
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataResetFloodResponse2) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -66,6 +69,11 @@ func (item MetadataResetFloodResponse2) String() string {
 }
 
 func (item *MetadataResetFloodResponse2) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataResetFloodResponse2) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propBudgetBeforePresented bool
 	var propBudgetAfterPresented bool
 
@@ -114,14 +122,15 @@ func (item *MetadataResetFloodResponse2) ReadJSON(legacyTypeNames bool, in *basi
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataResetFloodResponse2) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataResetFloodResponse2) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataResetFloodResponse2) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataResetFloodResponse2) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataResetFloodResponse2) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexBudgetBefore := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -149,4 +158,12 @@ func (item *MetadataResetFloodResponse2) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.resetFloodResponse2", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataResetFloodResponse2) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.resetFloodResponse2"))
+}
+
+func (item *MetadataResetFloodResponse2) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.resetFloodResponse2")
 }

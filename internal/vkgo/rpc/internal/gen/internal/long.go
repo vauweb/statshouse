@@ -15,14 +15,14 @@ var _ = basictl.NatWrite
 
 func BuiltinVectorLongFillRandom(rg *basictl.RandGenerator, vec *[]int64) {
 	rg.IncreaseDepth()
-	l := rg.LimitValue(basictl.RandomUint(rg))
+	l := basictl.RandomSize(rg)
 	*vec = make([]int64, l)
 	for i := range *vec {
 		(*vec)[i] = basictl.RandomLong(rg)
 	}
 	rg.DecreaseDepth()
 }
-func BuiltinVectorLongRead(w []byte, vec *[]int64) (_ []byte, err error) {
+func BuiltinVectorLongReadTL1(w []byte, vec *[]int64) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
 		return w, err
@@ -43,7 +43,7 @@ func BuiltinVectorLongRead(w []byte, vec *[]int64) (_ []byte, err error) {
 	return w, nil
 }
 
-func BuiltinVectorLongWrite(w []byte, vec []int64) []byte {
+func BuiltinVectorLongWriteTL1(w []byte, vec []int64) []byte {
 	w = basictl.NatWrite(w, uint32(len(vec)))
 	for _, elem := range vec {
 		w = basictl.LongWrite(w, elem)
@@ -51,7 +51,7 @@ func BuiltinVectorLongWrite(w []byte, vec []int64) []byte {
 	return w
 }
 
-func BuiltinVectorLongReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]int64) error {
+func BuiltinVectorLongReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]int64) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -80,9 +80,10 @@ func BuiltinVectorLongReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec 
 }
 
 func BuiltinVectorLongWriteJSON(w []byte, vec []int64) []byte {
-	return BuiltinVectorLongWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorLongWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorLongWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []int64) []byte {
+func BuiltinVectorLongWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []int64) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)

@@ -33,7 +33,7 @@ func (item *MetadataCreateMappingEvent) SetCreate(v bool) {
 		item.FieldMask &^= 1 << 0
 	}
 }
-func (item MetadataCreateMappingEvent) IsSetCreate() bool { return item.FieldMask&(1<<0) != 0 }
+func (item *MetadataCreateMappingEvent) IsSetCreate() bool { return item.FieldMask&(1<<0) != 0 }
 
 func (item *MetadataCreateMappingEvent) Reset() {
 	item.FieldMask = 0
@@ -42,6 +42,15 @@ func (item *MetadataCreateMappingEvent) Reset() {
 	item.Metric = ""
 	item.Budget = 0
 	item.UpdatedAt = 0
+}
+
+func (item *MetadataCreateMappingEvent) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldMask = basictl.RandomFieldMask(rg, 0b1)
+	item.Id = basictl.RandomInt(rg)
+	item.Key = basictl.RandomString(rg)
+	item.Metric = basictl.RandomString(rg)
+	item.Budget = basictl.RandomLong(rg)
+	item.UpdatedAt = basictl.RandomUint(rg)
 }
 
 func (item *MetadataCreateMappingEvent) Read(w []byte) (_ []byte, err error) {
@@ -63,7 +72,6 @@ func (item *MetadataCreateMappingEvent) Read(w []byte) (_ []byte, err error) {
 	return basictl.NatRead(w, &item.UpdatedAt)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataCreateMappingEvent) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -85,7 +93,6 @@ func (item *MetadataCreateMappingEvent) ReadBoxed(w []byte) (_ []byte, err error
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataCreateMappingEvent) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -100,6 +107,11 @@ func (item MetadataCreateMappingEvent) String() string {
 }
 
 func (item *MetadataCreateMappingEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataCreateMappingEvent) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldMaskPresented bool
 	var propIdPresented bool
 	var propKeyPresented bool
@@ -209,20 +221,21 @@ func (item *MetadataCreateMappingEvent) ReadJSON(legacyTypeNames bool, in *basic
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeCreatePresented && !trueTypeCreateValue && (item.FieldMask&(1<<0) != 0) {
-		return ErrorInvalidJSON("metadata.createMappingEvent", "fieldmask bit field_mask.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("metadata.createMappingEvent", "fieldmask bit item.FieldMask.0 is indefinite because of the contradictions in values")
 	}
 	return nil
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataCreateMappingEvent) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataCreateMappingEvent) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataCreateMappingEvent) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataCreateMappingEvent) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataCreateMappingEvent) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -282,4 +295,12 @@ func (item *MetadataCreateMappingEvent) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.createMappingEvent", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataCreateMappingEvent) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.createMappingEvent"))
+}
+
+func (item *MetadataCreateMappingEvent) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.createMappingEvent")
 }

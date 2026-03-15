@@ -34,7 +34,7 @@ func (item *StatshouseGetTargetsResult) ClearGaugeMetrics(nat_fields_mask *uint3
 		*nat_fields_mask &^= 1 << 0
 	}
 }
-func (item StatshouseGetTargetsResult) IsSetGaugeMetrics(nat_fields_mask uint32) bool {
+func (item *StatshouseGetTargetsResult) IsSetGaugeMetrics(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<0) != 0
 }
 
@@ -42,6 +42,16 @@ func (item *StatshouseGetTargetsResult) Reset() {
 	item.Targets = item.Targets[:0]
 	item.Hash = ""
 	item.GaugeMetrics = item.GaugeMetrics[:0]
+}
+
+func (item *StatshouseGetTargetsResult) FillRandom(rg *basictl.RandGenerator, nat_fields_mask uint32) {
+	BuiltinVectorStatshousePromTargetFillRandom(rg, &item.Targets, nat_fields_mask)
+	item.Hash = basictl.RandomString(rg)
+	if nat_fields_mask&(1<<0) != 0 {
+		BuiltinVectorStringFillRandom(rg, &item.GaugeMetrics)
+	} else {
+		item.GaugeMetrics = item.GaugeMetrics[:0]
+	}
 }
 
 func (item *StatshouseGetTargetsResult) Read(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
@@ -61,7 +71,6 @@ func (item *StatshouseGetTargetsResult) Read(w []byte, nat_fields_mask uint32) (
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseGetTargetsResult) WriteGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_fields_mask), nil
 }
@@ -82,7 +91,6 @@ func (item *StatshouseGetTargetsResult) ReadBoxed(w []byte, nat_fields_mask uint
 	return item.Read(w, nat_fields_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseGetTargetsResult) WriteBoxedGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_fields_mask), nil
 }
@@ -92,7 +100,7 @@ func (item *StatshouseGetTargetsResult) WriteBoxed(w []byte, nat_fields_mask uin
 	return item.Write(w, nat_fields_mask)
 }
 
-func (item *StatshouseGetTargetsResult) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask uint32) error {
+func (item *StatshouseGetTargetsResult) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_fields_mask uint32) error {
 	var rawTargets []byte
 	var propHashPresented bool
 	var propGaugeMetricsPresented bool
@@ -129,7 +137,7 @@ func (item *StatshouseGetTargetsResult) ReadJSON(legacyTypeNames bool, in *basic
 				if nat_fields_mask&(1<<0) == 0 {
 					return ErrorInvalidJSON("statshouse.getTargetsResult", "field 'gauge_metrics' is defined, while corresponding implicit fieldmask bit is 0")
 				}
-				if err := BuiltinVectorStringReadJSON(legacyTypeNames, in, &item.GaugeMetrics); err != nil {
+				if err := BuiltinVectorStringReadJSONGeneral(tctx, in, &item.GaugeMetrics); err != nil {
 					return err
 				}
 				propGaugeMetricsPresented = true
@@ -154,7 +162,7 @@ func (item *StatshouseGetTargetsResult) ReadJSON(legacyTypeNames bool, in *basic
 	if rawTargets != nil {
 		inTargetsPointer = &inTargets
 	}
-	if err := BuiltinVectorStatshousePromTargetReadJSON(legacyTypeNames, inTargetsPointer, &item.Targets, nat_fields_mask); err != nil {
+	if err := BuiltinVectorStatshousePromTargetReadJSONGeneral(tctx, inTargetsPointer, &item.Targets, nat_fields_mask); err != nil {
 		return err
 	}
 
@@ -162,19 +170,20 @@ func (item *StatshouseGetTargetsResult) ReadJSON(legacyTypeNames bool, in *basic
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseGetTargetsResult) WriteJSONGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask), nil
+func (item *StatshouseGetTargetsResult) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_fields_mask), nil
 }
 
 func (item *StatshouseGetTargetsResult) WriteJSON(w []byte, nat_fields_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_fields_mask)
 }
-func (item *StatshouseGetTargetsResult) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask uint32) []byte {
+func (item *StatshouseGetTargetsResult) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) []byte {
 	w = append(w, '{')
 	backupIndexTargets := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"targets":`...)
-	w = BuiltinVectorStatshousePromTargetWriteJSONOpt(newTypeNames, short, w, item.Targets, nat_fields_mask)
+	w = BuiltinVectorStatshousePromTargetWriteJSONOpt(tctx, w, item.Targets, nat_fields_mask)
 	if (len(item.Targets) != 0) == false {
 		w = w[:backupIndexTargets]
 	}
@@ -188,9 +197,17 @@ func (item *StatshouseGetTargetsResult) WriteJSONOpt(newTypeNames bool, short bo
 	if nat_fields_mask&(1<<0) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"gauge_metrics":`...)
-		w = BuiltinVectorStringWriteJSONOpt(newTypeNames, short, w, item.GaugeMetrics)
+		w = BuiltinVectorStringWriteJSONOpt(tctx, w, item.GaugeMetrics)
 	}
 	return append(w, '}')
+}
+
+func (item *StatshouseGetTargetsResult) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.getTargetsResult"))
+}
+
+func (item *StatshouseGetTargetsResult) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.getTargetsResult")
 }
 
 type StatshouseGetTargetsResultBytes struct {
@@ -214,7 +231,7 @@ func (item *StatshouseGetTargetsResultBytes) ClearGaugeMetrics(nat_fields_mask *
 		*nat_fields_mask &^= 1 << 0
 	}
 }
-func (item StatshouseGetTargetsResultBytes) IsSetGaugeMetrics(nat_fields_mask uint32) bool {
+func (item *StatshouseGetTargetsResultBytes) IsSetGaugeMetrics(nat_fields_mask uint32) bool {
 	return nat_fields_mask&(1<<0) != 0
 }
 
@@ -222,6 +239,16 @@ func (item *StatshouseGetTargetsResultBytes) Reset() {
 	item.Targets = item.Targets[:0]
 	item.Hash = item.Hash[:0]
 	item.GaugeMetrics = item.GaugeMetrics[:0]
+}
+
+func (item *StatshouseGetTargetsResultBytes) FillRandom(rg *basictl.RandGenerator, nat_fields_mask uint32) {
+	BuiltinVectorStatshousePromTargetBytesFillRandom(rg, &item.Targets, nat_fields_mask)
+	item.Hash = basictl.RandomStringBytes(rg)
+	if nat_fields_mask&(1<<0) != 0 {
+		BuiltinVectorStringBytesFillRandom(rg, &item.GaugeMetrics)
+	} else {
+		item.GaugeMetrics = item.GaugeMetrics[:0]
+	}
 }
 
 func (item *StatshouseGetTargetsResultBytes) Read(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
@@ -241,7 +268,6 @@ func (item *StatshouseGetTargetsResultBytes) Read(w []byte, nat_fields_mask uint
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseGetTargetsResultBytes) WriteGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_fields_mask), nil
 }
@@ -262,7 +288,6 @@ func (item *StatshouseGetTargetsResultBytes) ReadBoxed(w []byte, nat_fields_mask
 	return item.Read(w, nat_fields_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseGetTargetsResultBytes) WriteBoxedGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_fields_mask), nil
 }
@@ -272,7 +297,7 @@ func (item *StatshouseGetTargetsResultBytes) WriteBoxed(w []byte, nat_fields_mas
 	return item.Write(w, nat_fields_mask)
 }
 
-func (item *StatshouseGetTargetsResultBytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_fields_mask uint32) error {
+func (item *StatshouseGetTargetsResultBytes) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_fields_mask uint32) error {
 	var rawTargets []byte
 	var propHashPresented bool
 	var propGaugeMetricsPresented bool
@@ -309,7 +334,7 @@ func (item *StatshouseGetTargetsResultBytes) ReadJSON(legacyTypeNames bool, in *
 				if nat_fields_mask&(1<<0) == 0 {
 					return ErrorInvalidJSON("statshouse.getTargetsResult", "field 'gauge_metrics' is defined, while corresponding implicit fieldmask bit is 0")
 				}
-				if err := BuiltinVectorStringBytesReadJSON(legacyTypeNames, in, &item.GaugeMetrics); err != nil {
+				if err := BuiltinVectorStringBytesReadJSONGeneral(tctx, in, &item.GaugeMetrics); err != nil {
 					return err
 				}
 				propGaugeMetricsPresented = true
@@ -334,7 +359,7 @@ func (item *StatshouseGetTargetsResultBytes) ReadJSON(legacyTypeNames bool, in *
 	if rawTargets != nil {
 		inTargetsPointer = &inTargets
 	}
-	if err := BuiltinVectorStatshousePromTargetBytesReadJSON(legacyTypeNames, inTargetsPointer, &item.Targets, nat_fields_mask); err != nil {
+	if err := BuiltinVectorStatshousePromTargetBytesReadJSONGeneral(tctx, inTargetsPointer, &item.Targets, nat_fields_mask); err != nil {
 		return err
 	}
 
@@ -342,19 +367,20 @@ func (item *StatshouseGetTargetsResultBytes) ReadJSON(legacyTypeNames bool, in *
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseGetTargetsResultBytes) WriteJSONGeneral(w []byte, nat_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask), nil
+func (item *StatshouseGetTargetsResultBytes) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_fields_mask), nil
 }
 
 func (item *StatshouseGetTargetsResultBytes) WriteJSON(w []byte, nat_fields_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_fields_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_fields_mask)
 }
-func (item *StatshouseGetTargetsResultBytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_fields_mask uint32) []byte {
+func (item *StatshouseGetTargetsResultBytes) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_fields_mask uint32) []byte {
 	w = append(w, '{')
 	backupIndexTargets := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"targets":`...)
-	w = BuiltinVectorStatshousePromTargetBytesWriteJSONOpt(newTypeNames, short, w, item.Targets, nat_fields_mask)
+	w = BuiltinVectorStatshousePromTargetBytesWriteJSONOpt(tctx, w, item.Targets, nat_fields_mask)
 	if (len(item.Targets) != 0) == false {
 		w = w[:backupIndexTargets]
 	}
@@ -368,7 +394,15 @@ func (item *StatshouseGetTargetsResultBytes) WriteJSONOpt(newTypeNames bool, sho
 	if nat_fields_mask&(1<<0) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"gauge_metrics":`...)
-		w = BuiltinVectorStringBytesWriteJSONOpt(newTypeNames, short, w, item.GaugeMetrics)
+		w = BuiltinVectorStringBytesWriteJSONOpt(tctx, w, item.GaugeMetrics)
 	}
 	return append(w, '}')
+}
+
+func (item *StatshouseGetTargetsResultBytes) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.getTargetsResult"))
+}
+
+func (item *StatshouseGetTargetsResultBytes) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.getTargetsResult")
 }

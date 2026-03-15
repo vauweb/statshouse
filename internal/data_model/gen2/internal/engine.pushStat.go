@@ -29,11 +29,20 @@ func (item *EnginePushStat) ClearStat() {
 	item.Stat.Reset()
 	item.FieldsMask &^= 1 << 0
 }
-func (item EnginePushStat) IsSetStat() bool { return item.FieldsMask&(1<<0) != 0 }
+func (item *EnginePushStat) IsSetStat() bool { return item.FieldsMask&(1<<0) != 0 }
 
 func (item *EnginePushStat) Reset() {
 	item.FieldsMask = 0
 	item.Stat.Reset()
+}
+
+func (item *EnginePushStat) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomFieldMask(rg, 0b1)
+	if item.FieldsMask&(1<<0) != 0 {
+		item.Stat.FillRandom(rg)
+	} else {
+		item.Stat.Reset()
+	}
 }
 
 func (item *EnginePushStat) Read(w []byte) (_ []byte, err error) {
@@ -50,7 +59,6 @@ func (item *EnginePushStat) Read(w []byte) (_ []byte, err error) {
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *EnginePushStat) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -70,7 +78,6 @@ func (item *EnginePushStat) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EnginePushStat) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -97,40 +104,53 @@ func (item *EnginePushStat) ReadResultJSON(legacyTypeNames bool, in *basictl.Jso
 }
 
 func (item *EnginePushStat) WriteResultJSON(w []byte, ret bool) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *EnginePushStat) writeResultJSON(newTypeNames bool, short bool, w []byte, ret bool) (_ []byte, err error) {
+func (item *EnginePushStat) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret bool) (_ []byte, err error) {
 	w = basictl.JSONWriteBool(w, ret)
 	return w, nil
 }
 
-func (item *EnginePushStat) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EnginePushStat) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret bool
+	ret = basictl.RandomUint(rg)&1 == 1
+	return item.WriteResult(w, ret)
+}
+
+func (item *EnginePushStat) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret bool
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *EnginePushStat) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EnginePushStat) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret bool
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *EnginePushStat) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret bool
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *EnginePushStat) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.pushStat")
+}
+
+func (item *EnginePushStat) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.pushStat")
+}
+
+func (item *EnginePushStat) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.pushStat")
+}
+
+func (item *EnginePushStat) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.pushStat")
 }
 
 func (item EnginePushStat) String() string {
@@ -138,6 +158,11 @@ func (item EnginePushStat) String() string {
 }
 
 func (item *EnginePushStat) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EnginePushStat) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propStatPresented bool
 
@@ -162,7 +187,7 @@ func (item *EnginePushStat) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer
 				if propStatPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("engine.pushStat", "stat")
 				}
-				if err := item.Stat.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Stat.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propStatPresented = true
@@ -189,14 +214,15 @@ func (item *EnginePushStat) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EnginePushStat) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EnginePushStat) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EnginePushStat) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EnginePushStat) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EnginePushStat) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -208,7 +234,7 @@ func (item *EnginePushStat) WriteJSONOpt(newTypeNames bool, short bool, w []byte
 	if item.FieldsMask&(1<<0) != 0 {
 		w = basictl.JSONAddCommaIfNeeded(w)
 		w = append(w, `"stat":`...)
-		w = item.Stat.WriteJSONOpt(newTypeNames, short, w)
+		w = item.Stat.WriteJSONOpt(tctx, w)
 	}
 	return append(w, '}')
 }
@@ -222,4 +248,12 @@ func (item *EnginePushStat) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.pushStat", err.Error())
 	}
 	return nil
+}
+
+func (item *EnginePushStat) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.pushStat"))
+}
+
+func (item *EnginePushStat) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.pushStat")
 }

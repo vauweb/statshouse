@@ -131,12 +131,11 @@ func Test_AgentQueue(t *testing.T) {
 	agent := &Agent{
 		config:                            config,
 		logF:                              func(f string, a ...any) { fmt.Printf(f, a...) },
-		mappingsCache:                     pcache.NewMappingsCache(1024*1024, 86400),
+		mappingsCache:                     pcache.NewMappingsCache(data_model.NewChunkedStorageNop(), 1024*1024, 86400),
 		shardByMetricCount:                1,
 		builtinMetricMetaUsageCPU:         *format.BuiltinMetricMetaUsageCPU,
 		builtinMetricMetaUsageMemory:      *format.BuiltinMetricMetaUsageMemory,
 		builtinMetricMetaHeartbeatVersion: *format.BuiltinMetricMetaHeartbeatVersion,
-		builtinMetricMetaHeartbeatArgs:    *format.BuiltinMetricMetaHeartbeatArgs,
 	}
 	startTime := time.Unix(1000*24*3600, 0) // arbitrary deterministic test time
 	nowUnix := uint32(startTime.Unix())
@@ -162,16 +161,16 @@ func Test_AgentQueue(t *testing.T) {
 	testEnsureNoFlush(t, shard)
 	agent.goFlushIteration(startTime.Add(time.Second))
 	testEnsureFlush(t, shard, nowUnix-2)
-	agent.AddCounter(nowUnix, metric1sec, []int32{}, 1)
-	agent.AddCounter(nowUnix, metric5sec, []int32{}, 1)
-	agent.AddCounter(nowUnix+1, metric1sec, []int32{}, 1)
-	agent.AddCounter(nowUnix+1, metric5sec, []int32{}, 1)
+	agent.AddCounter(nowUnix, metric1sec, nil, 1)
+	agent.AddCounter(nowUnix, metric5sec, nil, 1)
+	agent.AddCounter(nowUnix+1, metric1sec, nil, 1)
+	agent.AddCounter(nowUnix+1, metric5sec, nil, 1)
 	agent.goFlushIteration(startTime.Add(data_model.AgentWindow))
 	testEnsureFlush(t, shard, nowUnix-1)
-	agent.AddCounter(nowUnix+1, metric1sec, []int32{}, 1)
-	agent.AddCounter(nowUnix+1, metric5sec, []int32{}, 1)
-	agent.AddCounter(nowUnix+2, metric1sec, []int32{}, 1)
-	agent.AddCounter(nowUnix+2, metric5sec, []int32{}, 1)
+	agent.AddCounter(nowUnix+1, metric1sec, nil, 1)
+	agent.AddCounter(nowUnix+1, metric5sec, nil, 1)
+	agent.AddCounter(nowUnix+2, metric1sec, nil, 1)
+	agent.AddCounter(nowUnix+2, metric5sec, nil, 1)
 	agent.goFlushIteration(startTime.Add(2 * time.Second))
 	testEnsureNoFlush(t, shard)
 	for i := 1; i < 12; i++ { // wait until 5-seconds metrics flushed
@@ -246,7 +245,6 @@ func Benchmark_AgentApplyMetric(b *testing.B) {
 	h := data_model.MappedMetricHeader{
 		MetricMeta: &format.MetricMetaValue{
 			EffectiveResolution: 1,
-			PipelineVersion:     3,
 		},
 	}
 
@@ -256,7 +254,7 @@ func Benchmark_AgentApplyMetric(b *testing.B) {
 	var scratch []byte
 	for i := 0; i < b.N; i++ {
 		h.Key = randKey(rng, nowUnix, 1)
-		agent.ApplyMetric(m, h, format.TagValueIDAggMappingStatusOKCached, &scratch)
+		agent.ApplyMetric(m, h, &scratch)
 	}
 }
 
@@ -276,7 +274,7 @@ func makeAgent(config Config, nowUnix uint32) *Agent {
 	agent := &Agent{
 		config:        config,
 		logF:          func(f string, a ...any) { fmt.Printf(f, a...) },
-		mappingsCache: pcache.NewMappingsCache(1024*1024, 86400),
+		mappingsCache: pcache.NewMappingsCache(data_model.NewChunkedStorageNop(), 1024*1024, 86400),
 	}
 	agent.Shards = make([]*Shard, 5)
 	for i := range agent.Shards {

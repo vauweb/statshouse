@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/VKCOM/statshouse-go"
+
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
@@ -645,20 +646,22 @@ func (l *cache2Loader) loadChunks() {
 	first := chunks[0]
 	last := chunks[len(chunks)-1]
 	lod := data_model.LOD{
-		FromSec:     first.chunk.start / int64(time.Second), // nanoseconds from seconds
-		ToSec:       last.chunk.end / int64(time.Second),    // nanoseconds from seconds
-		StepSec:     l.lod.StepSec,
-		Version:     l.lod.Version,
-		Metric:      l.lod.Metric,
-		NewSharding: l.lod.NewSharding,
-		HasPreKey:   l.lod.HasPreKey,
-		PreKeyOnly:  l.lod.PreKeyOnly,
-		Location:    l.lod.Location,
+		FromSec:    first.chunk.start / int64(time.Second), // nanoseconds from seconds
+		ToSec:      last.chunk.end / int64(time.Second),    // nanoseconds from seconds
+		StepSec:    l.lod.StepSec,
+		Version:    l.lod.Version,
+		Metric:     l.lod.Metric,
+		HasPreKey:  l.lod.HasPreKey,
+		PreKeyOnly: l.lod.PreKeyOnly,
+		Location:   l.lod.Location,
 	}
 	h, q := l.handler, l.query
 	c, b := l.cache, l.bucket
 	data := l.data[first.chunkStart:last.chunkEnd]
-	_, err := c.loader(context.Background(), h, q, lod, data, 0)
+
+	ctx, cancel := context.WithTimeout(context.Background(), QuerySelectTimeoutDefault)
+	defer cancel()
+	_, err := c.loader(ctx, h, q, lod, data, 0)
 	if err == nil {
 		startMapTags := time.Now()
 		cache2MapStringTags(h, q, data)
@@ -791,7 +794,7 @@ func (c *cache2LoaderChunk) copy(l *cache2Loader, info *cache2UpdateInfo) {
 					if 0 <= k && k < len(q.metric.Tags) {
 						tag = q.metric.Tags[k]
 					}
-					if v, err := h.getRichTagValueID(&tag, h.version, s); err == nil {
+					if v, err := h.getRichTagValueID(&tag, s); err == nil {
 						row.tag[k] = int64(v)
 						row.stag[k] = ""
 						row.stagCount--
@@ -1123,7 +1126,7 @@ func cache2MapStringTags(h *requestHandler, q *queryBuilder, d cache2Data) {
 		for i := 0; i < len(d); i++ {
 			for j := 0; j < len(d[i]); j++ {
 				if s := d[i][j].stag[tagX]; s != "" {
-					v, err := h.getRichTagValueID(&tag, h.version, s)
+					v, err := h.getRichTagValueID(&tag, s)
 					if err == nil {
 						d[i][j].tag[tagX] = int64(v)
 						d[i][j].stag[tagX] = ""

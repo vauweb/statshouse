@@ -23,30 +23,48 @@ func (item *True) Reset() {}
 
 func (item *True) FillRandom(rg *basictl.RandGenerator) {}
 
-func (item *True) Read(w []byte) (_ []byte, err error) { return w, nil }
+func (item *True) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *True) ReadTL1(w []byte) (_ []byte, err error) { return w, nil }
 
 func (item *True) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *True) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *True) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *True) WriteTL1(w []byte) []byte {
 	return w
 }
 
 func (item *True) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *True) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x3fedd339); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *True) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *True) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *True) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *True) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x3fedd339)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item True) String() string {
@@ -54,6 +72,11 @@ func (item True) String() string {
 }
 
 func (item *True) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *True) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	if in != nil {
 		in.Delim('{')
 		if !in.Ok() {
@@ -71,14 +94,15 @@ func (item *True) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *True) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *True) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *True) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *True) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *True) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	return append(w, '}')
 }

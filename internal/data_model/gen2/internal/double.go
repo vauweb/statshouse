@@ -19,6 +19,14 @@ func BuiltinTuple2DoubleReset(vec *[2]float64) {
 	}
 }
 
+func BuiltinTuple2DoubleFillRandom(rg *basictl.RandGenerator, vec *[2]float64) {
+	rg.IncreaseDepth()
+	for i := range *vec {
+		(*vec)[i] = basictl.RandomDouble(rg)
+	}
+	rg.DecreaseDepth()
+}
+
 func BuiltinTuple2DoubleRead(w []byte, vec *[2]float64) (_ []byte, err error) {
 	for i := range *vec {
 		if w, err = basictl.DoubleRead(w, &(*vec)[i]); err != nil {
@@ -35,7 +43,11 @@ func BuiltinTuple2DoubleWrite(w []byte, vec *[2]float64) []byte {
 	return w
 }
 
-func BuiltinTuple2DoubleReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[2]float64) error {
+func BuiltinTuple2DoubleInternalReadTL2(r []byte, vec *[2]float64) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("[2]float64")
+}
+
+func BuiltinTuple2DoubleReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[2]float64) error {
 	index := 0
 	if in != nil {
 		in.Delim('[')
@@ -63,9 +75,10 @@ func BuiltinTuple2DoubleReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, ve
 }
 
 func BuiltinTuple2DoubleWriteJSON(w []byte, vec *[2]float64) []byte {
-	return BuiltinTuple2DoubleWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinTuple2DoubleWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinTuple2DoubleWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec *[2]float64) []byte {
+func BuiltinTuple2DoubleWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec *[2]float64) []byte {
 	w = append(w, '[')
 	for _, elem := range *vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
@@ -74,6 +87,15 @@ func BuiltinTuple2DoubleWriteJSONOpt(newTypeNames bool, short bool, w []byte, ve
 	return append(w, ']')
 }
 
+func BuiltinVectorDoubleFillRandom(rg *basictl.RandGenerator, vec *[]float64) {
+	rg.IncreaseDepth()
+	l := basictl.RandomSize(rg)
+	*vec = make([]float64, l)
+	for i := range *vec {
+		(*vec)[i] = basictl.RandomDouble(rg)
+	}
+	rg.DecreaseDepth()
+}
 func BuiltinVectorDoubleRead(w []byte, vec *[]float64) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
@@ -103,7 +125,92 @@ func BuiltinVectorDoubleWrite(w []byte, vec []float64) []byte {
 	return w
 }
 
-func BuiltinVectorDoubleReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]float64) error {
+func BuiltinVectorDoubleCalculateLayout(sizes []int, optimizeEmpty bool, vec *[]float64) ([]int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return sizes, 0
+		}
+		return sizes, 1
+	}
+	sizePosition := len(sizes)
+	sizes = append(sizes, 0)
+
+	currentSize := 0
+	var sz int
+
+	currentSize += basictl.TL2CalculateSize(len(*vec))
+	for i := 0; i < len(*vec); i++ {
+		currentSize += 8
+	}
+	sizes[sizePosition] = currentSize
+	currentSize += basictl.TL2CalculateSize(currentSize)
+	Unused(sz)
+	return sizes, currentSize
+}
+
+func BuiltinVectorDoubleInternalWriteTL2(w []byte, sizes []int, optimizeEmpty bool, vec *[]float64) ([]byte, []int, int) {
+	if len(*vec) == 0 {
+		if optimizeEmpty {
+			return w, sizes, 0
+		}
+		w = append(w, 0)
+		return w, sizes, 1
+	}
+	currentSize := sizes[0]
+	sizes = sizes[1:]
+	w = basictl.TL2WriteSize(w, currentSize)
+	if currentSize == 0 {
+		return w, sizes, 1
+	}
+	oldLen := len(w)
+	w = basictl.TL2WriteSize(w, len(*vec))
+
+	var sz int
+	for i := 0; i < len(*vec); i++ {
+		w = basictl.DoubleWrite(w, (*vec)[i])
+	}
+	Unused(sz)
+	if len(w)-oldLen != currentSize {
+		panic("tl2: mismatch between calculate and write")
+	}
+	return w, sizes, currentSize
+}
+
+func BuiltinVectorDoubleInternalReadTL2(r []byte, vec *[]float64) (_ []byte, err error) {
+	currentSize := 0
+	if r, currentSize, err = basictl.TL2ParseSize(r); err != nil {
+		return r, err
+	}
+	if len(r) < currentSize {
+		return r, basictl.TL2Error("not enough data: expected %d, got %d", currentSize, len(r))
+	}
+
+	currentR := r[:currentSize]
+	r = r[currentSize:]
+
+	elementCount := 0
+	if currentSize != 0 {
+		if currentR, elementCount, err = basictl.TL2ParseSize(currentR); err != nil {
+			return r, err
+		}
+		if elementCount > len(currentR) {
+			return r, basictl.TL2ElementCountError(elementCount, currentR)
+		}
+	}
+
+	if cap(*vec) < elementCount {
+		*vec = make([]float64, elementCount)
+	}
+	*vec = (*vec)[:elementCount]
+	for i := 0; i < elementCount; i++ {
+		if currentR, err = basictl.DoubleRead(currentR, &(*vec)[i]); err != nil {
+			return currentR, err
+		}
+	}
+	return r, nil
+}
+
+func BuiltinVectorDoubleReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]float64) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -132,9 +239,10 @@ func BuiltinVectorDoubleReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, ve
 }
 
 func BuiltinVectorDoubleWriteJSON(w []byte, vec []float64) []byte {
-	return BuiltinVectorDoubleWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorDoubleWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorDoubleWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []float64) []byte {
+func BuiltinVectorDoubleWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []float64) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)

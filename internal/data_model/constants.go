@@ -51,15 +51,13 @@ const (
 	// set to >1300ms only after all libraries which send at 0.5 calendar second are updated
 	AgentWindow = 1300 * time.Millisecond // must be 1..2 seconds.
 
-	MaxShortWindow    = 5        // Must be >= 2, 5 seconds to send recent data, if too late - send as historic
-	FutureWindow      = 4        // Allow a couple of seconds clocks difference on clients. Plus rounding to multiple of 3
-	MaxHistoricWindow = 6 * 3600 // 1 day to send historic data, then drop. TODO - return to 86400 after ZK is faster and/or seconds table is partitioned by 12h
+	MaxShortWindow    = 5         // Must be >= 2, 5 seconds to send recent data, if too late - send as historic
+	FutureWindow      = 4         // Allow a couple of seconds clocks difference on clients. Plus rounding to multiple of 3
+	MaxHistoricWindow = 48 * 3600 // Must be enough. We do not want very old historic seconds anyway.
 
-	BelieveTimestampWindow = 86400 + 2*3600 // Margin for crons running once per day.
+	// Margin for crons running once per day.
 	// Parts are quickly merged, so all timestamps in [-day..0] will be quickly and thoroughly optimized.
-
-	MinCardinalityWindow = 300 // Our estimators GC depends on this not being too small
-	MinMaxCardinality    = 100
+	BelieveTimestampWindow = 86400 + 2*3600
 
 	InsertBudgetFixed = 300000
 	// fixed budget for BuiltinMetricIDAggKeepAlive and potentially other metrics which can be added with 0 contributors
@@ -92,23 +90,20 @@ const (
 
 	InternalLogInsertInterval = 5 * time.Second
 
-	RPCErrorMissedRecentConveyor = -5001 // just send again through historic
-	RPCErrorInsert               = -5002 // just send again through historic (for recent), or send again after delay (for historic)
-	RPCErrorNoAutoCreate         = -5004 // just live with it, this is normal
-	RPCErrorScrapeAgentIP        = -5006 // scrape agent must have IP address
+	RPCErrorInsert        = -5002 // just send again through historic (for recent), or send again after delay (for historic)
+	RPCErrorNoAutoCreate  = -5004 // just live with it, this is normal
+	RPCErrorScrapeAgentIP = -5006 // scrape agent must have IP address
 
 	JournalDiskNamespace        = "metric_journal_v5:"
 	TagValueDiskNamespace       = "tag_value_v3:"
 	TagValueInvertDiskNamespace = "tag_value_invert_v3:"
-	BootstrapDiskNamespace      = "bootstrap:"  // stored in aggregator only
-	AutoconfigDiskNamespace     = "autoconfig:" // stored in agents only
+	BootstrapDiskNamespace      = "bootstrap:" // stored in aggregator only
 
-	MappingMaxMetricsInQueue = 4000
-	MappingMaxMemCacheSize   = 1_000_000
-	MappingMaxDiskCacheSize  = 10_000_000
-	MappingCacheTTLMinimum   = 7 * 24 * time.Hour
-	MappingNegativeCacheTTL  = 5 * time.Second
-	MappingMinInterval       = 1 * time.Millisecond
+	MappingMaxMemCacheSize  = 1_000_000
+	MappingMaxDiskCacheSize = 10_000_000
+	MappingCacheTTLMinimum  = 7 * 24 * time.Hour
+	MappingNegativeCacheTTL = 5 * time.Second
+	MappingMinInterval      = 1 * time.Millisecond
 )
 
 var ErrEntityNotExists = &rpc.Error{
@@ -148,7 +143,7 @@ func SilentRPCError(err error) bool {
 		return false
 	}
 	switch rpcError.Code {
-	case RPCErrorMissedRecentConveyor, RPCErrorInsert,
+	case RPCErrorInsert,
 		RPCErrorNoAutoCreate:
 		return true
 	default:

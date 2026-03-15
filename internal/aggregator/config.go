@@ -11,11 +11,22 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/VKCOM/statshouse/internal/agent"
 	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
+// ConfigChangeNotifier notify getConfigResult3Locked if ConfigAggregatorRemote.ClusterShardsAddrs was updated
+type ConfigChangeNotifier struct {
+	mu      sync.Mutex
+	clients map[rpc.LongpollHandle]struct{}
+}
+
 type ConfigAggregatorRemote struct {
+	ShortWindow          int
 	InsertBudget         int         // for single replica, in bytes per contributor, when many contributors
 	ShardInsertBudget    map[int]int // pre shard overrides, if not set buget is equal to InsertBudget
 	StringTopCountInsert int
@@ -23,22 +34,21 @@ type ConfigAggregatorRemote struct {
 	SampleGroups         bool
 	SampleKeys           bool
 	DenyOldAgents        bool
-	MirrorChWrite        bool
-	WriteToV3First       bool
-	V2InsertSettings     string
 	V3InsertSettings     string
 	MappingCacheSize     int64
 	MappingCacheTTL      int
-	MapStringTop         bool
 	BufferedInsertAgeSec int    // age in seconds of data that should be sent to buffer table
 	MigrationTimeRange   string // format: "{begin timestamp}-{end timestamp}"
 	MigrationDelaySec    int    // delay in seconds between migration steps
+	ClusterShardsAddrs   []string
+	EnableMappingStorage bool
 
-	configTagsMapper2
+	RQLiteAddrs string // comma-separated list
+
+	configTagsMapper3
 }
 
 type ConfigAggregator struct {
-	ShortWindow        int
 	RecentInserters    int
 	HistoricInserters  int
 	InsertHistoricWhen int
@@ -48,10 +58,7 @@ type ConfigAggregator struct {
 	KHPassword     string
 	KHPasswordFile string
 
-	CardinalityWindow int
-	MaxCardinality    int
-
-	ConfigAggregatorRemote
+	RemoteInitial ConfigAggregatorRemote
 
 	SimulateRandomErrors float64
 
@@ -60,46 +67,45 @@ type ConfigAggregator struct {
 	MetadataActorID int64
 
 	Cluster             string
-	PreviousNumShards   int // if agents come with this # of shards, do not error as misconfiguration
 	ShardByMetricShards int
 	ExternalPort        string
 
 	LocalReplica int
+	LocalShard   int
 
 	AutoCreate                 bool
 	AutoCreateDefaultNamespace bool
 	DisableRemoteConfig        bool
+
+	MappingsFileCount int
 }
 
 func DefaultConfigAggregator() ConfigAggregator {
 	return ConfigAggregator{
-		ShortWindow:          data_model.MaxShortWindow,
 		RecentInserters:      4,
 		HistoricInserters:    1,
 		InsertHistoricWhen:   2,
-		CardinalityWindow:    3600,
-		MaxCardinality:       50000, // will be divided by NumShardReplicas on each aggregator
 		SimulateRandomErrors: 0,
 		Cluster:              "statlogs2",
 		MetadataNet:          "tcp4",
 		MetadataAddr:         "127.0.0.1:2442",
+		LocalReplica:         0, // require setting it explicitly
+		LocalShard:           1,
 
-		ConfigAggregatorRemote: ConfigAggregatorRemote{
+		RemoteInitial: ConfigAggregatorRemote{
+			ShortWindow:          data_model.MaxShortWindow,
 			InsertBudget:         400,
 			StringTopCountInsert: 20,
-			SampleNamespaces:     false,
-			SampleGroups:         false,
-			SampleKeys:           false,
+			SampleNamespaces:     true,
+			SampleGroups:         true,
+			SampleKeys:           true,
 			DenyOldAgents:        true,
-			MirrorChWrite:        true,
-			WriteToV3First:       false,
 			MappingCacheSize:     1 << 30,
 			MappingCacheTTL:      86400 * 7,
-			MapStringTop:         false, // disabled by default because API doesn't support it yet
-			MigrationTimeRange:   "",    // empty means migration disabled
-			MigrationDelaySec:    30,    // 30 seconds delay between migration steps
+			MigrationTimeRange:   "", // empty means migration disabled
+			MigrationDelaySec:    30, // 30 seconds delay between migration steps
 
-			configTagsMapper2: configTagsMapper2{
+			configTagsMapper3: configTagsMapper3{
 				MaxUnknownTagsInBucket:    1024,
 				MaxCreateTagsPerIteration: 128,
 				MaxLoadTagsPerIteration:   128,
@@ -131,7 +137,17 @@ func (c *ConfigAggregatorRemote) setShardBudget(param string) error {
 	return nil
 }
 
+func (c *ConfigAggregatorRemote) setClusterShardsHosts(param string) error {
+	replicas := strings.Split(param, ",")
+	if len(replicas) != 3 {
+		return fmt.Errorf("invalid input format for --cluster-shards-hosts, expected {replica1},{replica2},{replica3}, got %v", param)
+	}
+	c.ClusterShardsAddrs = append(c.ClusterShardsAddrs, replicas...)
+	return nil
+}
+
 func (c *ConfigAggregatorRemote) Bind(f *flag.FlagSet, d ConfigAggregatorRemote, legacyVerb bool) {
+	f.IntVar(&c.ShortWindow, "short-window", d.ShortWindow, "Short admission window. Shorter window reduces latency, but also reduces recent stats quality as more agents come too late")
 	f.IntVar(&c.InsertBudget, "insert-budget", d.InsertBudget, "Aggregator will sample data before inserting into clickhouse. Bytes per contributor when # >> 100.")
 	f.Func("shard-insert-budget", "1:200 override budget for 1 shard with 200, shards start with 1", c.setShardBudget)
 	f.IntVar(&c.StringTopCountInsert, "string-top-insert", d.StringTopCountInsert, "How many different strings per key is inserted by aggregator in string tops.")
@@ -140,41 +156,34 @@ func (c *ConfigAggregatorRemote) Bind(f *flag.FlagSet, d ConfigAggregatorRemote,
 		f.BoolVar(&c.SampleGroups, "sample-groups", d.SampleGroups, "Statshouse will sample at group level.")
 		f.BoolVar(&c.SampleKeys, "sample-keys", d.SampleKeys, "Statshouse will sample at key level.")
 		f.BoolVar(&c.DenyOldAgents, "deny-old-agents", d.DenyOldAgents, "Statshouse will ignore data from outdated agents")
-		f.BoolVar(&c.MirrorChWrite, "mirror-ch-writes", d.MirrorChWrite, "Write metrics into both v3 and v2 tables")
-		f.BoolVar(&c.WriteToV3First, "write-to-v3-first", d.WriteToV3First, "Write metrics into v3 table first")
-		f.StringVar(&c.V2InsertSettings, "v2-insert-settings", d.V2InsertSettings, "Settings when inserting into v2 table")
-		f.StringVar(&c.V3InsertSettings, "v3-insert-settings", d.V3InsertSettings, "Settings when inserting into v2 table")
+		var mirrorChWrite bool  // TODO - remove after deploying aggregators
+		var writeToV3First bool // TODO - remove after deploying aggregators
+		f.BoolVar(&mirrorChWrite, "mirror-ch-writes", false, "Write metrics into both v3 and v2 tables. Not used.")
+		f.BoolVar(&writeToV3First, "write-to-v3-first", false, "Write metrics into v3 table first. Not used.")
+		var v2InsertSettings string // TODO - remove after deploying aggregators
+		f.StringVar(&v2InsertSettings, "v2-insert-settings", "", "Settings when inserting into v2 table. Not used.")
+		f.StringVar(&c.V3InsertSettings, "v3-insert-settings", d.V3InsertSettings, "Settings when inserting into v3 table")
 		f.Int64Var(&c.MappingCacheSize, "mappings-cache-size-agg", d.MappingCacheSize, "Mappings cache size both in memory and on disk for aggregator.")
 		f.IntVar(&c.MappingCacheTTL, "mappings-cache-ttl-agg", d.MappingCacheTTL, "Mappings cache item TTL since last used for aggregator.")
-		f.BoolVar(&c.MapStringTop, "map-string-top", d.MapStringTop, "Map string top")
+		var mapStringTop bool // TODO - remove after deploying aggregators
+		f.BoolVar(&mapStringTop, "map-string-top", false, "Map string top. Not used.")
 		f.IntVar(&c.BufferedInsertAgeSec, "buffered-insert-age-sec", d.BufferedInsertAgeSec, "Age in seconds of data that should be inserted via buffer table")
 		f.StringVar(&c.MigrationTimeRange, "migration", d.MigrationTimeRange, "Migration time range: \"{start timestamp}-{end timestamp}\" (start > end because of backwards migration)")
 		f.IntVar(&c.MigrationDelaySec, "migration-delay-sec", d.MigrationDelaySec, "Delay in seconds between migration steps")
 
+		f.BoolVar(&c.EnableMappingStorage, "enable-mapping-storage", d.EnableMappingStorage, "Enable full mapping inmemory&disk storage")
 		f.IntVar(&c.MaxUnknownTagsInBucket, "mapping-queue-max-unknown-tags-in-bucket", d.MaxUnknownTagsInBucket, "Max unknown tags per bucket to add to mapping queue.")
 		f.IntVar(&c.MaxCreateTagsPerIteration, "mapping-queue-create-tags-per-iteration", d.MaxCreateTagsPerIteration, "Mapping queue will create no more tags per iteration (roughly second).")
 		f.IntVar(&c.MaxLoadTagsPerIteration, "mapping-queue-load-tags-per-iteration", d.MaxLoadTagsPerIteration, "Mapping queue will load no more tags per iteration (roughly second).")
 		f.IntVar(&c.TagHitsToCreate, "mapping-queue-hits-to-create", d.TagHitsToCreate, "Tag mapping will be created if it is used in so many different seconds.")
 		f.IntVar(&c.MaxUnknownTagsToKeep, "mapping-queue-max-unknown-tags-to-keep", d.MaxUnknownTagsToKeep, "Mapping queue will remember and collect hits on so many different strings.")
 		f.IntVar(&c.MaxSendTagsToAgent, "mapping-queue-max-send-tags-to-agent", d.MaxUnknownTagsInBucket, "Max tags to send in response to agent.")
+		f.Func("cluster-shards-addrs", "List of cluster shards with 3 comma-separated addresses on each line", c.setClusterShardsHosts)
 	}
+	f.StringVar(&c.RQLiteAddrs, "rqlite-addrs", d.RQLiteAddrs, "Comma-separated addresses of rqlite cluster")
 }
 
-func ValidateConfigAggregator(c ConfigAggregator) error {
-	if c.ShortWindow > data_model.MaxShortWindow {
-		return fmt.Errorf("short-window (%d) cannot be > %d", c.ShortWindow, data_model.MaxShortWindow)
-	}
-	if c.ShortWindow < 2 {
-		return fmt.Errorf("short-window (%d) cannot be < 2", c.ShortWindow)
-	}
-
-	if c.CardinalityWindow < data_model.MinCardinalityWindow {
-		return fmt.Errorf("--cardinality-window (%d) must be >= %d", c.CardinalityWindow, data_model.MinCardinalityWindow)
-	}
-	if c.MaxCardinality < data_model.MinMaxCardinality {
-		return fmt.Errorf("--max-cardinality (%d) must be >= %d", c.MaxCardinality, data_model.MinMaxCardinality)
-	}
-
+func ValidateConfigAggregator(c *ConfigAggregator) error {
 	if c.InsertHistoricWhen < 1 {
 		return fmt.Errorf("--insert-historic-when (%d) must be >= 1", c.InsertHistoricWhen)
 	}
@@ -188,16 +197,16 @@ func ValidateConfigAggregator(c ConfigAggregator) error {
 		return fmt.Errorf("--historic-inserters (%d) must be <= 4", c.HistoricInserters)
 	}
 
-	return c.ConfigAggregatorRemote.Validate()
+	return c.RemoteInitial.Validate()
 }
 
 // ParseMigrationTimeRange parses the migration time range and returns start and end timestamps
 // Returns (0, 0) if migration is disabled: empty or invalid range
-func (c *ConfigAggregatorRemote) ParseMigrationTimeRange() (startTs, endTs uint32) {
-	if c.MigrationTimeRange == "" {
+func (c *ConfigAggregatorRemote) ParseMigrationTimeRange(timeRange string) (startTs, endTs uint32) {
+	if timeRange == "" {
 		return
 	}
-	parts := strings.Split(c.MigrationTimeRange, "-")
+	parts := strings.Split(timeRange, "-")
 	if len(parts) != 2 {
 		return
 	}
@@ -217,6 +226,12 @@ func (c *ConfigAggregatorRemote) ParseMigrationTimeRange() (startTs, endTs uint3
 }
 
 func (c *ConfigAggregatorRemote) Validate() error {
+	if c.ShortWindow > data_model.MaxShortWindow {
+		return fmt.Errorf("short-window (%d) cannot be > %d", c.ShortWindow, data_model.MaxShortWindow)
+	}
+	if c.ShortWindow < 3 {
+		return fmt.Errorf("short-window (%d) cannot be < 3 (due to round robin replica selection)", c.ShortWindow)
+	}
 	if c.InsertBudget < 1 {
 		return fmt.Errorf("insert-budget (%d) must be >= 1", c.InsertBudget)
 	}
@@ -244,4 +259,37 @@ func (c *ConfigAggregatorRemote) updateFromRemoteDescription(description string)
 		_ = f.Parse([]string{t})
 	}
 	return c.Validate()
+}
+
+func NewConfigChangeNotifier() *ConfigChangeNotifier {
+	return &ConfigChangeNotifier{
+		clients: make(map[rpc.LongpollHandle]struct{}),
+	}
+}
+
+func (c *ConfigChangeNotifier) notifyConfigChange(connectedTo string, cc tlstatshouse.GetConfigResult3) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var args tlstatshouse.GetConfig3 // dummy object, works until we add a fields mask to GetConfig3
+	for lh := range c.clients {
+		delete(c.clients, lh)
+		if hctx, _ := lh.FinishLongpoll(); hctx != nil {
+			cc.AgentIp = agent.ConfigAddrIPs(hctx.RemoteAddr())
+			cc.ConnectedTo = connectedTo
+			var err error
+			hctx.Response, err = args.WriteResult(hctx.Response, cc)
+			hctx.SendLongpollResponse(err)
+		}
+	}
+}
+
+func (c *ConfigChangeNotifier) CancelLongpoll(lh rpc.LongpollHandle) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.clients, lh)
+}
+
+func (c *ConfigChangeNotifier) WriteEmptyResponse(lh rpc.LongpollHandle, hctx *rpc.HandlerContext) error {
+	c.CancelLongpoll(lh)
+	return rpc.ErrLongpollNoEmptyResponse
 }

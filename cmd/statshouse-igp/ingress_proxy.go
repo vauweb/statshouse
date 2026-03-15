@@ -18,7 +18,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +47,8 @@ const (
 	// packetConn buffers - 24KB per connection
 	ingressRequestBufSize  = 16384 // 16 KB
 	ingressResponseBufSize = 8192  // 8 KB
+
+	fillIntermediateInfo = true // set to false for tests. Remove filling header information after all agents updated to December2025
 )
 
 type ConfigIngressProxy struct {
@@ -59,14 +60,16 @@ type ConfigIngressProxy struct {
 	IngressKeys           []string
 	ResponseMemoryLimit   int
 	Version               string
+	customHostName        string // useful for testing and in some environments
 	ConfigAgent           agent.Config
 	Debug                 bool
+	LegacyAddrLimit       int // max count of addresses for legacy ingress clients
 }
 
 type ingressProxy struct {
 	// Place atomics first to ensure proper alignment, see https://pkg.go.dev/sync/atomic#pkg-note-BUG
 	uniqueStartTime atomic.Uint32
-	hostnameID      atomic.Int32
+	hostnameID      atomic.Int32 // opportunistic loading, not perfect, but OK for now
 
 	ctx        context.Context
 	agent      *agent.Agent
@@ -101,10 +104,11 @@ type proxyConn struct {
 	clientCryptoKeyID     int32
 	clientProtocolVersion int32
 
-	// no synchronization, owned by "requestLoop"
-	clientAddr  [4]uint32 // readonly after init
-	clientAddrS string    // readonly after init
-	reqBuf      []byte
+	// no synchronization, owned by "requestLoop", readonly after init
+	clientAddr  [4]int32 // TODO: remove after all agents are December2025
+	clientAddrS string   // TODO: remove after all agents are December2025
+
+	reqBuf []byte
 }
 
 type proxyRequest struct {
@@ -135,9 +139,12 @@ func (config *ConfigIngressProxy) ReadIngressKeys(ingressPwdDir string) error {
 	return nil
 }
 
-func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd string, mappingsCache *pcache.MappingsCache) error {
+func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd string, mappingsCache *pcache.MappingsCache, trustedSubnetGroups [][]string) error {
+	proxyCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	p := ingressProxy{
-		ctx:             ctx,
+		ctx:             proxyCtx,
 		cluster:         config.ConfigAgent.Cluster,
 		clientOpts:      rpc.ClientOptions{CryptoKey: aesPwd},
 		serverKeys:      config.IngressKeys,
@@ -146,7 +153,7 @@ func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd stri
 		debug:           config.Debug,
 	}
 	restart := make(chan int)
-	if config.UpstreamAddr != "" {
+	if config.UpstreamAddr != "" { // TODO - is this for tests?
 		addresses := strings.Split(config.UpstreamAddr, ",")
 		p.agent = &agent.Agent{GetConfigResult: tlstatshouse.GetConfigResult3{
 			Addresses:          addresses,
@@ -155,7 +162,7 @@ func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd stri
 	} else {
 		var err error
 		p.agent, err = agent.MakeAgent(
-			"tcp", "", aesPwd, config.ConfigAgent, srvfunc.HostnameForStatshouse(),
+			"tcp", "", aesPwd, trustedSubnetGroups, config.ConfigAgent, argv.customHostName,
 			format.TagValueIDComponentIngressProxy,
 			nil, mappingsCache,
 			nil, nil,
@@ -194,17 +201,22 @@ func RunIngressProxy(ctx context.Context, config ConfigIngressProxy, aesPwd stri
 		}
 		go func() {
 			p.agent.GoGetConfig() // if terminates, proxy must restart
+			cancel()
 			close(restart)
 		}()
 		p.agent.Run(0, 0, 0)
 	}
 	p.uniqueStartTime.Store(p.startTime)
-	rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())(&p.clientOpts)
-	rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups())(&p.serverOpts)
-	// resolve hostname ID
-	p.hostnameID.Store(format.TagValueIDMappingFlood)
+	rpc.ClientWithTrustedSubnetGroups(trustedSubnetGroups)(&p.clientOpts)
+	rpc.ServerWithTrustedSubnetGroups(trustedSubnetGroups)(&p.serverOpts)
 	go func() {
-		p.hostnameID.Store(p.getHostnameID(aesPwd))
+		for p.hostnameID.Load() == 0 {
+			if tag, ok := p.agent.MapTagForProxy(p.agent.HostName()); ok {
+				p.hostnameID.Store(tag)
+				return
+			}
+			time.Sleep(1 * time.Second)
+		}
 	}()
 	// listen on IPv4
 	tcp4 := p.newProxyServer("tcp4")
@@ -254,6 +266,7 @@ func (p *ingressProxy) newProxyServer(network string) proxyServer {
 		},
 		config3: tlstatshouse.GetConfigResult3{
 			ShardByMetricCount: p.agent.GetConfigResult.ShardByMetricCount,
+			ConnectedTo:        p.agent.HostName(),
 		},
 		network: network,
 	}
@@ -271,39 +284,6 @@ func (p *ingressProxy) rareLog(format string, args ...any) {
 		p.rareLogLast = now
 		log.Printf(format, args...)
 	}
-}
-
-func (p *ingressProxy) getHostnameID(aesPwd string) int32 {
-	if len(p.agent.GetConfigResult.Addresses) == 0 {
-		return format.TagValueIDMappingFlood
-	}
-	client := rpc.NewClient(
-		rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
-		rpc.ClientWithCryptoKey(aesPwd),
-		rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
-		rpc.ClientWithLogf(log.Printf))
-	defer client.Close()
-	agg := tlstatshouse.Client{
-		Client:  client,
-		Network: "tcp",
-		Address: p.agent.GetConfigResult.Addresses[0],
-	}
-	args := tlstatshouse.GetTagMapping2{
-		Metric: format.BuiltinMetricMetaBudgetAggregatorHost.Name,
-		Key:    srvfunc.HostnameForStatshouse(),
-		Header: tlstatshouse.CommonProxyHeader{
-			ShardReplicaTotal: int32(len(p.agent.GetConfigResult.Addresses)),
-			HostName:          srvfunc.HostnameForStatshouse(),
-			ComponentTag:      format.TagValueIDComponentIngressProxy,
-		},
-	}
-	args.SetCreate(true)
-	args.Header.SetIngressProxy(true, &args.FieldsMask)
-	res := tlstatshouse.GetTagMappingResult{}
-	if err := agg.GetTagMapping2(p.ctx, args, nil, &res); err != nil {
-		return format.TagValueIDMappingFlood
-	}
-	return res.Value
 }
 
 func (p *proxyServer) listen(addr string, externalAddr []string, version string) error {
@@ -400,13 +380,10 @@ func (p *proxyServer) serve(listener net.Listener) {
 }
 
 func (p *proxyServer) newProxyConn(c net.Conn) *proxyConn {
-	var clientAddr [4]uint32
+	clientAddr := agent.ConfigAddrIPs(c.RemoteAddr())
 	var clientAddrS string
 	if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok {
 		clientAddrS = addr.AddrPort().Addr().String()
-		for i, j := 0, 0; i < len(clientAddr) && j+3 < len(addr.IP); i, j = i+1, j+4 {
-			clientAddr[i] = binary.BigEndian.Uint32(addr.IP[j:])
-		}
 	}
 	clientConn := rpc.NewPacketConn(c, ingressRequestBufSize, ingressResponseBufSize)
 	p.group.Add(1)
@@ -565,7 +542,6 @@ func (p *proxyConn) readRequest() (req proxyRequest, err error) {
 			constants.StatshouseGetTagMapping2,
 			constants.StatshouseSendKeepAlive2,
 			constants.StatshouseSendKeepAlive3,
-			constants.StatshouseSendSourceBucket2,
 			constants.StatshouseSendSourceBucket3,
 			constants.StatshouseTestConnection2,
 			constants.StatshouseGetTargets2,
@@ -615,7 +591,7 @@ func (p *proxyConn) logClientError(tag string, err error, lastPackets rpc.Packet
 	var addr string
 	var encrypted bool
 	if p.clientConn != nil {
-		addr = p.clientConn.RemoteAddr()
+		addr = p.clientConn.RemoteAddr().String()
 		encrypted = p.clientConn.Encrypted()
 	}
 	log.Printf("error %s, client addr %s, version %d, encrypted %t, key 0x%X: %v, %s\n", tag, addr, p.clientProtocolVersion, encrypted, p.clientCryptoKeyID, err, lastPackets.String())
@@ -629,7 +605,7 @@ func (p *proxyConn) logUpstreamError(tag string, err error, lastPackets rpc.Pack
 	var version uint32
 	var encrypted bool
 	if p.upstreamConn != nil {
-		addr = p.upstreamConn.RemoteAddr()
+		addr = p.upstreamConn.RemoteAddr().String()
 		version = p.upstreamConn.ProtocolVersion()
 		encrypted = p.upstreamConn.Encrypted()
 	}
@@ -650,7 +626,15 @@ func (req *proxyRequest) process(p *proxyConn) (res rpc.ForwardPacketsResult) {
 					p.logClientError("GetConfig2", err, rpc.PacketHeaderCircularBuffer{})
 					autoConfigStatus = format.TagValueIDAutoConfigWrongCluster
 				} else {
-					req.Response, _ = args.WriteResult(req.Response[:0], p.config2)
+					if p.isLegacyIngressClient(&args.Header, args.IsSetNewIngressVersion()) {
+						log.Printf("[INGRESS COMPAT] Returning addresses with limit: %d, for old client: %s", argv.LegacyAddrLimit, args.Header.HostName)
+
+						config := p.config2
+						config.Addresses = config.Addresses[:min(argv.LegacyAddrLimit, len(config.Addresses))]
+						req.Response, _ = args.WriteResult(req.Response[:0], config)
+					} else {
+						req.Response, _ = args.WriteResult(req.Response[:0], p.config2)
+					}
 					autoConfigStatus = format.TagValueIDAutoConfigOK
 				}
 				p.sendAutoConfigStatus(&args.Header, autoConfigStatus)
@@ -668,13 +652,18 @@ func (req *proxyRequest) process(p *proxyConn) (res rpc.ForwardPacketsResult) {
 					p.logClientError("GetConfig3", err, rpc.PacketHeaderCircularBuffer{})
 					autoConfigStatus = format.TagValueIDAutoConfigWrongCluster
 				} else {
-					equalConfig := args.IsSetPreviousConfig() &&
-						slices.Equal(p.config3.Addresses, args.PreviousConfig.Addresses) &&
-						p.config3.ShardByMetricCount == args.PreviousConfig.ShardByMetricCount
+					config := p.config3
+					if p.isLegacyIngressClient(&args.Header, args.IsSetNewIngressVersion()) {
+						log.Printf("[INGRESS COMPAT] Returning addresses with limit: %d, for old client: %s", argv.LegacyAddrLimit, args.Header.HostName)
+						config.Addresses = config.Addresses[:min(argv.LegacyAddrLimit, len(config.Addresses))]
+					}
+					equalConfig := args.IsSetPreviousConfig() && agent.EqualConfigResult3(args.PreviousConfig, config)
 					if equalConfig {
 						autoConfigStatus = format.TagValueIDAutoConfigErrorKeepAlive
 					} else {
-						req.Response, _ = args.WriteResult(req.Response[:0], p.config3)
+						config.AgentIp = p.clientAddr
+						config.SetIngressProxy(true)
+						req.Response, _ = args.WriteResult(req.Response[:0], config)
 						autoConfigStatus = format.TagValueIDAutoConfigOK
 					}
 				}
@@ -717,31 +706,29 @@ func (req *proxyRequest) forwardAndFlush(p *proxyConn) error {
 }
 
 func (p *ingressProxy) sendAutoConfigStatus(h *tlstatshouse.CommonProxyHeader, status int32) {
-	p.agent.AddCounterHostAERA(
+	p.agent.AddCounterHostS(
 		uint32(time.Now().Unix()),
 		format.BuiltinMetricMetaAutoConfig,
-		[]int32{0, 0, 0, 0, status},
-		1, // count
-		data_model.TagUnionBytes{I: p.hostnameID.Load()},
-		format.AgentEnvRouteArch{
-			AgentEnv:  format.TagValueIDProduction,
-			Route:     format.TagValueIDRouteIngressProxy,
-			BuildArch: format.FilterBuildArch(h.BuildArch),
-		})
+		[]int32{4: status},
+		nil,
+		1, data_model.TagUnion{I: p.hostnameID.Load()})
+}
 
+func (p *ingressProxy) isLegacyIngressClient(header *tlstatshouse.CommonProxyHeader, isSetNewIngressVersion bool) bool {
+	return !isSetNewIngressVersion && header.ComponentTag == format.TagValueIDComponentIngressProxy
 }
 
 func (req *proxyRequest) setIngressProxy(p *proxyConn) {
-	if len(req.Request) < 32 {
+	if len(req.Request) < 32 || !fillIntermediateInfo {
 		return // test environment
 	}
 	fieldsMask := binary.LittleEndian.Uint32(req.Request[4:])
 	fieldsMask |= (1 << 31) // args.SetIngressProxy(true)
 	binary.LittleEndian.PutUint32(req.Request[4:], fieldsMask)
-	binary.LittleEndian.PutUint32(req.Request[16:], p.clientAddr[0])
-	binary.LittleEndian.PutUint32(req.Request[20:], p.clientAddr[1])
-	binary.LittleEndian.PutUint32(req.Request[24:], p.clientAddr[2])
-	binary.LittleEndian.PutUint32(req.Request[28:], p.clientAddr[3])
+	binary.LittleEndian.PutUint32(req.Request[16:], uint32(p.clientAddr[0]))
+	binary.LittleEndian.PutUint32(req.Request[20:], uint32(p.clientAddr[1]))
+	binary.LittleEndian.PutUint32(req.Request[24:], uint32(p.clientAddr[2]))
+	binary.LittleEndian.PutUint32(req.Request[28:], uint32(p.clientAddr[3]))
 }
 
 func (req *proxyRequest) shardReplica(p *proxyConn) uint32 {

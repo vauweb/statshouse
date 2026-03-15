@@ -28,6 +28,12 @@ func (item *NetPid) Reset() {
 	item.Utime = 0
 }
 
+func (item *NetPid) FillRandom(rg *basictl.RandGenerator) {
+	item.Ip = basictl.RandomInt(rg)
+	item.PortPid = basictl.RandomInt(rg)
+	item.Utime = basictl.RandomInt(rg)
+}
+
 func (item *NetPid) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.IntRead(w, &item.Ip); err != nil {
 		return w, err
@@ -38,7 +44,6 @@ func (item *NetPid) Read(w []byte) (_ []byte, err error) {
 	return basictl.IntRead(w, &item.Utime)
 }
 
-// This method is general version of Write, use it instead!
 func (item *NetPid) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -57,7 +62,6 @@ func (item *NetPid) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *NetPid) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -72,6 +76,11 @@ func (item NetPid) String() string {
 }
 
 func (item *NetPid) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *NetPid) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propIpPresented bool
 	var propPortPidPresented bool
 	var propUtimePresented bool
@@ -132,14 +141,15 @@ func (item *NetPid) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error 
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *NetPid) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *NetPid) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *NetPid) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *NetPid) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *NetPid) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexIp := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -174,4 +184,12 @@ func (item *NetPid) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("net.pid", err.Error())
 	}
 	return nil
+}
+
+func (item *NetPid) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("net.pid"))
+}
+
+func (item *NetPid) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("net.pid")
 }

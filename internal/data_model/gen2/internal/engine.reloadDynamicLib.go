@@ -24,11 +24,14 @@ func (item *EngineReloadDynamicLib) Reset() {
 	item.Options.Reset()
 }
 
+func (item *EngineReloadDynamicLib) FillRandom(rg *basictl.RandGenerator) {
+	item.Options.FillRandom(rg)
+}
+
 func (item *EngineReloadDynamicLib) Read(w []byte) (_ []byte, err error) {
 	return item.Options.Read(w)
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineReloadDynamicLib) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -45,7 +48,6 @@ func (item *EngineReloadDynamicLib) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineReloadDynamicLib) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -65,47 +67,61 @@ func (item *EngineReloadDynamicLib) WriteResult(w []byte, ret BoolStat) (_ []byt
 }
 
 func (item *EngineReloadDynamicLib) ReadResultJSON(legacyTypeNames bool, in *basictl.JsonLexer, ret *BoolStat) error {
-	if err := ret.ReadJSON(legacyTypeNames, in); err != nil {
+	tctx := &basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	if err := ret.ReadJSONGeneral(tctx, in); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (item *EngineReloadDynamicLib) WriteResultJSON(w []byte, ret BoolStat) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *EngineReloadDynamicLib) writeResultJSON(newTypeNames bool, short bool, w []byte, ret BoolStat) (_ []byte, err error) {
-	w = ret.WriteJSONOpt(newTypeNames, short, w)
+func (item *EngineReloadDynamicLib) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret BoolStat) (_ []byte, err error) {
+	w = ret.WriteJSONOpt(tctx, w)
 	return w, nil
 }
 
-func (item *EngineReloadDynamicLib) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineReloadDynamicLib) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret BoolStat
+	ret.FillRandom(rg)
+	return item.WriteResult(w, ret)
+}
+
+func (item *EngineReloadDynamicLib) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret BoolStat
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *EngineReloadDynamicLib) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineReloadDynamicLib) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret BoolStat
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *EngineReloadDynamicLib) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret BoolStat
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *EngineReloadDynamicLib) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.reloadDynamicLib")
+}
+
+func (item *EngineReloadDynamicLib) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.reloadDynamicLib")
+}
+
+func (item *EngineReloadDynamicLib) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.reloadDynamicLib")
+}
+
+func (item *EngineReloadDynamicLib) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.reloadDynamicLib")
 }
 
 func (item EngineReloadDynamicLib) String() string {
@@ -113,6 +129,11 @@ func (item EngineReloadDynamicLib) String() string {
 }
 
 func (item *EngineReloadDynamicLib) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineReloadDynamicLib) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propOptionsPresented bool
 
 	if in != nil {
@@ -128,7 +149,7 @@ func (item *EngineReloadDynamicLib) ReadJSON(legacyTypeNames bool, in *basictl.J
 				if propOptionsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("engine.reloadDynamicLib", "options")
 				}
-				if err := item.Options.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Options.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propOptionsPresented = true
@@ -149,18 +170,19 @@ func (item *EngineReloadDynamicLib) ReadJSON(legacyTypeNames bool, in *basictl.J
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineReloadDynamicLib) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineReloadDynamicLib) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineReloadDynamicLib) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineReloadDynamicLib) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineReloadDynamicLib) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"options":`...)
-	w = item.Options.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Options.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 
@@ -173,4 +195,12 @@ func (item *EngineReloadDynamicLib) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.reloadDynamicLib", err.Error())
 	}
 	return nil
+}
+
+func (item *EngineReloadDynamicLib) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.reloadDynamicLib"))
+}
+
+func (item *EngineReloadDynamicLib) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.reloadDynamicLib")
 }

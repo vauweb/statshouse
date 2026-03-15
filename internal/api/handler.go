@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"slices"
@@ -30,34 +31,28 @@ import (
 	ttemplate "text/template"
 	"time"
 
-	"go.uber.org/atomic"
-	"golang.org/x/sync/semaphore"
-	"golang.org/x/sync/singleflight"
-
-	"github.com/VKCOM/statshouse/internal/chutil"
-
-	"github.com/prometheus/prometheus/model/labels"
-
-	"github.com/VKCOM/statshouse-go"
-
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/proto"
-	"github.com/mailru/easyjson"
-	_ "github.com/mailru/easyjson/gen" // https://github.com/mailru/easyjson/issues/293
-
+	"github.com/VKCOM/statshouse-go"
 	"github.com/VKCOM/statshouse/internal/aggregator"
+	"github.com/VKCOM/statshouse/internal/chutil"
 	"github.com/VKCOM/statshouse/internal/config"
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/VKCOM/statshouse/internal/metajournal"
-	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/metarqlite"
 	"github.com/VKCOM/statshouse/internal/promql"
 	"github.com/VKCOM/statshouse/internal/promql/parser"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 	"github.com/VKCOM/statshouse/internal/vkgo/vkuth"
-
+	"github.com/mailru/easyjson"
+	_ "github.com/mailru/easyjson/gen" // https://github.com/mailru/easyjson/issues/293
+	"github.com/prometheus/prometheus/model/labels"
+	"go.uber.org/atomic"
+	"golang.org/x/sync/semaphore"
+	"golang.org/x/sync/singleflight"
 	"pgregory.net/rand"
 )
 
@@ -82,7 +77,6 @@ import (
 // also remove code which saves and loads UpdateTime
 
 const (
-	ParamVersion       = "v"
 	ParamNumResults    = "n"
 	ParamMetric        = "s"
 	ParamID            = "id"
@@ -117,9 +111,8 @@ const (
 	paramYL, paramYH  = "yl", "yh" // Y scale range
 	paramFull         = "full"
 
-	Version1       = "1"
-	Version2       = "2"
 	Version3       = "3" // new tables format with stags
+	Version6       = "6" // new tables format with 1 partition
 	dataFormatPNG  = "png"
 	dataFormatSVG  = "svg"
 	dataFormatText = "text"
@@ -179,15 +172,13 @@ type (
 		DefaultMetricGroupBy     []string            `json:"default_metric_group_by"`
 		EventPreset              []string            `json:"event_preset"`
 		DefaultNumSeries         int                 `json:"default_num_series"`
-		DisableV1                bool                `json:"disabled_v1"`
 		AdminDash                int                 `json:"admin_dash"`
 	}
 
 	Handler struct {
-		Version3Start         atomic.Int64
-		Version3Prob          atomic.Float64
-		Version3StrcmpOff     atomic.Bool
-		NewShardingStart      atomic.Int64
+		Version6Start         atomic.Int64
+		hardwareMetricRes     atomic.Int64
+		hardwareSlowMetricRes atomic.Int64
 		ConfigMu              sync.RWMutex
 		DisableCHAddr         []string
 		CacheBlacklist        []string
@@ -195,16 +186,17 @@ type (
 		selectSettings        string // cached ClickHouse SELECT settings string
 		blockedMetricPrefixes []string
 		blockedUsers          []string
+		availableShards       []uint32
+		announcement          string
 
 		HandlerOptions
 		showInvisible         bool
 		staticDir             http.FileSystem
 		indexTemplate         *template.Template
 		indexSettings         string
-		ch                    map[string]*chutil.ClickHouse
+		ch                    *chutil.ClickHouse
 		metricsStorage        *metajournal.MetricsStorage
-		tagValueCache         *pcache.Cache
-		tagValueIDCache       *pcache.Cache
+		journalFast           *metajournal.JournalFast
 		cache2                *cache2
 		cache2Mu              sync.RWMutex
 		pointsCache           *pointsCache
@@ -212,7 +204,8 @@ type (
 		pointFloatsPoolSize   atomic.Int64
 		cacheInvalidateTicker *time.Ticker
 		cacheInvalidateStop   chan chan struct{}
-		metadataLoader        *metajournal.MetricMetaLoader
+		metadataLoader        *metarqlite.RQLiteLoader
+		mappingsStorage       *metajournal.MappingsStorage
 		jwtHelper             *vkuth.JWTHelper
 		plotRenderSem         *semaphore.Weighted
 		plotTemplate          *ttemplate.Template
@@ -314,13 +307,15 @@ type (
 
 	//easyjson:json
 	MetricInfo struct {
-		Metric format.MetricMetaValue `json:"metric"`
+		Metric      format.MetricMetaValue `json:"metric"`
+		LastVersion int64                  `json:"last_version"`
 	}
 
 	//easyjson:json
 	DashboardInfo struct {
-		Dashboard DashboardMetaInfo `json:"dashboard"`
-		Delete    bool              `json:"delete_mark"`
+		Dashboard   DashboardMetaInfo `json:"dashboard"`
+		LastVersion int64             `json:"last_version"`
+		Delete      bool              `json:"delete_mark"`
 	}
 
 	//easyjson:json
@@ -412,7 +407,6 @@ type (
 	}
 
 	seriesRequest struct {
-		version          string
 		numResults       int
 		play             int
 		metricName       string
@@ -591,9 +585,9 @@ type (
 
 var errTooManyRows = fmt.Errorf("can't fetch more than %v rows", maxSeriesRows)
 
-func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV1 *chutil.ClickHouse, chV2 *chutil.ClickHouse, metadataClient *tlmetadata.Client, diskCache pcache.DiskCache, jwtHelper *vkuth.JWTHelper, opt HandlerOptions, cfg *Config) (*Handler, error) {
-	metadataLoader := metajournal.NewMetricMetaLoader(metadataClient, metajournal.DefaultMetaTimeout)
-	diskCacheSuffix := metadataClient.Address // TODO - use cluster name or something here
+func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2 *chutil.ClickHouse, metadataClient *tlmetadata.Client, journalFile *os.File, cacheDir string, cluster string, mappingsStorage *metajournal.MappingsStorage, jwtHelper *vkuth.JWTHelper, opt HandlerOptions, cfg *Config) (*Handler, error) {
+	legacyMetaLoader := metajournal.NewMetricMetaLoader(metadataClient, metajournal.DefaultMetaTimeout)
+	metadataLoader := metarqlite.NewRQliteLoader(cfg.RQLiteAddrs, metarqlite.DefaultMetaTimeout, legacyMetaLoader)
 
 	tmpl, err := template.ParseFS(staticDir, "index.html")
 	if err != nil {
@@ -605,60 +599,20 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV1
 	}
 	cl := config.NewConfigListener(format.StatshouseAPIRemoteConfig, cfg)
 	metricStorage := metajournal.MakeMetricsStorage(nil)
-	journal := metajournal.MakeJournal(diskCacheSuffix, data_model.JournalDDOSProtectionTimeout, diskCache,
-		[]metajournal.ApplyEvent{metricStorage.ApplyEvent, cl.ApplyEventCB})
 	h := &Handler{
-		HandlerOptions: opt,
-		showInvisible:  showInvisible,
-		staticDir:      http.FS(staticDir),
-		indexTemplate:  tmpl,
-		indexSettings:  string(settings),
-		metadataLoader: metadataLoader,
-		ch: map[string]*chutil.ClickHouse{
-			Version1: chV1,
-			Version2: chV2,
-			Version3: chV2,
-		},
+		HandlerOptions:        opt,
+		showInvisible:         showInvisible,
+		staticDir:             http.FS(staticDir),
+		indexTemplate:         tmpl,
+		indexSettings:         string(settings),
+		metadataLoader:        metadataLoader,
+		mappingsStorage:       mappingsStorage,
+		ch:                    chV2,
 		metricsStorage:        metricStorage,
 		selectSettings:        cfg.BuildSelectSettings(),
 		blockedMetricPrefixes: cfg.BlockedMetricPrefixes,
 		blockedUsers:          cfg.BlockedUsers,
-		tagValueCache: &pcache.Cache{
-			Loader: tagValueInverseLoader{
-				loadTimeout: metajournal.DefaultMetaTimeout,
-				metaClient:  metadataClient,
-			}.load,
-			DiskCache:               diskCache,
-			DiskCacheNamespace:      data_model.TagValueInvertDiskNamespace + diskCacheSuffix,
-			MaxMemCacheSize:         data_model.MappingMaxMemCacheSize,
-			SpreadCacheTTL:          true,
-			DefaultCacheTTL:         data_model.MappingCacheTTLMinimum,
-			DefaultNegativeCacheTTL: data_model.MappingNegativeCacheTTL,
-			LoadMinInterval:         data_model.MappingMinInterval,
-			LoadBurst:               1000,
-			Empty: func() pcache.Value {
-				var empty pcache.StringValue
-				return &empty
-			},
-		},
-		tagValueIDCache: &pcache.Cache{
-			Loader: tagValueLoader{
-				loadTimeout: metajournal.DefaultMetaTimeout,
-				metaClient:  metadataClient,
-			}.load,
-			DiskCache:               diskCache,
-			DiskCacheNamespace:      data_model.TagValueDiskNamespace + diskCacheSuffix,
-			MaxMemCacheSize:         data_model.MappingMaxMemCacheSize,
-			SpreadCacheTTL:          true,
-			DefaultCacheTTL:         data_model.MappingCacheTTLMinimum,
-			DefaultNegativeCacheTTL: data_model.MappingNegativeCacheTTL,
-			LoadMinInterval:         data_model.MappingMinInterval,
-			LoadBurst:               1000,
-			Empty: func() pcache.Value {
-				var empty pcache.Int32Value
-				return &empty
-			},
-		},
+		availableShards:       cfg.AvailableShards,
 		cacheInvalidateTicker: time.NewTicker(cacheInvalidateCheckInterval),
 		cacheInvalidateStop:   make(chan chan struct{}),
 		jwtHelper:             jwtHelper,
@@ -673,7 +627,7 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV1
 	}
 	h.cache2 = newCache2(h, cfg.CacheChunkSize, loadPoints)
 	h.pointsCache = newPointsCache(cfg.ApproxCacheMaxSize, h.utcOffset, loadPoint, time.Now)
-	cl.AddChangeCB(func(c config.Config) {
+	applyCfg := func(c config.Config) {
 		cfg := c.(*Config)
 		cache2 := h.setCache2ChunkSize(cfg.CacheChunkSize)
 		cache2.setLimits(cache2Limits{
@@ -681,21 +635,35 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV1
 			maxSize:     cfg.MaxCacheSize,
 			maxSizeSoft: cfg.MaxCacheSizeSoft,
 		})
-		h.Version3Start.Store(cfg.Version3Start)
-		h.Version3Prob.Store(cfg.Version3Prob)
-		h.Version3StrcmpOff.Store(cfg.Version3StrcmpOff)
-		chV2.SetLimits(cfg.UserLimits)
-		h.NewShardingStart.Store(cfg.NewShardingStart)
+		h.Version6Start.Store(cfg.Version6Start)
+		h.hardwareMetricRes.Store(int64(cfg.HardwareMetricResolution))
+		h.hardwareSlowMetricRes.Store(int64(cfg.HardwareSlowMetricResolution))
+		_ = chV2.SetLimits(cfg.UserLimits, cfg.CHMaxShardConnsRatio, cfg.RateLimitConfig, cfg.ReplicaThrottleCfg)
 		h.ConfigMu.Lock()
+		defer h.ConfigMu.Unlock()
 		h.DisableCHAddr = cfg.DisableCHAddr
 		h.CacheBlacklist = cfg.CacheBlacklist
 		h.CacheWhitelist = cfg.CacheWhitelist
 		h.selectSettings = cfg.BuildSelectSettings()
 		h.blockedMetricPrefixes = cfg.BlockedMetricPrefixes
 		h.blockedUsers = cfg.BlockedUsers
-		h.ConfigMu.Unlock()
-	})
-	journal.Start(nil, nil, metadataLoader.LoadJournal)
+		h.availableShards = cfg.AvailableShards
+		h.announcement = cfg.Announcement
+		h.metadataLoader.SetConfig(cfg.RQLiteAddrs)
+	}
+	applyCfg(cfg)
+	cl.AddChangeCB(applyCfg)
+
+	// we ignore errors because cache can be damaged
+	h.journalFast, _ = metajournal.LoadJournalFastFile(journalFile, data_model.JournalDDOSProtectionTimeout, false,
+		[]metajournal.ApplyEvent{metricStorage.ApplyEvent, cl.ApplyEventCB})
+	h.journalFast.SetDumpPathPrefix(filepath.Join(cacheDir, fmt.Sprintf("journal-%s", cluster)))
+	h.journalFast.Start(nil, nil, metadataLoader.LoadJournal)
+	h.journalFast.StartPeriodicSaving()
+
+	mappingsStorage.StartPeriodicSaving()
+	mappingsStorage.Start(format.TagValueIDComponentAPI, nil, metadataLoader.GetNewMappings, true)
+
 	_ = syscall.Getrusage(syscall.RUSAGE_SELF, &h.rUsage)
 
 	go h.invalidateLoop()
@@ -728,26 +696,15 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV1
 
 		writeActiveQuieries := func(ch *chutil.ClickHouse, versionTag string) {
 			if ch != nil {
-				fastLight := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(format.TagValueIDAPILaneFastLight), 4: srvfunc.HostnameForStatshouse()})
-				fastLight.Value(float64(ch.SemaphoreCountFastLight()))
-
-				fastHeavy := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(format.TagValueIDAPILaneFastHeavy), 4: srvfunc.HostnameForStatshouse()})
-				fastHeavy.Value(float64(ch.SemaphoreCountFastHeavy()))
-
-				slowLight := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(format.TagValueIDAPILaneSlowLight), 4: srvfunc.HostnameForStatshouse()})
-				slowLight.Value(float64(ch.SemaphoreCountSlowLight()))
-
-				slowHeavy := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(format.TagValueIDAPILaneSlowHeavy), 4: srvfunc.HostnameForStatshouse()})
-				slowHeavy.Value(float64(ch.SemaphoreCountSlowHeavy()))
-
-				slowHardware := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(format.TagValueIDAPILaneFastHardware), 4: srvfunc.HostnameForStatshouse()})
-				slowHardware.Value(float64(ch.SemaphoreCountFastHardware()))
-
-				fastHardware := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(format.TagValueIDAPILaneSlowHardware), 4: srvfunc.HostnameForStatshouse()})
-				fastHardware.Value(float64(ch.SemaphoreCountSlowHardware()))
+				ChSelectActiveQueries(client, versionTag, format.TagValueIDAPILaneFastLight, ch.SemaphoreCountFastLight(), ch.ShardSemaphoreCountFastLight())
+				ChSelectActiveQueries(client, versionTag, format.TagValueIDAPILaneFastHeavy, ch.SemaphoreCountFastHeavy(), ch.ShardSemaphoreCountFastHeavy())
+				ChSelectActiveQueries(client, versionTag, format.TagValueIDAPILaneSlowLight, ch.SemaphoreCountSlowLight(), ch.ShardSemaphoreCountSlowLight())
+				ChSelectActiveQueries(client, versionTag, format.TagValueIDAPILaneSlowHeavy, ch.SemaphoreCountSlowHeavy(), ch.ShardSemaphoreCountSlowHeavy())
+				ChSelectActiveQueries(client, versionTag, format.TagValueIDAPILaneFastHardware, ch.SemaphoreCountFastHardware(), ch.ShardSemaphoreCountFastHardware())
+				ChSelectActiveQueries(client, versionTag, format.TagValueIDAPILaneSlowHardware, ch.SemaphoreCountSlowHardware(), ch.ShardSemaphoreCountSlowHardware())
+				ChRateLimit(client, versionTag, ch.RateLimitStatistics())
 			}
 		}
-		writeActiveQuieries(chV1, "1")
 		writeActiveQuieries(chV2, "2")
 		if n := h.pointFloatsPoolSize.Load(); n != 0 {
 			h.bufferPoolBytesTotal.Value(float64(n))
@@ -782,6 +739,12 @@ func (h *Handler) Close() error {
 	statshouse.StopRegularMeasurement(h.rmID)
 	h.cacheInvalidateTicker.Stop()
 
+	if _, _, err := h.journalFast.Save(); err != nil {
+		log.Printf("journal save failed: %v", err)
+	}
+	if _, err := h.mappingsStorage.Save(); err != nil {
+		log.Printf("Periodic mappings storage save failed: %v", err)
+	}
 	ch := make(chan struct{})
 	h.cacheInvalidateStop <- ch
 	<-ch
@@ -813,20 +776,9 @@ func (h *Handler) invalidateCache(ctx context.Context, from int64, seen map[cach
 	if from > uncertain {
 		from = uncertain
 	}
-	version2 := h.Version3Prob.Load() < 1
 	var sb strings.Builder
-	sb.WriteString("SELECT toInt64(time) AS time, toInt64(")
-	if version2 {
-		sb.WriteString("key1")
-	} else {
-		sb.WriteString("tag1")
-	}
-	sb.WriteString(") AS key1 FROM ")
-	if version2 {
-		sb.WriteString(_1sTableSH2)
-	} else {
-		sb.WriteString(_1sTableSH3)
-	}
+	sb.WriteString("SELECT toInt64(time) AS time, toInt64(tag1) AS key1 FROM ")
+	sb.WriteString(_1sTableSH3)
 	sb.WriteString(" WHERE metric=")
 	sb.WriteString(fmt.Sprint(format.BuiltinMetricIDContributorsLog))
 	sb.WriteString(" AND time>=")
@@ -855,10 +807,10 @@ func (h *Handler) invalidateCache(ctx context.Context, from int64, seen map[cach
 		IsLight:        true,
 		User:           "cache-update",
 		Metric:         format.BuiltinMetricMetaContributorsLog,
-		NewSharding:    false,
+		Sharded:        format.BuiltinMetricMetaContributorsLog.Sharded(),
 		DisableCHAddrs: h.disabledCHAddrs(),
 		Table:          _1sTableSH3,
-	}, Version2, ch.Query{
+	}, ch.Query{
 		Body: sb.String(),
 		Result: proto.Results{
 			{Name: "time", Data: &time},
@@ -902,10 +854,7 @@ func (h *Handler) invalidateCache(ctx context.Context, from int64, seen map[cach
 	return from, newSeen
 }
 
-func (h *requestHandler) doSelect(ctx context.Context, meta chutil.QueryMetaInto, version string, query ch.Query) error {
-	if version == Version1 && h.ch[version] == nil {
-		return fmt.Errorf("legacy ClickHouse database is disabled")
-	}
+func (h *requestHandler) doSelect(ctx context.Context, meta chutil.QueryMetaInto, query ch.Query) error {
 	err := func() error {
 		h.Handler.ConfigMu.RLock()
 		defer h.Handler.ConfigMu.RUnlock()
@@ -926,13 +875,13 @@ func (h *requestHandler) doSelect(ctx context.Context, meta chutil.QueryMetaInto
 	h.Tracef("%s", query.Body)
 
 	h.endpointStat.reportQueryKind(meta.IsFast, meta.IsLight, meta.IsHardware)
-	info, err := h.ch[version].Select(ctx, meta, query)
+	info, err := h.ch.Select(ctx, meta, query)
 	h.endpointStat.reportTiming("ch-select", info.QueryDuration)
 	h.endpointStat.reportTiming("wait-lock", info.WaitLockDuration)
-	ChSelectMetricDuration(info.QueryDuration, meta.Metric, meta.User, meta.Table, "", meta.IsFast, meta.IsLight, meta.IsHardware, err)
-	ChSelectProfile(meta.IsFast, meta.IsLight, meta.IsHardware, info.Profile, err)
-	// TODO: add shard
-	ChRequestsMetric(0, info.Host, meta.Table, err == nil)
+	ChSelectMetricDuration(info.QueryDuration, meta.Metric, meta.User, meta.Table, "", info.Shard, meta.IsFast, meta.IsLight, meta.IsHardware, info.ErrorCode, err)
+	ChSelectProfile(meta.IsFast, meta.IsLight, meta.IsHardware, meta.Metric, meta.User, meta.Table, "", info.Profile, info.ErrorCode, err)
+	ChSelectProfileEvents(meta.IsFast, meta.IsLight, meta.IsHardware, meta.Metric, meta.User, meta.Table, "", info.OSCPUVirtualTimeMicroseconds, info.ErrorCode, err)
+	ChRequestsMetric(info.Shard, info.Host, meta.Table, info.ErrorCode, err == nil)
 
 	return err
 }
@@ -962,10 +911,30 @@ func (h *requestHandler) getMetricID(metricName string) (int32, error) {
 	return v.MetricID, nil
 }
 
+func (h *Handler) metricWithResolution(m *format.MetricMetaValue) *format.MetricMetaValue {
+	if m == nil || !format.HardwareMetric(m.MetricID) {
+		return m
+	}
+	res := int(h.hardwareMetricRes.Load())
+	if m.IsHardwareSlowMetric {
+		res = int(h.hardwareSlowMetricRes.Load())
+	}
+	if res == 0 {
+		return m
+	}
+	if m.Resolution == res && m.EffectiveResolution == format.AllowedResolution(res) {
+		return m
+	}
+	c := *m
+	c.Resolution = res
+	c.EffectiveResolution = format.AllowedResolution(res)
+	return &c
+}
+
 // getMetricMeta only checks view access
 func (h *requestHandler) getMetricMeta(metricName string) (*format.MetricMetaValue, error) {
 	if m, ok := format.BuiltinMetricByName[metricName]; ok {
-		return m, nil
+		return h.metricWithResolution(m), nil
 	}
 	v := h.metricsStorage.GetMetaMetricByName(metricName)
 	if v == nil {
@@ -974,19 +943,20 @@ func (h *requestHandler) getMetricMeta(metricName string) (*format.MetricMetaVal
 	if !h.accessInfo.CanViewMetric(*v) { // We are OK with sharing this bit of information with clients
 		return nil, httpErr(http.StatusForbidden, fmt.Errorf("metric %q forbidden", metricName))
 	}
-	return v, nil
+	return h.metricWithResolution(v), nil
 }
-
-func (h *Handler) getMetricNameByID(metricID int32) string {
-	meta := format.BuiltinMetrics[metricID]
-	if meta != nil {
-		return meta.Name
+func (h *requestHandler) getMetricMetaByID(metricID int32) (*format.MetricMetaValue, error) {
+	if m, ok := format.BuiltinMetrics[metricID]; ok {
+		return h.metricWithResolution(m), nil
 	}
-	meta = h.metricsStorage.GetMetaMetric(metricID)
-	if meta != nil {
-		return meta.Name
+	v := h.metricsStorage.GetMetaMetric(metricID)
+	if v == nil {
+		return nil, httpErr(http.StatusNotFound, fmt.Errorf("metric %d not found", metricID))
 	}
-	return ""
+	if !h.accessInfo.CanViewMetric(*v) { // We are OK with sharing this bit of information with clients
+		return nil, httpErr(http.StatusForbidden, fmt.Errorf("metric %d forbidden", metricID))
+	}
+	return h.metricWithResolution(v), nil
 }
 
 // For stats
@@ -1002,11 +972,14 @@ func (h *Handler) getMetricIDForStat(metricName string) int32 {
 }
 
 func (h *Handler) getTagValue(tagValueID int32) (string, error) {
-	r := h.tagValueCache.GetOrLoad(time.Now(), strconv.FormatInt(int64(tagValueID), 10), nil)
-	return pcache.ValueToString(r.Value), r.Err
+	str, ok := h.mappingsStorage.GetString(tagValueID)
+	if !ok {
+		return "", httpErr(http.StatusNotFound, fmt.Errorf("tag value for %v not found", tagValueID))
+	}
+	return str, nil
 }
 
-func (h *Handler) getRichTagValue(metricMeta *format.MetricMetaValue, version string, tagID string, valueID int64) string {
+func (h *Handler) getRichTagValue(metricMeta *format.MetricMetaValue, tagID string, valueID int64) string {
 	// Rich mapping between integers and strings must be perfect (with no duplicates on both sides)
 	tag := metricMeta.Name2Tag(tagID)
 	if tag == nil || valueID < math.MinInt32 || math.MaxInt32 < valueID {
@@ -1038,13 +1011,7 @@ func (h *Handler) getRichTagValue(metricMeta *format.MetricMetaValue, version st
 	}
 	if tag.Raw() {
 		base := int32(0)
-		if version == Version1 {
-			base = format.TagValueIDRawDeltaLegacy
-		}
 		return format.CodeTagValue(tagValueID - base)
-	}
-	if tagValueID == format.TagValueIDMappingFloodLegacy && version == Version1 {
-		return format.CodeTagValue(format.TagValueIDMappingFlood)
 	}
 	switch tagValueID {
 	case format.TagValueIDUnspecified, format.TagValueIDMappingFlood:
@@ -1059,16 +1026,16 @@ func (h *Handler) getRichTagValue(metricMeta *format.MetricMetaValue, version st
 }
 
 func (h *Handler) getTagValueID(tagValue string) (int32, error) {
-	r := h.tagValueIDCache.GetOrLoad(time.Now(), tagValue, nil)
-	return pcache.ValueToInt32(r.Value), r.Err
+	valueID, ok := h.mappingsStorage.GetValue(tagValue)
+	if !ok {
+		return 0, httpErr(http.StatusNotFound, fmt.Errorf("tag value ID for %q not found", tagValue))
+	}
+	return valueID, nil
 }
 
-func (h *requestHandler) getRichTagValueID(tag *format.MetricMetaTag, version string, tagValue string) (int64, error) {
+func (h *requestHandler) getRichTagValueID(tag *format.MetricMetaTag, tagValue string) (int64, error) {
 	id, err := format.ParseCodeTagValue(tagValue)
 	if err == nil {
-		if version == Version1 && tag.Raw() {
-			id += format.TagValueIDRawDeltaLegacy
-		}
 		return id, nil
 	}
 	if tag.IsMetric() {
@@ -1111,16 +1078,16 @@ func formValueParamMetric(r *http.Request) string {
 	return mergeMetricNamespace(ns, str)
 }
 
-func (h *requestHandler) resolveFilter(metricMeta *format.MetricMetaValue, version string, f map[string][]string) (data_model.TagFilters, error) {
+func (h *requestHandler) resolveFilter(metricMeta *format.MetricMetaValue, f map[string][]string) (data_model.TagFilters, error) {
 	var m data_model.TagFilters
 	for k, values := range f {
-		if version == Version1 && k == format.EnvTagID {
-			continue // we only support production tables for v1
-		}
 		if k == format.StringTopTagID {
-			stringTop := &m.Tags[format.StringTopTagIndexV3]
-			for _, val := range values {
-				stringTop.Values = append(stringTop.Values, data_model.NewTagValueS(val))
+			for _, v := range values {
+				if f, err := h.GetTagFilter(metricMeta, format.StringTopTagIndexV3, v); err != nil {
+					return data_model.TagFilters{}, err
+				} else {
+					m.Append(format.StringTopTagIndexV3, f)
+				}
 			}
 		} else if tag := metricMeta.Name2Tag(k); tag != nil {
 			for _, v := range values {
@@ -1138,52 +1105,51 @@ func (h *requestHandler) resolveFilter(metricMeta *format.MetricMetaValue, versi
 }
 
 func (h *Handler) HandleStatic(w http.ResponseWriter, r *http.Request) {
-	origPath := r.URL.Path
-	switch r.URL.Path {
-	case "/":
-	case "/index.html":
-		r.URL.Path = "/"
-	default:
-		f, err := h.staticDir.Open(r.URL.Path) // stat is more efficient, but will require manual path manipulations
-		if f != nil {
-			_ = f.Close()
-		}
-
-		// 404 -> index.html, for client-side routing
-		if err != nil && os.IsNotExist(err) { // TODO - replace with errors.Is(err, fs.ErrNotExist) when jessie is upgraded to go 1.16
-			r.URL.Path = "/"
-		}
-	}
-
-	switch {
-	case r.URL.Path == "/":
-		// make sure browser does not use stale versions
-		w.Header().Set("Cache-Control", "public, no-cache, must-revalidate")
-	case strings.HasPrefix(r.URL.Path, "/static/"):
-		// everything under /static/ can be cached indefinitely (filenames contain content hashes)
-		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", cacheMaxAgeSeconds))
-	}
-
 	w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
 	w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if origPath != "/embed" {
+	if r.URL.Path != "/embed" {
 		w.Header().Set("X-Frame-Options", "deny")
 	}
 
-	if r.URL.Path == "/" {
-		data := struct {
-			OpenGraph *openGraphInfo
-			Settings  string
-		}{
-			getOpenGraphInfo(r, origPath),
-			h.indexSettings,
-		}
-		if err := h.indexTemplate.Execute(w, data); err != nil {
-			log.Printf("[error] failed to write index.html: %v", err)
-		}
-	} else {
+	if strings.HasPrefix(r.URL.Path, "/openapi/") {
+		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", cacheAgeStaticOtherSeconds))
 		http.FileServer(h.staticDir).ServeHTTP(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/assets/") {
+		// everything under /assets/ can be cached indefinitely (filenames contain content hashes)
+		w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", cacheAgeStaticAssetsSeconds))
+		http.FileServer(h.staticDir).ServeHTTP(w, r) // 404 for non-existing assets
+		return
+	}
+	if r.URL.Path != "/index.html" { // we have index.html static file, but we process it with template below
+		if f, err := h.staticDir.Open(r.URL.Path); err == nil {
+			fstat, err := f.Stat()
+			_ = f.Close()
+			if err == nil && !fstat.IsDir() {
+				// other static will be cached for some time, as we update it sometimes
+				w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", cacheAgeStaticOtherSeconds))
+				http.FileServer(h.staticDir).ServeHTTP(w, r) // should be never 404
+				return
+			}
+		}
+	}
+	// Ignore all FS errors, except fs.ErrNotExist, they must never appear in production, as we use static embedding.
+	// All other paths are managed by client side, so we return our application code (index.html).
+
+	// make sure browser does not use stale versions
+	w.Header().Set("Cache-Control", "public, no-cache, must-revalidate")
+	data := struct {
+		OpenGraph *openGraphInfo
+		Settings  string
+	}{
+		getOpenGraphInfo(r, r.URL.Path),
+		h.indexSettings,
+	}
+	if err := h.indexTemplate.Execute(w, data); err != nil {
+		// cannot send error here, as we've already started writing body
+		log.Printf("[error] failed to write index.html: %v", err)
 	}
 }
 
@@ -1280,7 +1246,7 @@ func HandlePostMetric(r *httpRequestHandler) {
 		return
 	}
 	err = r.waitVersionUpdate(r.Context(), m.Version)
-	respondJSON(r, &MetricInfo{Metric: m}, defaultCacheTTL, 0, err)
+	respondJSON(r, &MetricInfo{Metric: m, LastVersion: m.Version}, defaultCacheTTL, 0, err)
 }
 
 func handlePostEntity[T easyjson.Unmarshaler](r *httpRequestHandler, entity T, handleCallback func(ctx context.Context, ai accessInfo, entity T, create bool) (resp interface{}, versionToWait int64, err error)) {
@@ -1354,10 +1320,7 @@ func HandlePostResetFlood(r *httpRequestHandler) {
 		}
 		limit = int32(i)
 	}
-	del, before, after, err := r.metadataLoader.ResetFlood(r.Context(), formValueParamMetric(r.Request), limit)
-	if err == nil && !del {
-		err = fmt.Errorf("metric flood counter was empty (no flood)")
-	}
+	before, after, err := r.metadataLoader.ResetFlood(r.Context(), formValueParamMetric(r.Request), limit)
 	respondJSON(r, &struct {
 		Before int32 `json:"before"`
 		After  int32 `json:"after"`
@@ -1393,7 +1356,7 @@ func HandlePostPromConfig(r *httpRequestHandler) {
 		respondJSON(r, nil, 0, 0, err)
 		return
 	}
-	event, err := r.metadataLoader.SaveScrapeConfig(r.Context(), r.metricsStorage.PromConfig().Version, string(res), r.accessInfo.toMetadata())
+	event, err := r.metricsStorage.SaveScrapeConfig(r.Context(), r.metadataLoader, r.metricsStorage.PromConfig().Version, string(res), r.accessInfo.toMetadata())
 	if err != nil {
 		err = fmt.Errorf("failed to save prometheus config: %w", err)
 		respondJSON(r, nil, 0, 0, err)
@@ -1433,7 +1396,7 @@ func HandlePostKnownTags(r *httpRequestHandler) {
 		respondJSON(r, nil, 0, 0, err)
 		return
 	}
-	event, err := r.metadataLoader.SaveKnownTagsConfig(r.Context(), r.metricsStorage.KnownTags().Version, string(res))
+	event, err := r.metricsStorage.SaveKnownTagsConfig(r.Context(), r.metadataLoader, r.metricsStorage.KnownTags().Version, string(res))
 	if err != nil {
 		respondJSON(r, nil, 0, 0, err)
 		return
@@ -1492,10 +1455,9 @@ func HandleGetHistory(r *httpRequestHandler) {
 func HandleGetHealthcheck(r *httpRequestHandler) {
 	now := time.Now()
 	req := seriesRequest{
-		version: r.version,
-		from:    now.Add(-time.Hour),
-		to:      now,
-		promQL:  healthcheckQuery,
+		from:   now.Add(-time.Hour),
+		to:     now,
+		promQL: healthcheckQuery,
 	}
 	_, err, _ := r.healthcheckGroup.Do("healthcheck", func() (interface{}, error) {
 		_, cancel, err := r.handleSeriesRequestS(r.Context(), req, make([]seriesResponse, 2))
@@ -1514,50 +1476,57 @@ func HandleGetHealthcheck(r *httpRequestHandler) {
 }
 
 func (h *httpRequestHandler) handleGetMetric(metricName string, metricIDStr string, versionStr string) (*MetricInfo, time.Duration, error) {
+	var metric *format.MetricMetaValue
 	if metricIDStr != "" {
 		metricID, err := strconv.ParseInt(metricIDStr, 10, 32)
 		if err != nil {
 			return nil, 0, httpErr(http.StatusBadRequest, fmt.Errorf("can't parse %s", metricIDStr))
 		}
-		if versionStr == "" {
-			metricName = h.getMetricNameByID(int32(metricID))
-			if metricName == "" {
-				return nil, 0, httpErr(http.StatusNotFound, fmt.Errorf("can't find metric %d", metricID))
-			}
-		} else {
-			version, err := strconv.ParseInt(versionStr, 10, 64)
-			if err != nil {
-				return nil, 0, httpErr(http.StatusBadRequest, fmt.Errorf("can't parse %s", versionStr))
-			}
-			m, err := h.metadataLoader.GetMetric(h.Context(), metricID, version)
-			if err != nil {
-				return nil, 0, err
-			}
-			return &MetricInfo{
-				Metric: m,
-			}, defaultCacheTTL, nil
+		metric, err = h.getMetricMetaByID(int32(metricID))
+		if err != nil {
+			return nil, 0, err
+		}
+	} else {
+		var err error
+		metric, err = h.getMetricMeta(metricName)
+		if err != nil {
+			return nil, 0, err
 		}
 	}
-	v, err := h.getMetricMeta(metricName)
-	if err != nil {
-		return nil, 0, err
+	if versionStr != "" {
+		version, err := strconv.ParseInt(versionStr, 10, 64)
+		if err != nil {
+			return nil, 0, httpErr(http.StatusBadRequest, fmt.Errorf("can't parse %s", versionStr))
+		}
+		m, err := h.metadataLoader.GetMetric(h.Context(), int64(metric.MetricID), version)
+		if err != nil {
+			return nil, 0, err
+		}
+		return &MetricInfo{
+			Metric:      m,
+			LastVersion: metric.Version,
+		}, defaultCacheTTL, nil
 	}
 	return &MetricInfo{
-		Metric: *v,
+		Metric:      *metric,
+		LastVersion: metric.Version,
 	}, defaultCacheTTL, nil
 }
 
 func (h *Handler) handleGetDashboard(ctx context.Context, ai accessInfo, id int32, version int64) (*DashboardInfo, time.Duration, error) {
 	if id < 0 {
 		if dash, ok := format.BuiltinDashboardByID[id]; ok {
-			return &DashboardInfo{Dashboard: getDashboardMetaInfo(dash)}, defaultCacheTTL, nil
+			return &DashboardInfo{Dashboard: getDashboardMetaInfo(dash), LastVersion: dash.Version}, defaultCacheTTL, nil
 		} else {
 			return nil, 0, httpErr(http.StatusNotFound, fmt.Errorf("dashboard %d not found", id))
 		}
 	}
-	var dash *format.DashboardMeta
+	var lastVersion int64
+	dash := h.metricsStorage.GetDashboardMeta(id)
+	if dash != nil {
+		lastVersion = dash.Version
+	}
 	if version == 0 {
-		dash = h.metricsStorage.GetDashboardMeta(id)
 		if dash == nil {
 			return nil, 0, httpErr(http.StatusNotFound, fmt.Errorf("dashboard %d not found", id))
 		}
@@ -1568,7 +1537,7 @@ func (h *Handler) handleGetDashboard(ctx context.Context, ai accessInfo, id int3
 		}
 		dash = &dashI
 	}
-	return &DashboardInfo{Dashboard: getDashboardMetaInfo(dash)}, defaultCacheTTL, nil
+	return &DashboardInfo{Dashboard: getDashboardMetaInfo(dash), LastVersion: lastVersion}, defaultCacheTTL, nil
 }
 
 func (h *Handler) handleGetDashboardList(ai accessInfo, showInvisible bool) (*GetDashboardListResp, time.Duration, error) {
@@ -1608,7 +1577,13 @@ func (h *Handler) handlePostDashboard(ctx context.Context, ai accessInfo, dash D
 		dash.JSONData = map[string]interface{}{}
 	}
 	dash.JSONData[descriptionFieldName] = dash.Description
-	dashboard, err := h.metadataLoader.SaveDashboard(ctx, format.DashboardMeta{
+	if delete && dash.DeletedTime == 0 {
+		dash.DeletedTime = uint32(time.Now().Unix())
+	}
+	if !delete && dash.DeletedTime != 0 {
+		dash.DeletedTime = 0
+	}
+	dashboard, err := h.metricsStorage.SaveDashboard(ctx, h.metadataLoader, format.DashboardMeta{
 		DashboardID: dash.DashboardID,
 		Name:        dash.Name,
 		Version:     dash.Version,
@@ -1627,15 +1602,16 @@ func (h *Handler) handlePostDashboard(ctx context.Context, ai accessInfo, dash D
 		}
 		return &DashboardInfo{}, err
 	}
-	return &DashboardInfo{Dashboard: getDashboardMetaInfo(&dashboard)}, nil
+	return &DashboardInfo{Dashboard: getDashboardMetaInfo(&dashboard), LastVersion: dashboard.Version}, nil
 }
 
 func (h *Handler) handleGetGroup(_ accessInfo, id int32) (*MetricsGroupInfo, time.Duration, error) {
-	group, ok := h.metricsStorage.GetGroupWithMetricsList(id)
-	if !ok {
+	group := h.metricsStorage.GetGroup(id)
+	if group == nil {
 		return nil, 0, httpErr(http.StatusNotFound, fmt.Errorf("group %d not found", id))
 	}
-	return &MetricsGroupInfo{Group: *group.Group, Metrics: group.Metrics}, defaultCacheTTL, nil
+	metricsNames := h.metricsStorage.GetGroupMetricsNames(id)
+	return &MetricsGroupInfo{Group: *group, Metrics: metricsNames}, defaultCacheTTL, nil
 }
 
 func (h *Handler) handleGetGroupsList(ai accessInfo, showInvisible bool) (*GetGroupListResp, time.Duration, error) {
@@ -1677,22 +1653,8 @@ func (h *Handler) handlePostNamespace(ctx context.Context, ai accessInfo, namesp
 	if !ai.bitAdmin {
 		return nil, httpErr(http.StatusNotFound, fmt.Errorf("namespace %s not found", namespace.Name))
 	}
-	if !create {
-		if h.metricsStorage.GetNamespace(namespace.ID) == nil {
-			return &NamespaceInfo{}, httpErr(http.StatusNotFound, fmt.Errorf("namespace %d not found", namespace.ID))
-		}
-	}
 	var err error
-	if namespace.ID >= 0 {
-		namespace, err = h.metadataLoader.SaveNamespace(ctx, namespace, create, ai.toMetadata())
-	} else {
-		n := h.metricsStorage.GetNamespace(namespace.ID)
-		if n == nil {
-			return &NamespaceInfo{}, httpErr(http.StatusNotFound, fmt.Errorf("namespace %d not found", namespace.ID))
-		}
-		create := n == format.BuiltInNamespaceDefault[namespace.ID]
-		namespace, err = h.metadataLoader.SaveBuiltinNamespace(ctx, namespace, create)
-	}
+	namespace, err = h.metricsStorage.SaveNamespace(ctx, h.metadataLoader, namespace, create, ai.toMetadata())
 
 	if err != nil {
 		s := "edit"
@@ -1712,20 +1674,8 @@ func (h *Handler) handlePostGroup(ctx context.Context, ai accessInfo, group form
 	if !ai.bitAdmin {
 		return nil, httpErr(http.StatusNotFound, fmt.Errorf("group %s not found", group.Name))
 	}
-	if !create {
-		if h.metricsStorage.GetGroup(group.ID) == nil {
-			return &MetricsGroupInfo{}, httpErr(http.StatusNotFound, fmt.Errorf("group %d not found", group.ID))
-		}
-	}
-	if !h.metricsStorage.CanAddOrChangeGroup(group.Name, group.ID) {
-		return &MetricsGroupInfo{}, httpErr(http.StatusBadRequest, fmt.Errorf("group name %s is not posible", group.Name))
-	}
 	var err error
-	if group.ID >= 0 {
-		group, err = h.metadataLoader.SaveMetricsGroup(ctx, group, create, ai.toMetadata())
-	} else {
-		group, err = h.metadataLoader.SaveBuiltInGroup(ctx, group)
-	}
+	group, err = h.metricsStorage.SaveMetricsGroup(ctx, h.metadataLoader, group, create, ai.toMetadata())
 	if err != nil {
 		s := "edit"
 		if create {
@@ -1741,8 +1691,76 @@ func (h *Handler) handlePostGroup(ctx context.Context, ai accessInfo, group form
 	if err != nil {
 		return &MetricsGroupInfo{}, err
 	}
-	info, _ := h.metricsStorage.GetGroupWithMetricsList(group.ID)
-	return &MetricsGroupInfo{Group: group, Metrics: info.Metrics}, nil
+	metricsNames := h.metricsStorage.GetGroupMetricsNames(group.ID)
+	return &MetricsGroupInfo{Group: group, Metrics: metricsNames}, nil
+}
+
+func (h *Handler) applyShardsOnCreate(metric *format.MetricMetaValue) error {
+	if metric.ShardStrategy != "" {
+		return h.validateMetricShard(metric)
+	}
+	var shards []uint32
+	if g := h.metricsStorage.GetGroupByMetricName(metric.Name); g != nil && g.ShardKeys != "" {
+		items, err := parseShardKeys(g.ShardKeys)
+		if err != nil {
+			return fmt.Errorf("cannot parse group shard keys: %w", err)
+		}
+		shards = items
+	} else if nsName, _ := format.SplitNamespace(metric.Name); nsName != "" {
+		ns := h.metricsStorage.GetNamespaceByName(nsName)
+		if ns != nil && ns.ShardKeys != "" {
+			items, err := parseShardKeys(ns.ShardKeys)
+			if err != nil {
+				return fmt.Errorf("cannot parse namespace shard keys: %w", err)
+			}
+			shards = items
+		}
+	}
+	if len(shards) == 0 {
+		h.ConfigMu.RLock()
+		shards = append(shards, h.availableShards...)
+		h.ConfigMu.RUnlock()
+	}
+	if len(shards) == 0 {
+		return nil
+	}
+
+	metric.ShardStrategy = format.ShardFixed
+	metric.ShardNum = shards[rand.Intn(len(shards))] - 1
+	return nil
+}
+
+func (h *Handler) validateMetricShard(metric *format.MetricMetaValue) error {
+	nsName, _ := format.SplitNamespace(metric.Name)
+	if nsName == "" {
+		return nil
+	}
+	ns := h.metricsStorage.GetNamespaceByName(nsName)
+	if ns == nil || ns.ShardKeys == "" {
+		return nil
+	}
+	if metric.ShardStrategy != format.ShardFixed {
+		return fmt.Errorf("metric shard strategy %s, namespace strategy %s", metric.ShardStrategy, format.ShardFixed)
+	}
+	nsShards, err := parseShardKeys(ns.ShardKeys)
+	if err != nil {
+		return fmt.Errorf("cannot parse shard numbers: %w", err)
+	}
+
+	if g := h.metricsStorage.GetGroupByMetricName(metric.Name); g != nil && g.ShardKeys != "" {
+		gShards, err := parseShardKeys(g.ShardKeys)
+		if err != nil {
+			return fmt.Errorf("cannot parse group shard numbers: %w", err)
+		}
+
+		if !slices.Contains(gShards, metric.ShardNum+1) {
+			return fmt.Errorf("metric shard_num %d not in group shards: %s", metric.ShardNum, g.ShardKeys)
+		}
+	}
+	if !slices.Contains(nsShards, metric.ShardNum+1) {
+		return fmt.Errorf("metric shard_num %d not in namespace shards: %s", metric.ShardNum, ns.ShardKeys)
+	}
+	return nil
 }
 
 // TODO - remove metric name from request
@@ -1765,10 +1783,13 @@ func (h *Handler) handlePostMetric(ctx context.Context, ai accessInfo, _ string,
 		}
 	}
 	if create {
-		if !ai.CanEditMetric(true, metric, metric) {
-			return format.MetricMetaValue{}, httpErr(http.StatusForbidden, fmt.Errorf("can't create metric %q", metric.Name))
+		if err := ai.CanEditMetric(true, metric, metric); err != nil {
+			return format.MetricMetaValue{}, httpErr(http.StatusForbidden, fmt.Errorf("can't create metric %q: %v", metric.Name, err))
 		}
-		resp, err = h.metadataLoader.SaveMetric(ctx, metric, ai.toMetadata())
+		if err = h.applyShardsOnCreate(&metric); err != nil {
+			return format.MetricMetaValue{}, httpErr(http.StatusBadRequest, err)
+		}
+		resp, err = h.metricsStorage.SaveMetric(ctx, h.metadataLoader, metric, ai.toMetadata())
 		if err != nil {
 			if metajournal.IsUserRequestError(err) {
 				errReturn := fmt.Errorf("cannot create metric: %w", err)
@@ -1777,20 +1798,16 @@ func (h *Handler) handlePostMetric(ctx context.Context, ai accessInfo, _ string,
 			return format.MetricMetaValue{}, fmt.Errorf("failed to create metric: %w", err)
 		}
 	} else {
-		if _, ok := format.BuiltinMetrics[metric.MetricID]; ok {
-			return format.MetricMetaValue{},
-				httpErr(http.StatusBadRequest, fmt.Errorf("builtin metric cannot be edited"))
-		}
 		old := h.metricsStorage.GetMetaMetric(metric.MetricID)
 		if old == nil {
 			return format.MetricMetaValue{},
 				httpErr(http.StatusNotFound, fmt.Errorf("metric %q not found (id %d)", metric.Name, metric.MetricID))
 		}
-		if !ai.CanEditMetric(false, *old, metric) {
+		if err := ai.CanEditMetric(false, *old, metric); err != nil {
 			return format.MetricMetaValue{},
-				httpErr(http.StatusForbidden, fmt.Errorf("can't edit metric %q", old.Name))
+				httpErr(http.StatusForbidden, fmt.Errorf("can't edit metric %q: %v", old.Name, err))
 		}
-		resp, err = h.metadataLoader.SaveMetric(ctx, metric, ai.toMetadata())
+		resp, err = h.metricsStorage.SaveMetric(ctx, h.metadataLoader, metric, ai.toMetadata())
 		if err != nil {
 			if metajournal.IsUserRequestError(err) {
 				errReturn := fmt.Errorf("cannot update metric: %w", err)
@@ -1803,7 +1820,7 @@ func (h *Handler) handlePostMetric(ctx context.Context, ai accessInfo, _ string,
 }
 
 func HandleGetMetricTagValues(r *httpRequestHandler) {
-	ctx, cancel := context.WithTimeout(r.Context(), r.querySelectTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), r.QuerySelectTimeout)
 	defer cancel()
 
 	_ = r.ParseForm() // (*http.Request).FormValue ignores parse errors, too
@@ -1921,12 +1938,6 @@ func (h *requestHandler) handleGetMetricTagValues(ctx context.Context, req getMe
 		return nil, false, err
 	}
 
-	version := h.version
-	err = validateQuery(metricMeta, version)
-	if err != nil {
-		return nil, false, err
-	}
-
 	tagID, err := parseTagID(req.tagID)
 	if err != nil {
 		return nil, false, err
@@ -1946,26 +1957,24 @@ func (h *requestHandler) handleGetMetricTagValues(ctx context.Context, req getMe
 	if err != nil {
 		return nil, false, err
 	}
-	mappedFilterIn, err := h.resolveFilter(metricMeta, version, filterIn)
+	mappedFilterIn, err := h.resolveFilter(metricMeta, filterIn)
 	if err != nil {
 		return nil, false, err
 	}
-	mappedFilterNotIn, err := h.resolveFilter(metricMeta, version, filterNotIn)
+	mappedFilterNotIn, err := h.resolveFilter(metricMeta, filterNotIn)
 	if err != nil {
 		return nil, false, err
 	}
 
 	lods, err := data_model.GetLODs(data_model.GetTimescaleArgs{
-		Version:          version,
-		Start:            from.Unix(),
-		End:              to.Unix(),
-		ScreenWidth:      100, // really dumb
-		TimeNow:          time.Now().Unix(),
-		Metric:           metricMeta,
-		Location:         h.location,
-		UTCOffset:        h.utcOffset,
-		Version3Start:    h.Version3Start.Load(),
-		NewShardingStart: h.NewShardingStart.Load(),
+		Start:         from.Unix(),
+		End:           to.Unix(),
+		ScreenWidth:   100, // really dumb
+		TimeNow:       time.Now().Unix(),
+		Metric:        metricMeta,
+		Location:      h.location,
+		UTCOffset:     h.utcOffset,
+		Version6Start: h.Version6Start.Load(),
 	})
 	if err != nil {
 		return nil, false, err
@@ -1977,48 +1986,43 @@ func (h *requestHandler) handleGetMetricTagValues(ctx context.Context, req getMe
 		numResults:  numResults,
 		filterIn:    mappedFilterIn,
 		filterNotIn: mappedFilterNotIn,
-		strcmpOff:   h.Version3StrcmpOff.Load(),
 	}
 
 	valueCount := map[string]float64{}
 	valueIDCount := map[int64]float64{}
-	if version == Version1 && tagID == format.EnvTagID {
-		valueIDCount[format.TagValueIDProductionLegacy] = 100 // we only support production tables for v1
-	} else {
-		for _, lod := range lods {
-			query := pq.buildTagValuesQuery(lod, h.getSelectSettings())
-			isFast := lod.FromSec+fastQueryTimeInterval >= lod.ToSec
-			newSharding := h.newSharding(pq.metric, lod.FromSec)
-			err = h.doSelect(ctx, chutil.QueryMetaInto{
-				IsFast:         isFast,
-				IsLight:        true,
-				User:           req.ai.user,
-				Metric:         metricMeta,
-				Table:          lod.Table(newSharding),
-				NewSharding:    newSharding,
-				DisableCHAddrs: h.disabledCHAddrs(),
-			}, version, ch.Query{
-				Body:   query.body,
-				Result: query.res,
-				OnResult: func(_ context.Context, b proto.Block) error {
-					for i := 0; i < b.Rows; i++ {
-						tag := query.rowAt(i)
-						if tag.valID != 0 {
-							valueIDCount[int64(tag.valID)] += tag.cnt
-						} else {
-							valueCount[tag.val] += tag.cnt
-						}
+	for _, lod := range lods {
+		query := pq.buildTagValuesQuery(lod, h.getSelectSettings())
+		isFast := lod.FromSec+fastQueryTimeInterval >= lod.ToSec
+		sharded := pq.metric.Sharded()
+		err = h.doSelect(ctx, chutil.QueryMetaInto{
+			IsFast:         isFast,
+			IsLight:        true,
+			User:           req.ai.user,
+			Metric:         metricMeta,
+			Table:          lod.Table(sharded),
+			Sharded:        sharded,
+			DisableCHAddrs: h.disabledCHAddrs(),
+		}, ch.Query{
+			Body:   query.body,
+			Result: query.res,
+			OnResult: func(_ context.Context, b proto.Block) error {
+				for i := 0; i < b.Rows; i++ {
+					tag := query.rowAt(i)
+					if tag.valID != 0 {
+						valueIDCount[int64(tag.valID)] += tag.cnt
+					} else {
+						valueCount[tag.val] += tag.cnt
 					}
-					return nil
-				}})
-			if err != nil {
-				return nil, false, err
-			}
+				}
+				return nil
+			}})
+		if err != nil {
+			return nil, false, err
 		}
 	}
 
 	for k, v := range valueIDCount {
-		valueCount[h.getRichTagValue(metricMeta, version, tagID, k)] += v
+		valueCount[h.getRichTagValue(metricMeta, tagID, k)] += v
 	}
 
 	data := make([]MetricTagValueInfo, 0, len(valueCount))
@@ -2061,7 +2065,7 @@ func HandleGetTable(r *httpRequestHandler) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), r.querySelectTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), r.QuerySelectTimeout)
 	defer cancel()
 
 	if req.numResults <= 0 || maxTableRowsPage < req.numResults {
@@ -2111,7 +2115,7 @@ func HandleBadgesQuery(r *httpRequestHandler) {
 		respondJSON(r, nil, 0, 0, err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), r.querySelectTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), r.QuerySelectTimeout)
 	defer cancel()
 	query := promql.Query{
 		Start: req.from.Unix(),
@@ -2119,9 +2123,7 @@ func HandleBadgesQuery(r *httpRequestHandler) {
 		Step:  req.step,
 		Expr:  req.promQL,
 		Options: promql.Options{
-			Version:          req.version,
-			Version3Start:    r.Version3Start.Load(),
-			NewShardingStart: r.NewShardingStart.Load(),
+			Version6Start:    r.Version6Start.Load(),
 			AvoidCache:       req.avoidCache,
 			Extend:           req.excessPoints,
 			ExplicitGrouping: true,
@@ -2247,17 +2249,14 @@ func (h *requestHandler) queryBadges(ctx context.Context, req seriesRequest, met
 			user:       h.endpointStat.user,
 			priority:   h.endpointStat.priority,
 		},
-		debug:   h.debug,
-		version: h.version,
+		debug: h.debug,
 		query: promql.Query{
 			Start: req.from.Unix(),
 			End:   req.to.Unix(),
 			Step:  req.step,
 			Expr:  fmt.Sprintf(`%s{@what="countraw,avg",@by="1,2",2=" 0",2=" %d"}`, format.BuiltinMetricMetaBadges.Name, meta.MetricID),
 			Options: promql.Options{
-				Version:          req.version,
-				Version3Start:    h.Version3Start.Load(),
-				NewShardingStart: h.NewShardingStart.Load(),
+				Version6Start:    h.Version6Start.Load(),
 				ExplicitGrouping: true,
 				QuerySequential:  h.querySequential,
 				ScreenWidth:      req.screenWidth,
@@ -2315,7 +2314,7 @@ func HandlePointQuery(r *httpRequestHandler) {
 }
 
 func HandleGetRender(r *httpRequestHandler) {
-	ctx, cancel := context.WithTimeout(r.Context(), r.querySelectTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), r.QuerySelectTimeout)
 	defer cancel()
 	s, err := r.parseSeriesRequestS(12)
 	if err != nil {
@@ -2480,30 +2479,24 @@ func (h *requestHandler) handleGetTable(ctx context.Context, req seriesRequest) 
 	if err != nil {
 		return nil, false, err
 	}
-	err = validateQuery(metricMeta, req.version)
+	mappedFilterIn, err := h.resolveFilter(metricMeta, req.filterIn)
 	if err != nil {
 		return nil, false, err
 	}
-	mappedFilterIn, err := h.resolveFilter(metricMeta, req.version, req.filterIn)
-	if err != nil {
-		return nil, false, err
-	}
-	mappedFilterNotIn, err := h.resolveFilter(metricMeta, req.version, req.filterNotIn)
+	mappedFilterNotIn, err := h.resolveFilter(metricMeta, req.filterNotIn)
 	if err != nil {
 		return nil, false, err
 	}
 	lods, err := data_model.GetLODs(data_model.GetTimescaleArgs{
-		Version:          req.version,
-		Version3Start:    h.Version3Start.Load(),
-		Start:            req.from.Unix(),
-		End:              req.to.Unix(),
-		Step:             req.step,
-		ScreenWidth:      req.screenWidth,
-		TimeNow:          time.Now().Unix(),
-		Metric:           metricMeta,
-		Location:         h.location,
-		UTCOffset:        h.utcOffset,
-		NewShardingStart: h.NewShardingStart.Load(),
+		Version6Start: h.Version6Start.Load(),
+		Start:         req.from.Unix(),
+		End:           req.to.Unix(),
+		Step:          req.step,
+		ScreenWidth:   req.screenWidth,
+		TimeNow:       time.Now().Unix(),
+		Metric:        metricMeta,
+		Location:      h.location,
+		UTCOffset:     h.utcOffset,
 	})
 	if err != nil {
 		return nil, false, err
@@ -2562,7 +2555,7 @@ func (h *requestHandler) handleSeriesRequestS(ctx context.Context, req seriesReq
 	var cancelT func()
 	var freeBadges func()
 	var freeRes func()
-	ctx, cancelT = context.WithTimeout(ctx, h.querySelectTimeout)
+	ctx, cancelT = context.WithTimeout(ctx, h.QuerySelectTimeout)
 	cancel := func() {
 		cancelT()
 		if freeBadges != nil {
@@ -2630,9 +2623,7 @@ func (h *requestHandler) handleSeriesRequest(ctx context.Context, req seriesRequ
 		Step:  req.step,
 		Expr:  req.promQL,
 		Options: promql.Options{
-			Version:          req.version,
-			Version3Start:    h.Version3Start.Load(),
-			NewShardingStart: h.NewShardingStart.Load(),
+			Version6Start:    h.Version6Start.Load(),
 			Mode:             opt.mode,
 			AvoidCache:       req.avoidCache,
 			TimeNow:          opt.timeNow.Unix(),
@@ -2881,14 +2872,14 @@ func (h *Handler) putFloatsSlice(s *[]float64) {
 	h.pointFloatsPoolSize.Sub(int64(sizeInBytes))
 }
 
-func (h *Handler) maybeAddQuerySeriesTagValue(m map[string]SeriesMetaTag, metricMeta *format.MetricMetaValue, version string, by []string, tagIndex int, tags *tsTags) bool {
+func (h *Handler) maybeAddQuerySeriesTagValue(m map[string]SeriesMetaTag, metricMeta *format.MetricMetaValue, by []string, tagIndex int, tags *tsTags) bool {
 	tagID := format.TagID(tagIndex)
 	if !containsString(by, tagID) {
 		return false
 	}
 	metaTag := SeriesMetaTag{Value: tags.stag[tagIndex]}
 	if metaTag.Value == "" {
-		metaTag.Value = h.getRichTagValue(metricMeta, version, tagID, tags.tag[tagIndex])
+		metaTag.Value = h.getRichTagValue(metricMeta, tagID, tags.tag[tagIndex])
 	}
 	if tag := metricMeta.Name2Tag(tagID); tag != nil {
 		metaTag.Comment = tag.ValueComments[metaTag.Value]
@@ -2901,9 +2892,8 @@ func (h *Handler) maybeAddQuerySeriesTagValue(m map[string]SeriesMetaTag, metric
 
 type seriesQuery struct {
 	*queryBuilder
-	body    string
-	version string
-	time    proto.ColInt64
+	body string
+	time proto.ColInt64
 
 	// tags
 	tag  []*tagCol
@@ -2919,8 +2909,6 @@ type seriesQuery struct {
 	percentile  chutil.ColTDigest
 	cardinality proto.ColFloat64
 	shardNum    proto.ColUInt32
-	minHostV1   proto.ColUInt8
-	maxHostV1   proto.ColUInt8
 	minHostV2   chutil.ColArgMinInt32Float32
 	maxHostV2   chutil.ColArgMaxInt32Float32
 	minHostV3   chutil.ColArgMinStringFloat32
@@ -3073,8 +3061,8 @@ func loadPoints(ctx context.Context, h *requestHandler, pq *queryBuilder, lod da
 	isFast := lod.IsFast()
 	isLight := query.isLight()
 	isHardware := query.isHardware()
-	newSharding := h.newSharding(pq.metric, lod.FromSec)
-	table := lod.Table(newSharding)
+	sharded := pq.metric.Sharded()
+	table := lod.Table(sharded)
 	start := time.Now()
 	err = h.doSelect(ctx, chutil.QueryMetaInto{
 		IsFast:         isFast,
@@ -3083,9 +3071,9 @@ func loadPoints(ctx context.Context, h *requestHandler, pq *queryBuilder, lod da
 		User:           pq.user,
 		Metric:         pq.metric,
 		Table:          table,
-		NewSharding:    newSharding,
+		Sharded:        sharded,
 		DisableCHAddrs: h.disabledCHAddrs(),
-	}, lod.Version, ch.Query{
+	}, ch.Query{
 		Body:   query.body,
 		Result: query.res,
 		OnResult: func(_ context.Context, block proto.Block) error {
@@ -3136,8 +3124,8 @@ func loadPoint(ctx context.Context, h *requestHandler, pq *queryBuilder, lod dat
 	isFast := lod.IsFast()
 	isLight := query.isLight()
 	isHardware := query.isHardware()
-	newSharding := h.newSharding(pq.metric, lod.FromSec)
-	table := lod.Table(newSharding)
+	sharded := pq.metric.Sharded()
+	table := lod.Table(sharded)
 	err = h.doSelect(ctx, chutil.QueryMetaInto{
 		IsFast:         isFast,
 		IsLight:        isLight,
@@ -3145,9 +3133,9 @@ func loadPoint(ctx context.Context, h *requestHandler, pq *queryBuilder, lod dat
 		User:           pq.user,
 		Metric:         pq.metric,
 		Table:          table,
-		NewSharding:    newSharding,
+		Sharded:        sharded,
 		DisableCHAddrs: h.disabledCHAddrs(),
-	}, lod.Version, ch.Query{
+	}, ch.Query{
 		Body:   query.body,
 		Result: query.res,
 		OnResult: func(_ context.Context, block proto.Block) error {
@@ -3345,7 +3333,7 @@ func mergeMetricNamespace(namespace string, metric string) string {
 }
 
 func (h *httpRequestHandler) init() error {
-	return h.requestHandler.init(vkuth.GetAccessToken(h.Request), getAccessTokenSource(h.Request), h.Request.FormValue(ParamVersion))
+	return h.requestHandler.init(vkuth.GetAccessToken(h.Request), getAccessTokenSource(h.Request))
 }
 
 func getAccessTokenSource(req *http.Request) string {
@@ -3407,19 +3395,7 @@ func healthcheckAccessInfo(h *requestHandler) (accessInfo, bool) {
 	}
 }
 
-func (h *requestHandler) init(accessToken, tokenSource, version string) (err error) {
-	switch version {
-	case Version1, Version3:
-		h.version = version
-	case Version2, "":
-		if rand.Float64() < h.Handler.Version3Prob.Load() {
-			h.version = Version3
-		} else {
-			h.version = Version2
-		}
-	default:
-		return fmt.Errorf("invalid version: %q", version)
-	}
+func (h *requestHandler) init(accessToken, tokenSource string) (err error) {
 	h.endpointStat.tokenSource = tokenSource
 	if h.accessInfo, err = parseAccessToken(h.jwtHelper, accessToken, h.protectedMetricPrefixes, h.LocalMode, h.insecureMode); err != nil {
 		if ai, ok := healthcheckAccessInfo(h); !ok {

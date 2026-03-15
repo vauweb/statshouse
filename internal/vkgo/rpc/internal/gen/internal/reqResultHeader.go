@@ -29,32 +29,50 @@ func (item *ReqResultHeader) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *ReqResultHeader) Read(w []byte) (_ []byte, err error) {
-	return item.Extra.Read(w)
+	return item.ReadTL1(w)
+}
+func (item *ReqResultHeader) ReadTL1(w []byte) (_ []byte, err error) {
+	return item.Extra.ReadTL1(w)
 }
 
 func (item *ReqResultHeader) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *ReqResultHeader) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *ReqResultHeader) Write(w []byte) []byte {
-	w = item.Extra.Write(w)
+	return item.WriteTL1(w)
+}
+func (item *ReqResultHeader) WriteTL1(w []byte) []byte {
+	w = item.Extra.WriteTL1(w)
 	return w
 }
 
 func (item *ReqResultHeader) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *ReqResultHeader) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x8cc84ce1); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *ReqResultHeader) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *ReqResultHeader) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *ReqResultHeader) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *ReqResultHeader) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x8cc84ce1)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item ReqResultHeader) String() string {
@@ -62,6 +80,11 @@ func (item ReqResultHeader) String() string {
 }
 
 func (item *ReqResultHeader) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *ReqResultHeader) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propExtraPresented bool
 
 	if in != nil {
@@ -77,7 +100,7 @@ func (item *ReqResultHeader) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexe
 				if propExtraPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("reqResultHeader", "extra")
 				}
-				if err := item.Extra.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Extra.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propExtraPresented = true
@@ -98,18 +121,19 @@ func (item *ReqResultHeader) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexe
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *ReqResultHeader) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *ReqResultHeader) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *ReqResultHeader) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *ReqResultHeader) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *ReqResultHeader) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"extra":`...)
-	w = item.Extra.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Extra.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 

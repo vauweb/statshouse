@@ -220,7 +220,7 @@ func TestFairKeySampling(t *testing.T) {
 			for j := 1; j <= v; j++ {
 				key.Tags[1] = int32(j)
 				v := &MultiItem{}
-				mi, _ := b.GetOrCreateMultiItem(&key, nil, 1, nil)
+				mi, _ := b.GetOrCreateMultiItem(&key, nil, nil)
 				mi.Tail.Value.AddValueCounter(0, 1)
 				b.sumSize += int64(key.TLSizeEstimate(key.Timestamp) + v.TLSizeEstimate())
 			}
@@ -232,7 +232,8 @@ func TestFairKeySampling(t *testing.T) {
 			Meta: metaStorageMock{
 				getMetaMetric: func(metricID int32) *format.MetricMetaValue {
 					return &format.MetricMetaValue{
-						FairKey: []int{0},
+						FairKeyIndex:    []int{0},
+						EffectiveWeight: 1,
 					}
 				},
 			},
@@ -414,7 +415,7 @@ func (b *samplingTestBucket) generateSeriesCount(t *rapid.T, s samplingTestSpec)
 			var (
 				k = Key{Metric: metricID, Tags: [format.MaxTags]int32{int32(i + 1)}}
 			)
-			mi, _ := miMap.GetOrCreateMultiItem(&k, nil, 1, nil)
+			mi, _ := miMap.GetOrCreateMultiItem(&k, nil, nil)
 			mi.Tail.Value.AddValueCounter(0, 1)
 			sumSize += int64(k.TLSizeEstimate(k.Timestamp) + mi.TLSizeEstimate())
 		}
@@ -438,7 +439,7 @@ func (b *samplingTestBucket) generateSeriesSize(t *rapid.T, s samplingTestSpec) 
 		)
 		for i := int32(1); size < sizeT; i++ {
 			var k = Key{Metric: metricID, Tags: [format.MaxTags]int32{i}}
-			item, _ := miMap.GetOrCreateMultiItem(&k, nil, 1, nil)
+			item, _ := miMap.GetOrCreateMultiItem(&k, nil, nil)
 			item.Tail.Value.AddValueCounter(0, 1)
 			size += samplingTestSizeOf(item)
 		}
@@ -450,7 +451,7 @@ func (b *samplingTestBucket) generateSeriesSize(t *rapid.T, s samplingTestSpec) 
 
 func (b *samplingTestBucket) generateNormValues(r *rand.Rand) {
 	for _, v := range b.MultiItems {
-		v.Tail.Value = SimpleItemCounter(r.NormFloat64(), TagUnionBytes{})
+		v.Tail.Value = SimpleItemCounter(r.NormFloat64(), TagUnion{})
 	}
 }
 
@@ -497,7 +498,6 @@ type samplerConfigEx struct {
 type samplingMetric struct {
 	metricID      int32
 	metricWeight  int64 // actually, effective weight
-	roundFactors  bool
 	noSampleAgent bool
 	sumSize       int64
 	items         []SamplingMultiItemPair
@@ -532,7 +532,7 @@ func benchmarkSampleBucket(b *testing.B, f func(*MetricsBucket, samplerConfigEx)
 			var (
 				k = Key{Metric: metricID, Tags: [format.MaxTags]int32{int32(i + 1)}}
 			)
-			mi, _ := bucket.GetOrCreateMultiItem(&k, nil, 1, nil)
+			mi, _ := bucket.GetOrCreateMultiItem(&k, nil, nil)
 			mi.Tail.Value.AddValueCounter(0, 1)
 		}
 	}
@@ -606,11 +606,9 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) []tlstats
 			metric = &samplingMetric{
 				metricID:     accountMetric,
 				metricWeight: format.EffectiveWeightOne,
-				roundFactors: false, // default is no rounding
 			}
 			if metricInfo != nil {
 				metric.metricWeight = metricInfo.EffectiveWeight
-				metric.roundFactors = metricInfo.RoundSampleFactors
 				metric.noSampleAgent = metricInfo.NoSampleAgent
 			}
 			metricsMap[accountMetric] = metric
@@ -659,17 +657,6 @@ func sampleBucketLegacy(bucket *MetricsBucket, config samplerConfigEx) []tlstats
 			continue
 		}
 		sf := float64(samplingMetric.sumSize*remainingWeight) / float64(samplingMetric.metricWeight*remainingBudget)
-		if samplingMetric.roundFactors {
-			sf = roundSampleFactor(sf, config.Rand)
-			if sf <= 1 { // Many sample factors are between 1 and 2, so this is worthy optimization
-				if config.KeepF != nil {
-					for _, v := range samplingMetric.items {
-						config.KeepF(v.Item, bucket.Time)
-					}
-				}
-				continue
-			}
-		}
 		sampleFactors = append(sampleFactors, tlstatshouse.SampleFactor{
 			Metric: samplingMetric.metricID,
 			Value:  float32(sf),

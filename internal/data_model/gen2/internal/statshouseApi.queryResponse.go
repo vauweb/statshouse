@@ -22,6 +22,7 @@ type StatshouseApiGetQueryResponse struct {
 	ResponseId      int64
 	// ExcessPointLeft (TrueType) // Conditional: item.FieldsMask.0
 	// ExcessPointRight (TrueType) // Conditional: item.FieldsMask.1
+	tl2mask0 byte
 }
 
 func (StatshouseApiGetQueryResponse) TLName() string { return "statshouseApi.queryResponse" }
@@ -33,10 +34,13 @@ func (item *StatshouseApiGetQueryResponse) SetExcessPointLeft(v bool) {
 	} else {
 		item.FieldsMask &^= 1 << 0
 	}
+	if v {
+		item.tl2mask0 |= 1
+	} else {
+		item.tl2mask0 &^= 1
+	}
 }
-func (item StatshouseApiGetQueryResponse) IsSetExcessPointLeft() bool {
-	return item.FieldsMask&(1<<0) != 0
-}
+func (item *StatshouseApiGetQueryResponse) IsSetExcessPointLeft() bool { return item.tl2mask0&1 != 0 }
 
 func (item *StatshouseApiGetQueryResponse) SetExcessPointRight(v bool) {
 	if v {
@@ -44,10 +48,13 @@ func (item *StatshouseApiGetQueryResponse) SetExcessPointRight(v bool) {
 	} else {
 		item.FieldsMask &^= 1 << 1
 	}
+	if v {
+		item.tl2mask0 |= 2
+	} else {
+		item.tl2mask0 &^= 2
+	}
 }
-func (item StatshouseApiGetQueryResponse) IsSetExcessPointRight() bool {
-	return item.FieldsMask&(1<<1) != 0
-}
+func (item *StatshouseApiGetQueryResponse) IsSetExcessPointRight() bool { return item.tl2mask0&2 != 0 }
 
 func (item *StatshouseApiGetQueryResponse) Reset() {
 	item.FieldsMask = 0
@@ -56,9 +63,27 @@ func (item *StatshouseApiGetQueryResponse) Reset() {
 	item.ChunkIds = item.ChunkIds[:0]
 	item.TotalTimePoints = 0
 	item.ResponseId = 0
+	item.tl2mask0 = 0
+}
+
+func (item *StatshouseApiGetQueryResponse) FillRandom(rg *basictl.RandGenerator, nat_query_fields_mask uint32) {
+	item.tl2mask0 = 0
+	item.FieldsMask = basictl.RandomFieldMask(rg, 0b11)
+	item.Series.FillRandom(rg)
+	BuiltinVectorStatshouseApiSeriesMetaFillRandom(rg, &item.SeriesMeta, nat_query_fields_mask)
+	BuiltinVectorIntFillRandom(rg, &item.ChunkIds)
+	item.TotalTimePoints = basictl.RandomInt(rg)
+	item.ResponseId = basictl.RandomLong(rg)
+	if item.FieldsMask&(1<<0) != 0 {
+		item.tl2mask0 |= 1
+	}
+	if item.FieldsMask&(1<<1) != 0 {
+		item.tl2mask0 |= 2
+	}
 }
 
 func (item *StatshouseApiGetQueryResponse) Read(w []byte, nat_query_fields_mask uint32) (_ []byte, err error) {
+	item.tl2mask0 = 0
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
 	}
@@ -77,10 +102,15 @@ func (item *StatshouseApiGetQueryResponse) Read(w []byte, nat_query_fields_mask 
 	if w, err = basictl.LongRead(w, &item.ResponseId); err != nil {
 		return w, err
 	}
+	if item.FieldsMask&(1<<0) != 0 {
+		item.tl2mask0 |= 1
+	}
+	if item.FieldsMask&(1<<1) != 0 {
+		item.tl2mask0 |= 2
+	}
 	return w, nil
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseApiGetQueryResponse) WriteGeneral(w []byte, nat_query_fields_mask uint32) (_ []byte, err error) {
 	return item.Write(w, nat_query_fields_mask), nil
 }
@@ -102,7 +132,6 @@ func (item *StatshouseApiGetQueryResponse) ReadBoxed(w []byte, nat_query_fields_
 	return item.Read(w, nat_query_fields_mask)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseApiGetQueryResponse) WriteBoxedGeneral(w []byte, nat_query_fields_mask uint32) (_ []byte, err error) {
 	return item.WriteBoxed(w, nat_query_fields_mask), nil
 }
@@ -112,7 +141,7 @@ func (item *StatshouseApiGetQueryResponse) WriteBoxed(w []byte, nat_query_fields
 	return item.Write(w, nat_query_fields_mask)
 }
 
-func (item *StatshouseApiGetQueryResponse) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, nat_query_fields_mask uint32) error {
+func (item *StatshouseApiGetQueryResponse) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, nat_query_fields_mask uint32) error {
 	var propFieldsMaskPresented bool
 	var propSeriesPresented bool
 	var rawSeriesMeta []byte
@@ -145,7 +174,7 @@ func (item *StatshouseApiGetQueryResponse) ReadJSON(legacyTypeNames bool, in *ba
 				if propSeriesPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouseApi.queryResponse", "series")
 				}
-				if err := item.Series.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Series.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propSeriesPresented = true
@@ -161,7 +190,7 @@ func (item *StatshouseApiGetQueryResponse) ReadJSON(legacyTypeNames bool, in *ba
 				if propChunkIdsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouseApi.queryResponse", "chunk_ids")
 				}
-				if err := BuiltinVectorIntReadJSON(legacyTypeNames, in, &item.ChunkIds); err != nil {
+				if err := BuiltinVectorIntReadJSONGeneral(tctx, in, &item.ChunkIds); err != nil {
 					return err
 				}
 				propChunkIdsPresented = true
@@ -237,30 +266,37 @@ func (item *StatshouseApiGetQueryResponse) ReadJSON(legacyTypeNames bool, in *ba
 	if rawSeriesMeta != nil {
 		inSeriesMetaPointer = &inSeriesMeta
 	}
-	if err := BuiltinVectorStatshouseApiSeriesMetaReadJSON(legacyTypeNames, inSeriesMetaPointer, &item.SeriesMeta, nat_query_fields_mask); err != nil {
+	if err := BuiltinVectorStatshouseApiSeriesMetaReadJSONGeneral(tctx, inSeriesMetaPointer, &item.SeriesMeta, nat_query_fields_mask); err != nil {
 		return err
 	}
 
 	// tries to set bit to zero if it is 1
 	if trueTypeExcessPointLeftPresented && !trueTypeExcessPointLeftValue && (item.FieldsMask&(1<<0) != 0) {
-		return ErrorInvalidJSON("statshouseApi.queryResponse", "fieldmask bit fields_mask.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("statshouseApi.queryResponse", "fieldmask bit item.FieldsMask.0 is indefinite because of the contradictions in values")
 	}
 	// tries to set bit to zero if it is 1
 	if trueTypeExcessPointRightPresented && !trueTypeExcessPointRightValue && (item.FieldsMask&(1<<1) != 0) {
-		return ErrorInvalidJSON("statshouseApi.queryResponse", "fieldmask bit fields_mask.0 is indefinite because of the contradictions in values")
+		return ErrorInvalidJSON("statshouseApi.queryResponse", "fieldmask bit item.FieldsMask.1 is indefinite because of the contradictions in values")
+	}
+	if item.FieldsMask&(1<<0) != 0 {
+		item.tl2mask0 |= 1
+	}
+	if item.FieldsMask&(1<<1) != 0 {
+		item.tl2mask0 |= 2
 	}
 	return nil
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseApiGetQueryResponse) WriteJSONGeneral(w []byte, nat_query_fields_mask uint32) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w, nat_query_fields_mask), nil
+func (item *StatshouseApiGetQueryResponse) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte, nat_query_fields_mask uint32) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w, nat_query_fields_mask), nil
 }
 
 func (item *StatshouseApiGetQueryResponse) WriteJSON(w []byte, nat_query_fields_mask uint32) []byte {
-	return item.WriteJSONOpt(true, false, w, nat_query_fields_mask)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w, nat_query_fields_mask)
 }
-func (item *StatshouseApiGetQueryResponse) WriteJSONOpt(newTypeNames bool, short bool, w []byte, nat_query_fields_mask uint32) []byte {
+func (item *StatshouseApiGetQueryResponse) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, nat_query_fields_mask uint32) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -271,18 +307,18 @@ func (item *StatshouseApiGetQueryResponse) WriteJSONOpt(newTypeNames bool, short
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"series":`...)
-	w = item.Series.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Series.WriteJSONOpt(tctx, w)
 	backupIndexSeriesMeta := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"series_meta":`...)
-	w = BuiltinVectorStatshouseApiSeriesMetaWriteJSONOpt(newTypeNames, short, w, item.SeriesMeta, nat_query_fields_mask)
+	w = BuiltinVectorStatshouseApiSeriesMetaWriteJSONOpt(tctx, w, item.SeriesMeta, nat_query_fields_mask)
 	if (len(item.SeriesMeta) != 0) == false {
 		w = w[:backupIndexSeriesMeta]
 	}
 	backupIndexChunkIds := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"chunk_ids":`...)
-	w = BuiltinVectorIntWriteJSONOpt(newTypeNames, short, w, item.ChunkIds)
+	w = BuiltinVectorIntWriteJSONOpt(tctx, w, item.ChunkIds)
 	if (len(item.ChunkIds) != 0) == false {
 		w = w[:backupIndexChunkIds]
 	}
@@ -309,4 +345,234 @@ func (item *StatshouseApiGetQueryResponse) WriteJSONOpt(newTypeNames bool, short
 		w = append(w, `"excess_point_right":true`...)
 	}
 	return append(w, '}')
+}
+
+func (item *StatshouseApiGetQueryResponse) CalculateLayout(sizes []int, optimizeEmpty bool) ([]int, int) {
+	sizes = append(sizes, 1149756570)
+	sizePosition := len(sizes)
+	sizes = append(sizes, 0)
+
+	currentSize := 1
+	lastUsedByte := 0
+	var sz int
+
+	if item.FieldsMask != 0 {
+		currentSize += 4
+		lastUsedByte = currentSize
+	}
+	if sizes, sz = item.Series.CalculateLayout(sizes, true); sz != 0 {
+		currentSize += sz
+		lastUsedByte = currentSize
+	}
+	if sizes, sz = BuiltinVectorStatshouseApiSeriesMetaCalculateLayout(sizes, true, &item.SeriesMeta); sz != 0 {
+		currentSize += sz
+		lastUsedByte = currentSize
+	}
+	if sizes, sz = BuiltinVectorIntCalculateLayout(sizes, true, &item.ChunkIds); sz != 0 {
+		currentSize += sz
+		lastUsedByte = currentSize
+	}
+	if item.TotalTimePoints != 0 {
+		currentSize += 4
+		lastUsedByte = currentSize
+	}
+	if item.ResponseId != 0 {
+		currentSize += 8
+		lastUsedByte = currentSize
+	}
+	if item.tl2mask0&1 != 0 {
+		lastUsedByte = currentSize
+	}
+	currentSize++
+	if item.tl2mask0&2 != 0 {
+		lastUsedByte = currentSize
+	}
+
+	if lastUsedByte < currentSize {
+		currentSize = lastUsedByte
+	}
+	sizes[sizePosition] = currentSize
+	if currentSize == 0 {
+		sizes = sizes[:sizePosition+1]
+	}
+	if !optimizeEmpty || currentSize != 0 {
+		currentSize += basictl.TL2CalculateSize(currentSize)
+	}
+	Unused(sz)
+	return sizes, currentSize
+}
+
+func (item *StatshouseApiGetQueryResponse) InternalWriteTL2(w []byte, sizes []int, optimizeEmpty bool) ([]byte, []int, int) {
+	if sizes[0] != 1149756570 {
+		panic("tl2: tag mismatch between calculate and write")
+	}
+	currentSize := sizes[1]
+	sizes = sizes[2:]
+	if optimizeEmpty && currentSize == 0 {
+		return w, sizes, 0
+	}
+	w = basictl.TL2WriteSize(w, currentSize)
+	if currentSize == 0 {
+		return w, sizes, 1
+	}
+	oldLen := len(w)
+	var sz int
+	var currentBlock byte
+	currentBlockPosition := len(w)
+	w = append(w, 0)
+	if item.FieldsMask != 0 {
+		w = basictl.NatWrite(w, item.FieldsMask)
+		currentBlock |= 2
+	}
+	if w, sizes, sz = item.Series.InternalWriteTL2(w, sizes, true); sz != 0 {
+		currentBlock |= 4
+	}
+	if w, sizes, sz = BuiltinVectorStatshouseApiSeriesMetaInternalWriteTL2(w, sizes, true, &item.SeriesMeta); sz != 0 {
+		currentBlock |= 8
+	}
+	if w, sizes, sz = BuiltinVectorIntInternalWriteTL2(w, sizes, true, &item.ChunkIds); sz != 0 {
+		currentBlock |= 16
+	}
+	if item.TotalTimePoints != 0 {
+		w = basictl.IntWrite(w, item.TotalTimePoints)
+		currentBlock |= 32
+	}
+	if item.ResponseId != 0 {
+		w = basictl.LongWrite(w, item.ResponseId)
+		currentBlock |= 64
+	}
+	if item.tl2mask0&1 != 0 {
+		currentBlock |= 128
+	}
+	if currentBlockPosition < len(w) {
+		w[currentBlockPosition] = currentBlock
+	}
+	currentBlock = 0
+	// start the next block
+	currentBlockPosition = len(w)
+	if len(w)-oldLen < currentSize {
+		w = append(w, 0)
+	}
+	if item.tl2mask0&2 != 0 {
+		currentBlock |= 1
+	}
+	if currentBlockPosition < len(w) {
+		w[currentBlockPosition] = currentBlock
+	}
+	if len(w)-oldLen != currentSize {
+		panic("tl2: mismatch between calculate and write")
+	}
+	Unused(sz)
+	return w, sizes, 1
+}
+
+func (item *StatshouseApiGetQueryResponse) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	var sizes, sizes2 []int
+	if ctx != nil {
+		sizes = ctx.SizeBuffer[:0]
+	}
+	sizes, _ = item.CalculateLayout(sizes, false)
+	w, sizes2, _ = item.InternalWriteTL2(w, sizes, false)
+	if len(sizes2) != 0 {
+		panic("tl2: internal write did not consume all size data")
+	}
+	if ctx != nil {
+		ctx.SizeBuffer = sizes
+	}
+	return w
+}
+
+func (item *StatshouseApiGetQueryResponse) InternalReadTL2(r []byte) (_ []byte, err error) {
+	currentSize := 0
+	if r, currentSize, err = basictl.TL2ParseSize(r); err != nil {
+		return r, err
+	}
+	if currentSize == 0 {
+		item.Reset()
+		return r, nil
+	}
+	if len(r) < currentSize {
+		return r, basictl.TL2Error("not enough data: expected %d, got %d", currentSize, len(r))
+	}
+
+	currentR := r[:currentSize]
+	r = r[currentSize:]
+
+	var block byte
+	if currentR, err = basictl.ByteReadTL2(currentR, &block); err != nil {
+		return currentR, err
+	}
+	// read No of constructor
+	if block&1 != 0 {
+		var index int
+		if currentR, index, err = basictl.TL2ParseSize(currentR); err != nil {
+			return currentR, err
+		}
+		if index != 0 {
+			return r, ErrorInvalidUnionIndex("statshouseApi.queryResponse", index)
+		}
+	}
+	item.tl2mask0 = 0
+	if block&2 != 0 {
+		if currentR, err = basictl.NatRead(currentR, &item.FieldsMask); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.FieldsMask = 0
+	}
+	if block&4 != 0 {
+		if currentR, err = item.Series.InternalReadTL2(currentR); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.Series.Reset()
+	}
+	if block&8 != 0 {
+		if currentR, err = BuiltinVectorStatshouseApiSeriesMetaInternalReadTL2(currentR, &item.SeriesMeta); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.SeriesMeta = item.SeriesMeta[:0]
+	}
+	if block&16 != 0 {
+		if currentR, err = BuiltinVectorIntInternalReadTL2(currentR, &item.ChunkIds); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.ChunkIds = item.ChunkIds[:0]
+	}
+	if block&32 != 0 {
+		if currentR, err = basictl.IntRead(currentR, &item.TotalTimePoints); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.TotalTimePoints = 0
+	}
+	if block&64 != 0 {
+		if currentR, err = basictl.LongRead(currentR, &item.ResponseId); err != nil {
+			return currentR, err
+		}
+	} else {
+		item.ResponseId = 0
+	}
+	if block&128 != 0 {
+		item.tl2mask0 |= 1
+	}
+	// start the next block
+	if len(currentR) > 0 {
+		if currentR, err = basictl.ByteReadTL2(currentR, &block); err != nil {
+			return currentR, err
+		}
+	} else {
+		block = 0
+	}
+	if block&1 != 0 {
+		item.tl2mask0 |= 2
+	}
+	Unused(currentR)
+	return r, nil
+}
+
+func (item *StatshouseApiGetQueryResponse) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return item.InternalReadTL2(r)
 }

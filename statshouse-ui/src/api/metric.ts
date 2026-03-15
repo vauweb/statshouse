@@ -4,7 +4,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-import { GET_PARAMS, type MetricMetaKind, type MetricMetaTagRawKind } from './enum';
+import { GET_PARAMS, type MetricMetaKind, MetricMetaSharedStrategy, type MetricMetaTagRawKind } from './enum';
 import { apiFetch, type ApiFetchResponse, ExtendedError } from './api';
 import {
   type UndefinedInitialDataOptions,
@@ -49,10 +49,12 @@ export type ApiMetricVersionGet = {
  */
 export type ApiMetricPost = {
   metric: MetricMetaValue;
+  last_version?: number;
 };
 
 export type MetricInfo = {
   metric: MetricMetaValue;
+  last_version?: number;
 };
 
 export type MetricMetaValue = {
@@ -82,6 +84,11 @@ export type MetricMetaValue = {
   metric_type?: string;
   group_id?: number;
   fair_key_tag_ids?: string[];
+  shard_strategy?: MetricMetaSharedStrategy;
+  shard_num?: number;
+  shard?: number;
+  shard2?: number;
+  shard2_timestamp?: number;
   [key: string]: unknown;
 };
 
@@ -105,6 +112,15 @@ export async function apiMetricVersionFetch(params: ApiMetricVersionGet, keyRequ
   return await apiFetch<ApiMetric>({ url: ApiMetricEndpoint, get: params, keyRequest });
 }
 
+function updateCurrentVersion<T extends ApiMetric | undefined = ApiMetric | undefined>(data: T, version?: number): T {
+  return (
+    data &&
+    produce(data, (res) => {
+      res.data.metric.currentVersion = version ?? res.data.last_version ?? res.data.metric.version;
+    })
+  );
+}
+
 export function getMetricOptions<T = ApiMetric>(
   metricName: string,
   version: number | null = null,
@@ -121,27 +137,25 @@ export function getMetricOptions<T = ApiMetric>(
       if (error) {
         throw error;
       }
-      if (response) {
-        response.data.metric.currentVersion = response.data.metric.version;
-        client.setQueryData([ApiMetricEndpoint, metricName, response.data.metric.version], response);
+      const modifyResponse = updateCurrentVersion(response);
+      if (modifyResponse) {
+        client.setQueryData([ApiMetricEndpoint, metricName, modifyResponse.data.metric.version], modifyResponse);
       }
-      if (response && version) {
-        client.setQueryData([ApiMetricEndpoint, metricName, null], response);
+      if (modifyResponse && version) {
+        client.setQueryData([ApiMetricEndpoint, metricName, null], modifyResponse);
         const historyVersion = await apiMetricVersionFetch(
           {
-            [GET_PARAMS.metricId]: response.data.metric.metric_id.toString(),
+            [GET_PARAMS.metricId]: modifyResponse.data.metric.metric_id.toString(),
             [GET_PARAMS.metricApiVersion]: version.toString(),
           },
           signal
         );
 
         if (historyVersion.response) {
-          return produce(historyVersion.response, (res) => {
-            res.data.metric.currentVersion = response.data.metric.version;
-          });
+          return updateCurrentVersion(historyVersion.response, modifyResponse.data.metric.version);
         }
       }
-      return response;
+      return modifyResponse;
     },
   };
 }
@@ -241,8 +255,9 @@ export function useMutationMetricMeta() {
       if (data) {
         const metric = data.data.metric;
         const metricName = metric.name;
-        queryClient.setQueryData([ApiMetricEndpoint, metricName, null], data);
-        queryClient.setQueryData([ApiMetricEndpoint, metricName, metric.version ?? null], data);
+        const modifyData = updateCurrentVersion(data);
+        queryClient.setQueryData([ApiMetricEndpoint, metricName, null], modifyData);
+        queryClient.setQueryData([ApiMetricEndpoint, metricName, metric.version ?? null], modifyData);
         queryClient.invalidateQueries({ queryKey: [API_HISTORY, metric.metric_id], type: 'all' });
       } else {
         queryClient.invalidateQueries({ queryKey: [ApiMetricEndpoint, variables.name], type: 'all' });

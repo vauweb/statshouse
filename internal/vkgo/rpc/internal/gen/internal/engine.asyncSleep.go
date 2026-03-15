@@ -29,40 +29,64 @@ func (item *EngineAsyncSleep) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *EngineAsyncSleep) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *EngineAsyncSleep) ReadTL1(w []byte) (_ []byte, err error) {
 	return basictl.IntRead(w, &item.TimeMs)
 }
 
 func (item *EngineAsyncSleep) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *EngineAsyncSleep) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *EngineAsyncSleep) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *EngineAsyncSleep) WriteTL1(w []byte) []byte {
 	w = basictl.IntWrite(w, item.TimeMs)
 	return w
 }
 
 func (item *EngineAsyncSleep) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *EngineAsyncSleep) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x60e50d3d); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *EngineAsyncSleep) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *EngineAsyncSleep) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *EngineAsyncSleep) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *EngineAsyncSleep) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x60e50d3d)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item *EngineAsyncSleep) ReadResult(w []byte, ret *bool) (_ []byte, err error) {
-	return BoolReadBoxed(w, ret)
+	return item.ReadResultTL1(w, ret)
+}
+func (item *EngineAsyncSleep) ReadResultTL1(w []byte, ret *bool) (_ []byte, err error) {
+	return BoolReadTL1Boxed(w, ret)
 }
 
 func (item *EngineAsyncSleep) WriteResult(w []byte, ret bool) (_ []byte, err error) {
-	w = BoolWriteBoxed(w, ret)
+	return item.WriteResultTL1(w, ret)
+}
+func (item *EngineAsyncSleep) WriteResultTL1(w []byte, ret bool) (_ []byte, err error) {
+	w = BoolWriteTL1Boxed(w, ret)
 	return w, nil
 }
 
@@ -74,39 +98,36 @@ func (item *EngineAsyncSleep) ReadResultJSON(legacyTypeNames bool, in *basictl.J
 }
 
 func (item *EngineAsyncSleep) WriteResultJSON(w []byte, ret bool) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *EngineAsyncSleep) writeResultJSON(newTypeNames bool, short bool, w []byte, ret bool) (_ []byte, err error) {
+func (item *EngineAsyncSleep) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret bool) (_ []byte, err error) {
 	w = basictl.JSONWriteBool(w, ret)
 	return w, nil
 }
 
-func (item *EngineAsyncSleep) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineAsyncSleep) FillRandomResultTL1(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
 	var ret bool
-	if r, err = item.ReadResult(r, &ret); err != nil {
+	ret = basictl.RandomUint(rg)&1 == 1
+	return item.WriteResultTL1(w, ret)
+}
+
+func (item *EngineAsyncSleep) ReadResultTL1WriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	var ret bool
+	if r, err = item.ReadResultTL1(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *EngineAsyncSleep) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineAsyncSleep) ReadResultJSONWriteResultTL1(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret bool
-	if r, err = item.ReadResult(r, &ret); err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *EngineAsyncSleep) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret bool
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
-		return r, w, err
-	}
-	w, err = item.WriteResult(w, ret)
+	w, err = item.WriteResultTL1(w, ret)
 	return r, w, err
 }
 
@@ -115,6 +136,11 @@ func (item EngineAsyncSleep) String() string {
 }
 
 func (item *EngineAsyncSleep) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineAsyncSleep) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propTimeMsPresented bool
 
 	if in != nil {
@@ -151,14 +177,15 @@ func (item *EngineAsyncSleep) ReadJSON(legacyTypeNames bool, in *basictl.JsonLex
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineAsyncSleep) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineAsyncSleep) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineAsyncSleep) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineAsyncSleep) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineAsyncSleep) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexTimeMs := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)

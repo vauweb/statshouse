@@ -30,6 +30,13 @@ func (item *StatshouseSourceBucket3) Reset() {
 	item.IngestionStatusOk2 = item.IngestionStatusOk2[:0]
 }
 
+func (item *StatshouseSourceBucket3) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomUint(rg)
+	BuiltinVectorStatshouseMultiItemFillRandom(rg, &item.Metrics)
+	BuiltinVectorStatshouseSampleFactorFillRandom(rg, &item.SampleFactors)
+	BuiltinVectorStatshouseIngestionStatus2FillRandom(rg, &item.IngestionStatusOk2)
+}
+
 func (item *StatshouseSourceBucket3) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
@@ -43,7 +50,6 @@ func (item *StatshouseSourceBucket3) Read(w []byte) (_ []byte, err error) {
 	return BuiltinVectorStatshouseIngestionStatus2Read(w, &item.IngestionStatusOk2)
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseSourceBucket3) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -63,7 +69,6 @@ func (item *StatshouseSourceBucket3) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseSourceBucket3) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -78,6 +83,11 @@ func (item StatshouseSourceBucket3) String() string {
 }
 
 func (item *StatshouseSourceBucket3) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *StatshouseSourceBucket3) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propMetricsPresented bool
 	var propSampleFactorsPresented bool
@@ -104,7 +114,7 @@ func (item *StatshouseSourceBucket3) ReadJSON(legacyTypeNames bool, in *basictl.
 				if propMetricsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.sourceBucket3", "metrics")
 				}
-				if err := BuiltinVectorStatshouseMultiItemReadJSON(legacyTypeNames, in, &item.Metrics); err != nil {
+				if err := BuiltinVectorStatshouseMultiItemReadJSONGeneral(tctx, in, &item.Metrics); err != nil {
 					return err
 				}
 				propMetricsPresented = true
@@ -112,7 +122,7 @@ func (item *StatshouseSourceBucket3) ReadJSON(legacyTypeNames bool, in *basictl.
 				if propSampleFactorsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.sourceBucket3", "sample_factors")
 				}
-				if err := BuiltinVectorStatshouseSampleFactorReadJSON(legacyTypeNames, in, &item.SampleFactors); err != nil {
+				if err := BuiltinVectorStatshouseSampleFactorReadJSONGeneral(tctx, in, &item.SampleFactors); err != nil {
 					return err
 				}
 				propSampleFactorsPresented = true
@@ -120,7 +130,7 @@ func (item *StatshouseSourceBucket3) ReadJSON(legacyTypeNames bool, in *basictl.
 				if propIngestionStatusOk2Presented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.sourceBucket3", "ingestion_status_ok2")
 				}
-				if err := BuiltinVectorStatshouseIngestionStatus2ReadJSON(legacyTypeNames, in, &item.IngestionStatusOk2); err != nil {
+				if err := BuiltinVectorStatshouseIngestionStatus2ReadJSONGeneral(tctx, in, &item.IngestionStatusOk2); err != nil {
 					return err
 				}
 				propIngestionStatusOk2Presented = true
@@ -150,14 +160,15 @@ func (item *StatshouseSourceBucket3) ReadJSON(legacyTypeNames bool, in *basictl.
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseSourceBucket3) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *StatshouseSourceBucket3) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *StatshouseSourceBucket3) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *StatshouseSourceBucket3) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *StatshouseSourceBucket3) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -169,21 +180,21 @@ func (item *StatshouseSourceBucket3) WriteJSONOpt(newTypeNames bool, short bool,
 	backupIndexMetrics := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"metrics":`...)
-	w = BuiltinVectorStatshouseMultiItemWriteJSONOpt(newTypeNames, short, w, item.Metrics)
+	w = BuiltinVectorStatshouseMultiItemWriteJSONOpt(tctx, w, item.Metrics)
 	if (len(item.Metrics) != 0) == false {
 		w = w[:backupIndexMetrics]
 	}
 	backupIndexSampleFactors := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"sample_factors":`...)
-	w = BuiltinVectorStatshouseSampleFactorWriteJSONOpt(newTypeNames, short, w, item.SampleFactors)
+	w = BuiltinVectorStatshouseSampleFactorWriteJSONOpt(tctx, w, item.SampleFactors)
 	if (len(item.SampleFactors) != 0) == false {
 		w = w[:backupIndexSampleFactors]
 	}
 	backupIndexIngestionStatusOk2 := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"ingestion_status_ok2":`...)
-	w = BuiltinVectorStatshouseIngestionStatus2WriteJSONOpt(newTypeNames, short, w, item.IngestionStatusOk2)
+	w = BuiltinVectorStatshouseIngestionStatus2WriteJSONOpt(tctx, w, item.IngestionStatusOk2)
 	if (len(item.IngestionStatusOk2) != 0) == false {
 		w = w[:backupIndexIngestionStatusOk2]
 	}
@@ -199,6 +210,14 @@ func (item *StatshouseSourceBucket3) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("statshouse.sourceBucket3", err.Error())
 	}
 	return nil
+}
+
+func (item *StatshouseSourceBucket3) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.sourceBucket3"))
+}
+
+func (item *StatshouseSourceBucket3) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.sourceBucket3")
 }
 
 type StatshouseSourceBucket3Bytes struct {
@@ -218,6 +237,13 @@ func (item *StatshouseSourceBucket3Bytes) Reset() {
 	item.IngestionStatusOk2 = item.IngestionStatusOk2[:0]
 }
 
+func (item *StatshouseSourceBucket3Bytes) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomUint(rg)
+	BuiltinVectorStatshouseMultiItemBytesFillRandom(rg, &item.Metrics)
+	BuiltinVectorStatshouseSampleFactorFillRandom(rg, &item.SampleFactors)
+	BuiltinVectorStatshouseIngestionStatus2FillRandom(rg, &item.IngestionStatusOk2)
+}
+
 func (item *StatshouseSourceBucket3Bytes) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
@@ -231,7 +257,6 @@ func (item *StatshouseSourceBucket3Bytes) Read(w []byte) (_ []byte, err error) {
 	return BuiltinVectorStatshouseIngestionStatus2Read(w, &item.IngestionStatusOk2)
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseSourceBucket3Bytes) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -251,7 +276,6 @@ func (item *StatshouseSourceBucket3Bytes) ReadBoxed(w []byte) (_ []byte, err err
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseSourceBucket3Bytes) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -266,6 +290,11 @@ func (item StatshouseSourceBucket3Bytes) String() string {
 }
 
 func (item *StatshouseSourceBucket3Bytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *StatshouseSourceBucket3Bytes) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propMetricsPresented bool
 	var propSampleFactorsPresented bool
@@ -292,7 +321,7 @@ func (item *StatshouseSourceBucket3Bytes) ReadJSON(legacyTypeNames bool, in *bas
 				if propMetricsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.sourceBucket3", "metrics")
 				}
-				if err := BuiltinVectorStatshouseMultiItemBytesReadJSON(legacyTypeNames, in, &item.Metrics); err != nil {
+				if err := BuiltinVectorStatshouseMultiItemBytesReadJSONGeneral(tctx, in, &item.Metrics); err != nil {
 					return err
 				}
 				propMetricsPresented = true
@@ -300,7 +329,7 @@ func (item *StatshouseSourceBucket3Bytes) ReadJSON(legacyTypeNames bool, in *bas
 				if propSampleFactorsPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.sourceBucket3", "sample_factors")
 				}
-				if err := BuiltinVectorStatshouseSampleFactorReadJSON(legacyTypeNames, in, &item.SampleFactors); err != nil {
+				if err := BuiltinVectorStatshouseSampleFactorReadJSONGeneral(tctx, in, &item.SampleFactors); err != nil {
 					return err
 				}
 				propSampleFactorsPresented = true
@@ -308,7 +337,7 @@ func (item *StatshouseSourceBucket3Bytes) ReadJSON(legacyTypeNames bool, in *bas
 				if propIngestionStatusOk2Presented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.sourceBucket3", "ingestion_status_ok2")
 				}
-				if err := BuiltinVectorStatshouseIngestionStatus2ReadJSON(legacyTypeNames, in, &item.IngestionStatusOk2); err != nil {
+				if err := BuiltinVectorStatshouseIngestionStatus2ReadJSONGeneral(tctx, in, &item.IngestionStatusOk2); err != nil {
 					return err
 				}
 				propIngestionStatusOk2Presented = true
@@ -338,14 +367,15 @@ func (item *StatshouseSourceBucket3Bytes) ReadJSON(legacyTypeNames bool, in *bas
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseSourceBucket3Bytes) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *StatshouseSourceBucket3Bytes) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *StatshouseSourceBucket3Bytes) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *StatshouseSourceBucket3Bytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *StatshouseSourceBucket3Bytes) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -357,21 +387,21 @@ func (item *StatshouseSourceBucket3Bytes) WriteJSONOpt(newTypeNames bool, short 
 	backupIndexMetrics := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"metrics":`...)
-	w = BuiltinVectorStatshouseMultiItemBytesWriteJSONOpt(newTypeNames, short, w, item.Metrics)
+	w = BuiltinVectorStatshouseMultiItemBytesWriteJSONOpt(tctx, w, item.Metrics)
 	if (len(item.Metrics) != 0) == false {
 		w = w[:backupIndexMetrics]
 	}
 	backupIndexSampleFactors := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"sample_factors":`...)
-	w = BuiltinVectorStatshouseSampleFactorWriteJSONOpt(newTypeNames, short, w, item.SampleFactors)
+	w = BuiltinVectorStatshouseSampleFactorWriteJSONOpt(tctx, w, item.SampleFactors)
 	if (len(item.SampleFactors) != 0) == false {
 		w = w[:backupIndexSampleFactors]
 	}
 	backupIndexIngestionStatusOk2 := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"ingestion_status_ok2":`...)
-	w = BuiltinVectorStatshouseIngestionStatus2WriteJSONOpt(newTypeNames, short, w, item.IngestionStatusOk2)
+	w = BuiltinVectorStatshouseIngestionStatus2WriteJSONOpt(tctx, w, item.IngestionStatusOk2)
 	if (len(item.IngestionStatusOk2) != 0) == false {
 		w = w[:backupIndexIngestionStatusOk2]
 	}
@@ -387,4 +417,12 @@ func (item *StatshouseSourceBucket3Bytes) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("statshouse.sourceBucket3", err.Error())
 	}
 	return nil
+}
+
+func (item *StatshouseSourceBucket3Bytes) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.sourceBucket3"))
+}
+
+func (item *StatshouseSourceBucket3Bytes) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.sourceBucket3")
 }

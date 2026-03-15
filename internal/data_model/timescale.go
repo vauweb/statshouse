@@ -14,9 +14,8 @@ import (
 )
 
 const (
-	Version1 = "1"
-	Version2 = "2"
 	Version3 = "3"
+	Version6 = "6"
 
 	//   >2h at  1s resolution
 	//  >10h at  5s resolution
@@ -39,17 +38,13 @@ const (
 	_7d  = 7 * _24h
 	_1M  = 31 * _24h
 
-	_1mTableSH1          = "statshouse_value_dist"
-	_1hTableSH1          = "statshouse_value_dist_1h"
-	_1hTableStringTopSH1 = "stats_1h_agg_stop_dist"
-	_1dTableUniquesSH1   = "stats_1d_agg_dist"
-	_1sTableSH2          = "statshouse_value_1s_dist"
-	_1mTableSH2          = "statshouse_value_1m_dist"
-	_1hTableSH2          = "statshouse_value_1h_dist"
+	_1sTableSH3 = "statshouse_v3_1s"
+	_1mTableSH3 = "statshouse_v3_1m"
+	_1hTableSH3 = "statshouse_v3_1h"
 
-	_1sTableSH3 = "statshouse_v3_1s_dist"
-	_1mTableSH3 = "statshouse_v3_1m_dist"
-	_1hTableSH3 = "statshouse_v3_1h_dist"
+	_1sTableSH6 = "statshouse_v6_1s"
+	_1mTableSH6 = "statshouse_v6_1m"
+	_1hTableSH6 = "statshouse_v6_1h"
 
 	fastQueryTimeInterval = (86400 + 3600) * 2
 )
@@ -93,65 +88,38 @@ type QueryStat struct {
 
 type GetTimescaleArgs struct {
 	QueryStat
-	Version          string
-	Version3Start    int64 // timestamp of schema version 3 start, zero means not set
-	Start            int64 // inclusive
-	End              int64 // exclusive
-	Step             int64
-	TimeNow          int64
-	ScreenWidth      int64
-	Mode             QueryMode
-	Extend           bool
-	Metric           *format.MetricMetaValue
-	Offset           int64
-	Location         *time.Location
-	UTCOffset        int64
-	NewShardingStart int64
+	Version6Start int64 // timestamp of schema version 6 start, zero means not set
+	Start         int64 // inclusive
+	End           int64 // exclusive
+	Step          int64
+	TimeNow       int64
+	ScreenWidth   int64
+	Mode          QueryMode
+	Extend        bool
+	Metric        *format.MetricMetaValue
+	Offset        int64
+	Location      *time.Location
+	UTCOffset     int64
 }
 
 type LOD struct {
-	FromSec     int64 // inclusive
-	ToSec       int64 // exclusive
-	StepSec     int64
-	Version     string
-	Metric      *format.MetricMetaValue
-	NewSharding bool
-	HasPreKey   bool
-	PreKeyOnly  bool
-	Location    *time.Location
+	FromSec    int64 // inclusive
+	ToSec      int64 // exclusive
+	StepSec    int64
+	Version    string
+	Metric     *format.MetricMetaValue
+	HasPreKey  bool
+	PreKeyOnly bool
+	Location   *time.Location
 }
 
 type lodSwitch struct {
 	relSwitch int64 // must be properly aligned
 	levels    []int64
-	tables    map[int64]string
 }
 
 var (
 	LODTables = map[string]map[int64]string{
-		Version1: {
-			_1M:  _1hTableSH1,
-			_7d:  _1hTableSH1,
-			_24h: _1hTableSH1,
-			_4h:  _1hTableSH1,
-			_1h:  _1hTableSH1,
-			_15m: _1mTableSH1,
-			_5m:  _1mTableSH1,
-			_1m:  _1mTableSH1,
-		},
-		Version2: {
-			_1M:  _1hTableSH2,
-			_7d:  _1hTableSH2,
-			_24h: _1hTableSH2,
-			_4h:  _1hTableSH2,
-			_1h:  _1hTableSH2,
-			_15m: _1mTableSH2,
-			_5m:  _1mTableSH2,
-			_1m:  _1mTableSH2,
-			_15s: _1sTableSH2,
-			_5s:  _1sTableSH2,
-			_1s:  _1sTableSH2,
-		},
 		Version3: {
 			_1M:  _1hTableSH3,
 			_7d:  _1hTableSH3,
@@ -165,111 +133,43 @@ var (
 			_5s:  _1sTableSH3,
 			_1s:  _1sTableSH3,
 		},
+		Version6: {
+			_1M:  _1hTableSH6,
+			_7d:  _1hTableSH6,
+			_24h: _1hTableSH6,
+			_4h:  _1hTableSH6,
+			_1h:  _1hTableSH6,
+			_15m: _1mTableSH6,
+			_5m:  _1mTableSH6,
+			_1m:  _1mTableSH6,
+			_15s: _1sTableSH6,
+			_5s:  _1sTableSH6,
+			_1s:  _1sTableSH6,
+		},
 	}
 
 	lodLevels = map[string][]lodSwitch{
-		Version1: {{
-			relSwitch: 33 * _24h,
-			levels:    []int64{_7d, _24h, _4h, _1h},
-			tables:    LODTables[Version1],
-		}, {
-			relSwitch: _0s,
-			levels:    []int64{_7d, _24h, _4h, _1h, _15m, _5m, _1m},
-			tables:    LODTables[Version1],
-		}},
 		// Subtract from relSwitch to facilitate calculation of derivative.
 		// Subtrahend should be multiple of the next lodSwitch minimum level.
-		Version2: {{
-			relSwitch: 33*_24h - 2*_1m,
-			levels:    []int64{_7d, _24h, _4h, _1h},
-			tables:    LODTables[Version2],
-		}, {
-			relSwitch: 52*_1h - 2*_1s,
-			levels:    []int64{_7d, _24h, _4h, _1h, _15m, _5m, _1m},
-			tables:    LODTables[Version2],
-		}, {
-			relSwitch: _0s,
-			levels:    []int64{_7d, _24h, _4h, _1h, _15m, _5m, _1m, _15s, _5s, _1s},
-			tables:    LODTables[Version2],
-		}},
 		Version3: {{
 			relSwitch: 33*_24h - 2*_1m,
 			levels:    []int64{_7d, _24h, _4h, _1h},
-			tables:    LODTables[Version3],
 		}, {
 			relSwitch: 52*_1h - 2*_1s,
 			levels:    []int64{_7d, _24h, _4h, _1h, _15m, _5m, _1m},
-			tables:    LODTables[Version3],
 		}, {
 			relSwitch: _0s,
 			levels:    []int64{_7d, _24h, _4h, _1h, _15m, _5m, _1m, _15s, _5s, _1s},
-			tables:    LODTables[Version3],
 		}},
 	}
 
-	lodLevelsV1StringTop = []lodSwitch{{
-		relSwitch: _0s,
-		levels:    []int64{_7d, _24h, _4h, _1h},
-		tables: map[int64]string{
-			_7d:  _1hTableStringTopSH1,
-			_24h: _1hTableStringTopSH1,
-			_4h:  _1hTableStringTopSH1,
-			_1h:  _1hTableStringTopSH1,
-		},
-	}}
-
-	lodLevelsV1Unique = []lodSwitch{{
-		relSwitch: _0s,
-		levels:    []int64{_7d, _24h},
-		tables: map[int64]string{
-			_7d:  _1dTableUniquesSH1,
-			_24h: _1dTableUniquesSH1,
-		},
-	}}
-
-	lodLevelsV2Monthly = []lodSwitch{{
+	lodLevelsV3Monthly = []lodSwitch{{
 		relSwitch: _0s,
 		levels:    []int64{_1M},
-		tables: map[int64]string{
-			_1M: _1hTableSH2,
-		},
-	}}
-
-	lodLevelsV1Monthly = []lodSwitch{{
-		relSwitch: _0s,
-		levels:    []int64{_1M},
-		tables: map[int64]string{
-			_1M: _1hTableSH1,
-		},
-	}}
-
-	lodLevelsV1MonthlyUnique = []lodSwitch{{
-		relSwitch: _0s,
-		levels:    []int64{_1M},
-		tables: map[int64]string{
-			_1M: _1dTableUniquesSH1,
-		},
-	}}
-
-	lodLevelsV1MonthlyStringTop = []lodSwitch{{
-		relSwitch: _0s,
-		levels:    []int64{_1M},
-		tables: map[int64]string{
-			_1M: _1hTableStringTopSH1,
-		},
 	}}
 )
 
 var errQueryOutOfRange = fmt.Errorf("exceeded maximum resolution of %d points per timeseries", MaxSlice)
-
-func CacheDropInterval(version string) time.Duration {
-	switch version {
-	case Version1:
-		return 90 * time.Second
-	default:
-		return 0
-	}
-}
 
 func GetTimescale(args GetTimescaleArgs) (Timescale, error) {
 	if args.End <= args.Start || args.Step < 0 {
@@ -279,8 +179,6 @@ func GetTimescale(args GetTimescaleArgs) (Timescale, error) {
 	var (
 		maxOffset    int
 		maxMetricRes int64 = 1 // max metric resolution
-		hasStringTop bool
-		hasUnique    bool
 	)
 	for k, v := range args.MetricOffset {
 		if maxOffset < int(v) {
@@ -289,38 +187,11 @@ func GetTimescale(args GetTimescaleArgs) (Timescale, error) {
 		if maxMetricRes < int64(k.Resolution) {
 			maxMetricRes = int64(k.Resolution)
 		}
-		if len(k.StringTopDescription) != 0 {
-			hasStringTop = true
-		}
 	}
-	// find appropriate LOD table
-	var levels []lodSwitch // depends on query and version
-	switch {
-	case args.Step == _1M:
-		switch {
-		case args.Version == Version1:
-			switch {
-			case hasUnique:
-				levels = lodLevelsV1MonthlyUnique
-			case hasStringTop:
-				levels = lodLevelsV1MonthlyStringTop
-			default:
-				levels = lodLevelsV1Monthly
-			}
-		default:
-			levels = lodLevelsV2Monthly
-		}
-	case args.Version == Version1:
-		switch {
-		case hasUnique:
-			levels = lodLevelsV1Unique
-		case hasStringTop:
-			levels = lodLevelsV1StringTop
-		default:
-			levels = lodLevels[args.Version]
-		}
-	default:
-		levels = lodLevels[args.Version]
+	// find appropriate LOD table. depends on query and version
+	var levels = lodLevels[Version3]
+	if args.Step == _1M {
+		levels = lodLevelsV3Monthly
 	}
 	// generate LODs
 	var minStep int64
@@ -381,7 +252,7 @@ func GetTimescale(args GetTimescaleArgs) (Timescale, error) {
 					break
 				}
 			}
-			lod = TimescaleLOD{Step: step, Len: lodLen, Version: args.Version}
+			lod = TimescaleLOD{Step: step, Len: lodLen, Version: Version3}
 			if step <= minStep || (args.ScreenWidth != 0 && int(args.ScreenWidth) < n) {
 				// use current "step" to the end
 				lodEnd, lodLen = endOfLOD(lodEnd, step, end, false, args.Location)
@@ -393,21 +264,17 @@ func GetTimescale(args GetTimescaleArgs) (Timescale, error) {
 			// should not happen
 			return Timescale{}, fmt.Errorf("LOD out of range: step=%d, len=%d", lod.Step, lod.Len)
 		}
-		if lod.Version == Version3 {
-			version3StartBeforeLODEnd := args.Version3Start < lodEnd
-			switch {
-			case lodStart <= args.Version3Start && version3StartBeforeLODEnd:
-				// version 3 starts inside LOD, split
-				_, len := endOfLOD(lodStart, lod.Step, args.Version3Start, false, args.Location)
-				res.appendLOD(TimescaleLOD{Step: lod.Step, Len: len, Version: Version2})
+
+		if args.Version6Start != 0 && lodEnd > args.Version6Start {
+			// v3-v6 interval is always much bigger than step, so we never need to split by both v3 and v6
+			if lodStart <= args.Version6Start {
+				// version 6 starts inside LOD, split
+				_, len := endOfLOD(lodStart, lod.Step, args.Version6Start, false, args.Location)
+				res.appendLOD(TimescaleLOD{Step: lod.Step, Len: len, Version: Version3})
 				resLen += len
 				lod.Len -= len
-			case args.Version3Start == 0 || !version3StartBeforeLODEnd:
-				// version 3 not available, switch to version 2
-				lod.Version = Version2
-			default:
-				// version 3 remains
 			}
+			lod.Version = Version6
 		}
 		if lod.Len != 0 {
 			resLen += lod.Len
@@ -500,15 +367,14 @@ func (t *Timescale) GetLODs(metric *format.MetricMetaValue, offset int64) []LOD 
 			end = StepForward(end, lod.Step, t.Location)
 		}
 		res = append(res, LOD{
-			FromSec:     start,
-			ToSec:       end,
-			StepSec:     lod.Step,
-			Version:     lod.Version,
-			Metric:      metric,
-			NewSharding: t.NewShardingStart != 0 && t.NewShardingStart < start,
-			HasPreKey:   metric.PreKeyOnly || (metric.PreKeyFrom != 0 && int64(metric.PreKeyFrom) <= start),
-			PreKeyOnly:  metric.PreKeyOnly,
-			Location:    t.Location,
+			FromSec:    start,
+			ToSec:      end,
+			StepSec:    lod.Step,
+			Version:    lod.Version,
+			Metric:     metric,
+			HasPreKey:  metric.PreKeyOnly || (metric.PreKeyFrom != 0 && int64(metric.PreKeyFrom) <= start),
+			PreKeyOnly: metric.PreKeyOnly,
+			Location:   t.Location,
 		})
 		start = end
 	}
@@ -554,18 +420,11 @@ func (lod LOD) IsFast() bool {
 	return lod.FromSec+fastQueryTimeInterval >= lod.ToSec
 }
 
-func (lod LOD) Table(newSharding bool) string {
-	if newSharding {
-		switch {
-		case lod.StepSec < _1m:
-			return "statshouse_v3_1s"
-		case lod.StepSec < _1h:
-			return "statshouse_v3_1m"
-		default:
-			return "statshouse_v3_1h"
-		}
+func (lod LOD) Table(sharded bool) (t string) {
+	if sharded {
+		return LODTables[lod.Version][lod.StepSec]
 	}
-	return LODTables[lod.Version][lod.StepSec]
+	return LODTables[lod.Version][lod.StepSec] + format.TableDistSuffix
 }
 
 func (s *QueryStat) Add(m *format.MetricMetaValue, offset int64) {

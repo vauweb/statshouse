@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/stretchr/testify/require"
 
+	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
@@ -44,7 +44,10 @@ func initServer(t *testing.T, now func() time.Time) (net.Listener, *rpc.Server, 
 		PutTagMappingBootstrap: HandleProxyGen(&proxy, "", handler.PutTagMappingBootstrap),
 		GetTagMappingBootstrap: HandleProxyGen(&proxy, "", handler.GetTagMappingBootstrap),
 	}
-	sh := tlmetadata.Handler{RawGetJournalnew: proxy.HandleProxy("", handler.RawGetJournal)}
+	sh := tlmetadata.Handler{
+		RawGetJournalnew:  proxy.HandleProxy("", handler.RawGetJournal),
+		RawGetNewMappings: proxy.HandleProxy("", handler.RawGetNewMappings),
+	}
 	server := rpc.NewServer(rpc.ServerWithHandler(h.Handle), rpc.ServerWithSyncHandler(sh.Handle), rpc.ServerWithLogf(log.Printf))
 	t.Cleanup(func() {
 		server.Close()
@@ -56,7 +59,7 @@ func initServer(t *testing.T, now func() time.Time) (net.Listener, *rpc.Server, 
 		err = server.Serve(ln)
 		require.NoError(t, err)
 	}()
-	rpcClient := rpc.NewClient()
+	rpcClient := rpc.NewClient(rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion))
 	cl := &tlmetadata.Client{
 		Client:  rpcClient,
 		Network: "tcp4",
@@ -184,6 +187,57 @@ func getInvertMapping(rpcClient *tlmetadata.Client, id int32) (tlmetadata.GetInv
 	return resp, err
 }
 
+func getNewMappingsAsync(t *testing.T, rpcClient *tlmetadata.Client, from int32) (chan tlmetadata.GetNewMappingsResponse, chan error) {
+	cErr := make(chan error)
+	cResp := make(chan tlmetadata.GetNewMappingsResponse)
+	go func() {
+		r := tlmetadata.GetNewMappingsResponse{}
+		err := rpcClient.GetNewMappings(context.Background(), tlmetadata.GetNewMappings{
+			From:  from,
+			Limit: 1000,
+		}, nil, &r)
+		if err != nil {
+			cErr <- err
+		} else {
+			cResp <- r
+		}
+	}()
+	return cResp, cErr
+}
+
+func getNewMappings(t *testing.T, rpcClient *tlmetadata.Client, from int32) (tlmetadata.GetNewMappingsResponse, error, bool) {
+	return getNewMappingsWithReturnIfEmpty(t, rpcClient, from, false)
+}
+
+func getNewMappingsWithReturnIfEmpty(t *testing.T, rpcClient *tlmetadata.Client, from int32, returnIfEmpty bool) (tlmetadata.GetNewMappingsResponse, error, bool) {
+	cErr := make(chan error, 1)
+	cResp := make(chan tlmetadata.GetNewMappingsResponse, 1)
+	go func() {
+		r := tlmetadata.GetNewMappingsResponse{}
+		req := tlmetadata.GetNewMappings{
+			From:  from,
+			Limit: 1000,
+		}
+		if returnIfEmpty {
+			req.SetReturnIfEmpty(true)
+		}
+		err := rpcClient.GetNewMappings(context.Background(), req, nil, &r)
+		if err != nil {
+			cErr <- err
+		} else {
+			cResp <- r
+		}
+	}()
+	select {
+	case err := <-cErr:
+		return tlmetadata.GetNewMappingsResponse{}, err, false
+	case resp := <-cResp:
+		return resp, nil, false
+	case <-time.After(3 * time.Second):
+		return tlmetadata.GetNewMappingsResponse{}, nil, true
+	}
+}
+
 func putMetricTest(t *testing.T, rpcClient *tlmetadata.Client, name string, id, version int64, any string) (tlmetadata.Event, error) {
 	jsonStr, m := statJson(name, id, any)
 	checkJson(t, jsonStr)
@@ -261,6 +315,9 @@ func putJournalEvent(t *testing.T, rpcClient *tlmetadata.Client, name, json stri
 			Data:      json,
 			EventType: typ,
 		},
+	}
+	if delete {
+		req.Event.Unused = 1
 	}
 	req.SetCreate(version == 0)
 	req.SetDelete(delete)
@@ -559,6 +616,82 @@ func TestRPCServer(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, resp.IsKeyNotExists())
 	})
+
+	t.Run("get all mappings", func(t *testing.T) {
+		mapping1, err := unpackGetMappingUnion(getMapping(rpcClient, "test_metric1", "key1", true))
+		require.NoError(t, err)
+		require.Greater(t, mapping1, int32(0))
+
+		mapping2, err := unpackGetMappingUnion(getMapping(rpcClient, "test_metric2", "key2", true))
+		require.NoError(t, err)
+		require.Greater(t, mapping2, int32(0))
+
+		mappings, err, b := getNewMappings(t, rpcClient, mapping1-1)
+		require.NoError(t, err)
+		require.False(t, b, "should return response")
+		require.GreaterOrEqual(t, mappings.CurrentVersion, mapping2)
+		require.GreaterOrEqual(t, len(mappings.Pairs), 2)
+		found1, found2 := false, false
+		for _, p := range mappings.Pairs {
+			if p.Value == mapping1 {
+				found1 = true
+			}
+			if p.Value == mapping2 {
+				found2 = true
+			}
+		}
+		require.True(t, found1, "mapping1 should be in response")
+		require.True(t, found2, "mapping2 should be in response")
+	})
+
+	t.Run("get all mappings with long poll", func(t *testing.T) {
+		mapping1, err := unpackGetMappingUnion(getMapping(rpcClient, "test_metric3", "key3", true))
+		require.NoError(t, err)
+		require.Greater(t, mapping1, int32(0))
+
+		mappings, err, b := getNewMappings(t, rpcClient, math.MinInt32)
+		require.NoError(t, err)
+		require.False(t, b, "should return response")
+		require.GreaterOrEqual(t, mappings.CurrentVersion, mapping1)
+
+		respC, errC := getNewMappingsAsync(t, rpcClient, mappings.CurrentVersion)
+		time.Sleep(time.Second)
+
+		mapping2, err := unpackGetMappingUnion(getMapping(rpcClient, "test_metric4", "key4", true))
+		require.NoError(t, err)
+		require.Greater(t, mapping2, int32(0))
+
+		time.Sleep(time.Second)
+		select {
+		case r := <-respC:
+			require.GreaterOrEqual(t, r.CurrentVersion, mapping2)
+			require.Greater(t, len(r.Pairs), 0)
+			found := false
+			for _, p := range r.Pairs {
+				if p.Value == mapping2 {
+					found = true
+					break
+				}
+			}
+			require.True(t, found, "mapping2 should be in response")
+		case err := <-errC:
+			t.Error(err.Error())
+		case <-time.After(5 * time.Second):
+			t.Error("test timeout")
+		}
+	})
+
+	t.Run("get mappings with return if empty", func(t *testing.T) {
+		mapping1, err := unpackGetMappingUnion(getMapping(rpcClient, "test_metric5", "key5", true))
+		require.NoError(t, err)
+		require.Greater(t, mapping1, int32(0))
+
+		mappings, err, b := getNewMappingsWithReturnIfEmpty(t, rpcClient, mapping1, true)
+		require.NoError(t, err)
+		require.False(t, b, "should return response")
+		require.Equal(t, mapping1, mappings.CurrentVersion)
+		require.Len(t, mappings.Pairs, 0)
+	})
 }
 
 func TestRPCServerBroadcast(t *testing.T) {
@@ -574,10 +707,9 @@ func TestRPCServerBroadcast(t *testing.T) {
 	_, _ = getMetricsAsync(t, rpcClient, math.MaxInt64-1)
 
 	time.Sleep(time.Second)
-	h.getJournalMx.Lock()
-	require.Len(t, h.getJournalClients, 2)
-	require.Equal(t, resp.Version, h.minVersion)
-	h.getJournalMx.Unlock()
+	h.getJournalClients.mx.Lock()
+	require.Len(t, h.getJournalClients.clients, 2)
+	h.getJournalClients.mx.Unlock()
 	resp, _ = putMetricTest(t, rpcClient, "4", 0, 0, "")
 	select {
 	case m := <-metricChannel:
@@ -588,10 +720,59 @@ func TestRPCServerBroadcast(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expect to get new metrics")
 	}
-	h.getJournalMx.Lock()
-	require.Len(t, h.getJournalClients, 1)
-	require.Equal(t, int64(math.MaxInt64-1), h.minVersion)
-	h.getJournalMx.Unlock()
+	h.getJournalClients.mx.Lock()
+	defer h.getJournalClients.mx.Unlock()
+	require.Len(t, h.getJournalClients.clients, 1)
+}
+
+func TestRPCServerBroadcastMapping(t *testing.T) {
+	_, server, rpcClient, h := initServer(t, time.Now)
+	defer server.Close()
+
+	mapping1, err := unpackGetMappingUnion(getMapping(rpcClient, "broadcast_test1", "key1", true))
+	require.NoError(t, err)
+	require.Greater(t, mapping1, int32(0))
+
+	mapping2, err := unpackGetMappingUnion(getMapping(rpcClient, "broadcast_test2", "key2", true))
+	require.NoError(t, err)
+	require.Greater(t, mapping2, int32(0))
+
+	mapping3, err := unpackGetMappingUnion(getMapping(rpcClient, "broadcast_test3", "key3", true))
+	require.NoError(t, err)
+	require.Greater(t, mapping3, int32(0))
+
+	mappingChannel, errCh := getNewMappingsAsync(t, rpcClient, mapping3)
+	_, _ = getNewMappingsAsync(t, rpcClient, math.MaxInt32-1)
+
+	time.Sleep(time.Second)
+	h.getMappingClients.mx.Lock()
+	require.Len(t, h.getMappingClients.clients, 2)
+	h.getMappingClients.mx.Unlock()
+
+	mapping4, err := unpackGetMappingUnion(getMapping(rpcClient, "broadcast_test4", "key4", true))
+	require.NoError(t, err)
+	require.Greater(t, mapping4, int32(0))
+
+	select {
+	case m := <-mappingChannel:
+		require.GreaterOrEqual(t, m.CurrentVersion, mapping4)
+		require.Greater(t, len(m.Pairs), 0)
+		found := false
+		for _, p := range m.Pairs {
+			if p.Value == mapping4 {
+				found = true
+				break
+			}
+		}
+		require.True(t, found, "mapping4 should be in response")
+	case err := <-errCh:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expect to get new mappings")
+	}
+	h.getMappingClients.mx.Lock()
+	defer h.getMappingClients.mx.Unlock()
+	require.Len(t, h.getMappingClients.clients, 1)
 }
 
 func TestBootstrap(t *testing.T) {

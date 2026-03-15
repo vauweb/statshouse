@@ -92,13 +92,20 @@ func (s *Server) serveUDP(conn *net.UDPConn) (*udp.Transport, error) {
 		int64(s.opts.RequestMemoryLimit),
 		s.opts.cryptoKeys,
 		conn,
+		conn.LocalAddr(),
 		s.startTime,
 		s.acceptHandlerUDP(conn.LocalAddr()),
 		s.closeHandlerUDP,
 		s.allocateRequestBufUDP,
 		s.deAllocateRequestBufUDP, // we copy response to slice we get using allocateRequestBufUDP
-		s.opts.ResponseTimeoutAdjust/10,
+		0,
 		s.opts.DebugUdpRPC,
+		s.opts.PrintKeysGenerationInfo,
+		s.opts.DebugUDPLatency,
+		s.opts.socketWriteLatencyMetric,
+		s.opts.socketReadLatencyMetric,
+		s.opts.writeScheduleLatencyMetric,
+		s.opts.readScheduleLatencyMetric,
 	)
 	if err != nil {
 		return nil, err
@@ -126,20 +133,21 @@ func (s *Server) deAllocateRequestBufUDP(buf *[]byte) {
 func (s *Server) acceptHandlerUDP(listenAddr net.Addr) func(conn *udp.Connection) {
 	return func(conn *udp.Connection) {
 		if s.opts.DebugUdpRPC >= 1 {
-			log.Printf("new udp connection accept listenAddr:%s connAddr:%s", listenAddr.String(), conn.LocalAddr())
+			log.Printf("new udp connection accept listenAddr:%s localAddr:%s remoteAddr:%s", listenAddr.String(), conn.LocalAddr(), conn.RemoteAddr())
 		}
+
 		closeCtx, cancelCloseCtx := context.WithCancelCause(context.Background())
 		sc := &UdpServerConn{
 			serverConnCommon: serverConnCommon{
-				server:            s,
-				closeCtx:          closeCtx,
-				cancelCloseCtx:    cancelCloseCtx,
-				longpollResponses: map[int64]hijackedResponse{},
+				server:         s,
+				closeCtx:       closeCtx,
+				cancelCloseCtx: cancelCloseCtx,
+				longpolls:      map[int64]longpollHctx{},
 			},
-			conn: conn,
+			errHandler: s.opts.ConnErrHandler,
+			conn:       conn,
 		}
-		sc.releaseFun = s.releaseHandlerCtx
-		sc.pushUnlockFun = sc.pushUnlock
+		sc.setDebugName("UDP", conn.RemoteAddr(), conn.LocalAddr())
 
 		conn.StreamLikeIncoming = false
 		conn.MessageHandle = func(message *[]byte, canSave bool) {
@@ -147,14 +155,8 @@ func (s *Server) acceptHandlerUDP(listenAddr net.Addr) func(conn *udp.Connection
 				log.Printf("udp message handle")
 			}
 			requestTime := time.Now()
-			hctx := s.acquireHandlerCtx(protocolUDP)
-			hctx.commonConn = sc
-			hctx.listenAddr = listenAddr
-			hctx.localAddr = conn.LocalAddr()
-			hctx.remoteAddr = conn.RemoteAddr()
-			hctx.keyID = sc.conn.KeyID()
-			hctx.protocolVersion = 0 // TODO protocol version
-			hctx.RequestTime = requestTime
+			hctx := s.acquireHandlerCtx(sc, protocolUDP)
+			hctx.requestTime = requestTime
 
 			hctx.Request = *message
 			if canSave {
@@ -169,11 +171,11 @@ func (s *Server) acceptHandlerUDP(listenAddr net.Addr) func(conn *udp.Connection
 			var err error
 			reqHeaderTip, hctx.Request, err = basictl.NatReadTag(hctx.Request)
 			if err != nil {
-				s.rareLog(&s.lastReadErrorLog, "rpc: error reading request tag (%d bytes request) from %v, disconnecting: %v", len(hctx.Request), sc.conn.RemoteAddr(), err)
+				s.rareLog(&s.lastReadErrorLog, "rpc: %s error reading request tag (%d bytes request) from %v, disconnecting: %v", sc.debugName, len(hctx.Request), err)
 				return
 			}
 
-			w, ctx := s.handleRequest(reqHeaderTip, &sc.serverConnCommon, hctx)
+			w, ctx := s.handleRequest(sc.closeCtx, reqHeaderTip, hctx)
 			if w != nil {
 				if !canSave {
 					// if we call Handler in worker and don't own the message, then we must copy it
@@ -181,7 +183,7 @@ func (s *Server) acceptHandlerUDP(listenAddr net.Addr) func(conn *udp.Connection
 					hctx.request, hctx.Request = s.acquireRequestBuf(len(hctx.Request))
 					copy(hctx.Request, parsedReq)
 				}
-				w.ch <- workerWork{sc: &sc.serverConnCommon, hctx: hctx, ctx: ctx}
+				w.ch <- workerWork{hctx: hctx, ctx: ctx}
 			}
 		}
 		conn.UserData = sc
@@ -191,15 +193,46 @@ func (s *Server) acceptHandlerUDP(listenAddr net.Addr) func(conn *udp.Connection
 	}
 }
 
+var errUdpConnClose = fmt.Errorf("server udp connection Close() called")
+
 func (s *Server) closeHandlerUDP(conn *udp.Connection) {
 	if s.opts.DebugUdpRPC >= 1 {
-		log.Printf("udp connection close")
+		log.Printf("udp connection %s close", conn.RemoteAddr())
 	}
 
 	s.protocolStats[protocolUDP].connectionsCurrent.Add(-1)
 	if conn.UserData != nil {
 		if sc, ok := conn.UserData.(*UdpServerConn); ok {
-			sc.cancelAllLongpollResponses(false)
+			// shutdown
+			sc.mu.Lock()
+			if sc.connectionStatus >= serverStatusStopped {
+				sc.mu.Unlock()
+				return
+			}
+			sc.connectionStatus = serverStatusStopped
+
+			queryIDs := make([]int64, 0, 8) // will use stack if len(sc.longpolls) <= 8
+			for queryID := range sc.longpolls {
+				queryIDs = append(queryIDs, queryID)
+			}
+			sc.mu.Unlock()
+
+			for _, queryID := range queryIDs {
+				lh := LongpollHandle{QueryID: queryID, CommonConn: sc}
+				sc.SendEmptyResponse(lh)
+			}
+
+			// close
+			if sc.errHandler != nil {
+				sc.errHandler(errUdpConnClose)
+			}
+			if sc.server.opts.DebugRPC {
+				sc.server.opts.Logf("rpc_debug: %s Close", sc.debugName)
+			}
+
+			sc.cancelCloseCtx(errUdpConnClose)
+
+			sc.conn = nil
 		}
 	}
 	// TODO - will all sending hctx be released?

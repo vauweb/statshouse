@@ -29,32 +29,50 @@ func (item *RpcPing) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *RpcPing) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *RpcPing) ReadTL1(w []byte) (_ []byte, err error) {
 	return basictl.LongRead(w, &item.PingId)
 }
 
 func (item *RpcPing) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *RpcPing) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *RpcPing) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *RpcPing) WriteTL1(w []byte) []byte {
 	w = basictl.LongWrite(w, item.PingId)
 	return w
 }
 
 func (item *RpcPing) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *RpcPing) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x5730a2df); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *RpcPing) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *RpcPing) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *RpcPing) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *RpcPing) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x5730a2df)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item RpcPing) String() string {
@@ -62,6 +80,11 @@ func (item RpcPing) String() string {
 }
 
 func (item *RpcPing) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *RpcPing) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propPingIdPresented bool
 
 	if in != nil {
@@ -98,14 +121,15 @@ func (item *RpcPing) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *RpcPing) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *RpcPing) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *RpcPing) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *RpcPing) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *RpcPing) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexPingId := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)

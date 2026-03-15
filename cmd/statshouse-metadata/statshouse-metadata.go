@@ -20,17 +20,19 @@ import (
 	"time"
 
 	"github.com/VKCOM/statshouse-go"
+	"github.com/cloudflare/tableflip"
+	"github.com/spf13/pflag"
+
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlengine"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/VKCOM/statshouse/internal/metadata"
+	"github.com/VKCOM/statshouse/internal/trustedsubnets"
 	"github.com/VKCOM/statshouse/internal/util"
 	"github.com/VKCOM/statshouse/internal/vkgo/binlog/fsbinlog"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
 	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
-	"github.com/cloudflare/tableflip"
-	"github.com/spf13/pflag"
 )
 
 var argv struct {
@@ -54,6 +56,8 @@ var argv struct {
 	stepSec      uint32
 	budgetBonus  int64
 	globalBudget int64
+
+	trustedSubnetGroupsFlag trustedsubnets.Flag
 
 	version    bool
 	help       bool
@@ -97,6 +101,7 @@ func parseArgs() {
 	pflag.Uint32Var(&argv.stepSec, "step-sec", metadata.StepSec, "every step-sec metric will receive budget-bonus mappings to budget")
 	pflag.Int64Var(&argv.budgetBonus, "budget-bonus", metadata.BudgetBonus, "every step-sec seconds metric will receive budget-bonus mappings to budget")
 	pflag.Int64Var(&argv.budgetBonus, "global-budget", metadata.GlobalBudget, "create mapping budget. After spent this budget meta will use step system")
+	pflag.Var(&argv.trustedSubnetGroupsFlag, "trusted-subnet-groups", "trusted subnet groups; format: group1,group1b;group2 (CIDR list, groups split by ';')")
 
 	pflag.Parse()
 }
@@ -286,22 +291,20 @@ func run() error {
 	statshouse.ConfigureNetwork(log.Printf, argv.shNetwork, argv.shAddr, argv.shEnv)
 	defer statshouse.Close()
 
-	startTimestamp := time.Now().Unix()
-	component := strconv.FormatInt(format.TagValueIDComponentMetadata, 10)
-	start := strconv.FormatInt(format.TagValueIDHeartbeatEventStart, 10)
-	heartbeat := strconv.FormatInt(format.TagValueIDHeartbeatEventHeartbeat, 10)
-
+	startTimestamp := time.Now()
 	heartbeatTags := statshouse.Tags{
-		1: component,
-		2: start,
-		4: fmt.Sprint(build.CommitTag()),
-		6: fmt.Sprint(build.CommitTimestamp()),
-		7: srvfunc.HostnameForStatshouse(),
+		1:                       fmt.Sprint(format.TagValueIDComponentMetadata),
+		2:                       fmt.Sprint(format.TagValueIDHeartbeatEventStart),
+		4:                       fmt.Sprint(build.CommitTag()),
+		6:                       fmt.Sprint(build.CommitTimestamp()),
+		7:                       srvfunc.HostnameForStatshouse(),
+		statshouse.StringTopTag: build.Commit(),
 	}
 	statshouse.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, 0)
-	heartbeatTags[2] = heartbeat
+
+	heartbeatTags[2] = fmt.Sprint(format.TagValueIDHeartbeatEventHeartbeat)
 	defer statshouse.StopRegularMeasurement(statshouse.StartRegularMeasurement(func(c *statshouse.Client) {
-		uptime := float64(time.Now().Unix() - startTimestamp)
+		uptime := time.Since(startTimestamp).Seconds()
 		c.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, uptime)
 	}))
 
@@ -321,7 +324,8 @@ func run() error {
 		ResetFlood2:            metadata.HandleProxyGen(&proxy, "resetFloo2", handler.ResetFlood2),
 	}
 	sh := &tlmetadata.Handler{
-		RawGetJournalnew: proxy.HandleProxy("getJournal", handler.RawGetJournal),
+		RawGetJournalnew:  proxy.HandleProxy("getJournal", handler.RawGetJournal),
+		RawGetNewMappings: proxy.HandleProxy("getMappingsNew", handler.RawGetNewMappings),
 	}
 	engineRPCHandler := metadata.NewEngineRpcHandler(argv.binlogPrefix, db)
 	engineHandler := &tlengine.Handler{
@@ -334,7 +338,9 @@ func run() error {
 		rpc.ServerWithHandler(rpc.ChainHandler(h.Handle, engineHandler.Handle)),
 		rpc.ServerWithSyncHandler(sh.Handle),
 		rpc.ServerWithLogf(log.Printf),
-		rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
+		// meta is accessible via RPC proxy, so needs some timeout for long poll contexts clean up
+		rpc.ServerWithDefaultResponseTimeout(5*time.Minute),
+		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())),
 		rpc.ServerWithCryptoKeys(rpcCryptoKeys),
 		metrics.ServerWithMetrics,
 	)

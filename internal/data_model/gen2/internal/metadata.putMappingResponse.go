@@ -21,9 +21,10 @@ func (MetadataPutMappingResponse) TLTag() uint32  { return 0x9286abfe }
 
 func (item *MetadataPutMappingResponse) Reset() {}
 
+func (item *MetadataPutMappingResponse) FillRandom(rg *basictl.RandGenerator) {}
+
 func (item *MetadataPutMappingResponse) Read(w []byte) (_ []byte, err error) { return w, nil }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataPutMappingResponse) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -39,7 +40,6 @@ func (item *MetadataPutMappingResponse) ReadBoxed(w []byte) (_ []byte, err error
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataPutMappingResponse) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -54,6 +54,11 @@ func (item MetadataPutMappingResponse) String() string {
 }
 
 func (item *MetadataPutMappingResponse) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataPutMappingResponse) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	if in != nil {
 		in.Delim('{')
 		if !in.Ok() {
@@ -71,14 +76,15 @@ func (item *MetadataPutMappingResponse) ReadJSON(legacyTypeNames bool, in *basic
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataPutMappingResponse) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataPutMappingResponse) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataPutMappingResponse) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataPutMappingResponse) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataPutMappingResponse) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	return append(w, '}')
 }
@@ -92,4 +98,12 @@ func (item *MetadataPutMappingResponse) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.putMappingResponse", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataPutMappingResponse) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.putMappingResponse"))
+}
+
+func (item *MetadataPutMappingResponse) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.putMappingResponse")
 }

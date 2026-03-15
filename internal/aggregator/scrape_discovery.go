@@ -31,7 +31,7 @@ type scrapeDiscovery struct {
 
 	// initialized when "run" called
 	storage *metajournal.MetricsStorage
-	meta    *metajournal.MetricMetaLoader
+	meta    metajournal.MetadataLoader
 	sh2     *agent.Agent
 
 	// updated on "applyConfig"
@@ -54,7 +54,7 @@ func newScrapeDiscovery(cb scrapeDiscoveryCallback) scrapeDiscovery {
 	}
 }
 
-func (s *scrapeDiscovery) run(storage *metajournal.MetricsStorage, meta *metajournal.MetricMetaLoader, sh2 *agent.Agent) {
+func (s *scrapeDiscovery) run(storage *metajournal.MetricsStorage, meta metajournal.MetadataLoader, sh2 *agent.Agent) {
 	if s.storage != nil {
 		return
 	}
@@ -148,8 +148,10 @@ func (s *scrapeDiscovery) applyTargets(targets map[string][]*targetgroup.Group) 
 						continue
 					}
 					if addr, ok := ls[model.AddressLabel]; ok {
-						s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDiscovery,
-							[]int32{}, []byte(addr), 1)
+						s.sh2.AddCounterS(0, format.BuiltinMetricMetaAggScrapeTargetDiscovery,
+							[]int32{},
+							[]string{format.StringTopTagIndexV3: string(addr)},
+							1)
 					}
 				}
 			}

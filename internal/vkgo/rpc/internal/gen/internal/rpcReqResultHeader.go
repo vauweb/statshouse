@@ -29,32 +29,50 @@ func (item *RpcReqResultHeader) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *RpcReqResultHeader) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *RpcReqResultHeader) ReadTL1(w []byte) (_ []byte, err error) {
 	return basictl.LongRead(w, &item.QueryId)
 }
 
 func (item *RpcReqResultHeader) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *RpcReqResultHeader) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *RpcReqResultHeader) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *RpcReqResultHeader) WriteTL1(w []byte) []byte {
 	w = basictl.LongWrite(w, item.QueryId)
 	return w
 }
 
 func (item *RpcReqResultHeader) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *RpcReqResultHeader) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x63aeda4e); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *RpcReqResultHeader) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *RpcReqResultHeader) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *RpcReqResultHeader) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *RpcReqResultHeader) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x63aeda4e)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item RpcReqResultHeader) String() string {
@@ -62,6 +80,11 @@ func (item RpcReqResultHeader) String() string {
 }
 
 func (item *RpcReqResultHeader) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *RpcReqResultHeader) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propQueryIdPresented bool
 
 	if in != nil {
@@ -98,14 +121,15 @@ func (item *RpcReqResultHeader) ReadJSON(legacyTypeNames bool, in *basictl.JsonL
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *RpcReqResultHeader) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *RpcReqResultHeader) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *RpcReqResultHeader) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *RpcReqResultHeader) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *RpcReqResultHeader) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexQueryId := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)

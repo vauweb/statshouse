@@ -13,6 +13,9 @@ import (
 
 var _ = basictl.NatWrite
 
+// Experimental. Top-level packet magic. Client sends on request cancel, so server can free context associated with request.
+// No response from server is sent. Required for correctly cancelling long poll requests.
+// Supported by vkgo rpc.Server/rpc.Client for now. Support is advertised during PacketConn handshake with flag bit.
 type RpcCancelReq struct {
 	QueryId int64
 }
@@ -29,32 +32,50 @@ func (item *RpcCancelReq) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *RpcCancelReq) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *RpcCancelReq) ReadTL1(w []byte) (_ []byte, err error) {
 	return basictl.LongRead(w, &item.QueryId)
 }
 
 func (item *RpcCancelReq) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *RpcCancelReq) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *RpcCancelReq) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *RpcCancelReq) WriteTL1(w []byte) []byte {
 	w = basictl.LongWrite(w, item.QueryId)
 	return w
 }
 
 func (item *RpcCancelReq) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *RpcCancelReq) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x193f1b22); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *RpcCancelReq) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *RpcCancelReq) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *RpcCancelReq) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *RpcCancelReq) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x193f1b22)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item RpcCancelReq) String() string {
@@ -62,6 +83,11 @@ func (item RpcCancelReq) String() string {
 }
 
 func (item *RpcCancelReq) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *RpcCancelReq) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propQueryIdPresented bool
 
 	if in != nil {
@@ -98,14 +124,15 @@ func (item *RpcCancelReq) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) 
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *RpcCancelReq) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *RpcCancelReq) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *RpcCancelReq) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *RpcCancelReq) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *RpcCancelReq) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexQueryId := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)

@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -21,17 +22,19 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/prometheus/prometheus/discovery/consul" // spawns service discovery goroutines
+
 	"github.com/VKCOM/statshouse/internal/agent"
 	"github.com/VKCOM/statshouse/internal/aggregator"
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/metajournal"
 	"github.com/VKCOM/statshouse/internal/pcache"
-	"github.com/VKCOM/statshouse/internal/pcache/sqlitecache"
+	"github.com/VKCOM/statshouse/internal/trustedsubnets"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/platform"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
-	_ "github.com/prometheus/prometheus/discovery/consul" // spawns service discovery goroutines
+	"github.com/VKCOM/statshouse/internal/vkgo/vkd/platform"
 )
 
 const defaultPathToPwd = `/etc/engine/pass`
@@ -49,6 +52,8 @@ var argv struct {
 	configAgent     agent.Config
 	listenAddr      string
 	pprofListenAddr string
+
+	trustedSubnetGroupsFlag trustedsubnets.Flag
 
 	aggregator.ConfigAggregator
 }
@@ -108,11 +113,6 @@ func mainAggregator() int {
 		return 1
 	}
 	_ = os.Mkdir(argv.cacheDir, os.ModePerm) // create dir, but not parent dirs
-	dc, err := sqlitecache.OpenSqliteDiskCache(filepath.Join(argv.cacheDir, "mapping_cache.sqlite3"), sqlitecache.DefaultTxDuration)
-	if err != nil {
-		log.Printf("failed to open disk cache: %v", err)
-		return 1
-	}
 	// we do not want to confuse mappings from different clusters, this would be a disaster
 	fpmc, err := os.OpenFile(filepath.Join(argv.cacheDir, fmt.Sprintf("mappings-%s.cache", argv.Cluster)), os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
@@ -120,6 +120,23 @@ func mainAggregator() int {
 		return 1
 	}
 	defer fpmc.Close()
+
+	var mappingStorageFiles []*os.File
+	for i := 0; i < argv.MappingsFileCount; i++ {
+		// Use cluster name as suffix to avoid conflicts between clusters (same as aggregator)
+		f, err := os.OpenFile(filepath.Join(argv.cacheDir, fmt.Sprintf("mappings-%s-v2-%d-%d.cache", argv.Cluster, argv.MappingsFileCount, i)), os.O_CREATE|os.O_RDWR, 0666)
+		if err != nil {
+			log.Printf("failed to open mappings storage file %v", err)
+			return 1
+		}
+		defer f.Close()
+		mappingStorageFiles = append(mappingStorageFiles, f)
+	}
+	mappingsStorage, err := metajournal.LoadMappingsFiles(context.Background(), mappingStorageFiles, data_model.JournalDDOSProtectionTimeout, false)
+	if err != nil {
+		// cache can be damaged
+		log.Printf("failed to load mappings storage from %v", err)
+	}
 	// we do not want to confuse journal from different clusters, this would be a disaster
 	fj, err := os.OpenFile(filepath.Join(argv.cacheDir, fmt.Sprintf("journal-%s.cache", argv.Cluster)), os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
@@ -134,9 +151,10 @@ func mainAggregator() int {
 	}
 	defer fjCompact.Close()
 
-	mappingsCache, _ := pcache.LoadMappingsCacheFile(fpmc, argv.MappingCacheSize, argv.MappingCacheTTL) // we ignore error because cache can be damaged
-	startDiscCacheTime := time.Now()                                                                    // we only have disk cache before. Be carefull when redesigning
-	agg, err := aggregator.MakeAggregator(dc, fj, fjCompact, mappingsCache, argv.cacheDir, argv.aggAddr, aesPwd, argv.ConfigAggregator, argv.customHostName, argv.logLevel == "trace")
+	// we ignore error because cache can be damaged
+	mappingsCache, _ := pcache.LoadMappingsCacheFile(fpmc, argv.RemoteInitial.MappingCacheSize, argv.RemoteInitial.MappingCacheTTL)
+	startDiscCacheTime := time.Now() // we only have disk cache before. Be carefull when redesigning
+	agg, err := aggregator.MakeAggregator(fj, fjCompact, mappingsCache, mappingsStorage, argv.cacheDir, argv.aggAddr, aesPwd, argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()), argv.ConfigAggregator, argv.customHostName, argv.logLevel == "trace")
 	if err != nil {
 		log.Println(err)
 		return 1
@@ -184,6 +202,7 @@ main_loop:
 	shutdownInfo.SaveMappings = agent.ShutdownInfoDuration(&now).Nanoseconds()
 	log.Printf("6. Saving journals...")
 	agg.SaveJournals()
+	agg.SaveMappings()
 	shutdownInfo.SaveJournal = agent.ShutdownInfoDuration(&now).Nanoseconds()
 	shutdownInfo.FinishShutdownTime = now.UnixNano()
 	agent.ShutdownInfoSave(argv.cacheDir, shutdownInfo)
@@ -220,24 +239,25 @@ func parseCommandLine() error {
 	flag.StringVar(&argv.userGroup, "g", "kitten", "sets user group to make setguid")
 	flag.StringVar(&argv.cacheDir, "cache-dir", "", "Data that cannot be immediately sent will be stored here together with metric metadata cache.")
 	flag.Uint64Var(&argv.maxOpenFiles, "max-open-files", 131072, "open files limit")
-	flag.StringVar(&argv.aggAddr, "agg-addr", "", "Comma separated list of aggregator listen addresses")
+	flag.StringVar(&argv.aggAddr, "agg-addr", "", "aggregator listen address:port, or comma-separated list of address:ports for all shard-replicas")
 	flag.StringVar(&argv.Cluster, "cluster", aggregator.DefaultConfigAggregator().Cluster, "clickhouse cluster name to autodetect configuration, local shard and replica")
 	flag.StringVar(&argv.customHostName, "hostname", "", "override auto detected hostname")
-	flag.IntVar(&argv.ShortWindow, "short-window", aggregator.DefaultConfigAggregator().ShortWindow, "Short admission window. Shorter window reduces latency, but also reduces recent stats quality as more agents come too late")
 	flag.IntVar(&argv.RecentInserters, "recent-inserters", aggregator.DefaultConfigAggregator().RecentInserters, "How many parallel inserts to make for recent data")
 	flag.IntVar(&argv.HistoricInserters, "historic-inserters", aggregator.DefaultConfigAggregator().HistoricInserters, "How many parallel inserts to make for historic data")
 	flag.IntVar(&argv.InsertHistoricWhen, "insert-historic-when", aggregator.DefaultConfigAggregator().InsertHistoricWhen, "Aggregator will insert historic data when # of ongoing recent data inserts is this number or less")
-	flag.IntVar(&argv.CardinalityWindow, "cardinality-window", aggregator.DefaultConfigAggregator().CardinalityWindow, "Aggregator will use this window (seconds) to estimate cardinality")
-	flag.IntVar(&argv.MaxCardinality, "max-cardinality", aggregator.DefaultConfigAggregator().MaxCardinality, "Aggregator will sample metrics which cardinality estimates are higher")
-	argv.Bind(flag.CommandLine, aggregator.DefaultConfigAggregator().ConfigAggregatorRemote, false)
+	var cardinalityWindow int
+	flag.IntVar(&cardinalityWindow, "cardinality-window", 0, "Depecated, not used.") // TODO - remove
+	var maxCardinality int
+	flag.IntVar(&maxCardinality, "max-cardinality", 0, "Deprecated, not used.") // TODO - remove
+	argv.RemoteInitial.Bind(flag.CommandLine, aggregator.DefaultConfigAggregator().RemoteInitial, false)
 	flag.Float64Var(&argv.SimulateRandomErrors, "simulate-errors-random", aggregator.DefaultConfigAggregator().SimulateRandomErrors, "Probability of errors for recent buckets from 0.0 (no errors) to 1.0 (all errors)")
 	flag.BoolVar(&argv.AutoCreate, "auto-create", aggregator.DefaultConfigAggregator().AutoCreate, "Enable metric auto-create.")
 	flag.BoolVar(&argv.AutoCreateDefaultNamespace, "auto-create-default-namespace", false, "Auto-create metrics with no namespace specified.")
 	flag.BoolVar(&argv.DisableRemoteConfig, "disable-remote-config", aggregator.DefaultConfigAggregator().DisableRemoteConfig, "disable remote configuration")
 	flag.StringVar(&argv.ExternalPort, "agg-external-port", aggregator.DefaultConfigAggregator().ExternalPort, "external port for aggregator autoconfiguration if different from port set in agg-addr")
-	flag.IntVar(&argv.PreviousNumShards, "previous-shards", aggregator.DefaultConfigAggregator().PreviousNumShards, "Previous number of shard*replicas in cluster. During transition, clients with previous configuration are also allowed to send data.")
 	flag.IntVar(&argv.ShardByMetricShards, "shard-by-metric-shards", aggregator.DefaultConfigAggregator().ShardByMetricShards, "When increasing cluster size, we want to pin metrics without explicit shards to their former shards.")
 	flag.IntVar(&argv.LocalReplica, "local-replica", aggregator.DefaultConfigAggregator().LocalReplica, "Replica number for local test cluster [1..3]")
+	flag.IntVar(&argv.LocalShard, "local-shard", aggregator.DefaultConfigAggregator().LocalShard, "Shard number for local test cluster [>=1]")
 	flag.Int64Var(&argv.MetadataActorID, "metadata-actor-id", aggregator.DefaultConfigAggregator().MetadataActorID, "")
 	flag.StringVar(&argv.MetadataAddr, "metadata-addr", aggregator.DefaultConfigAggregator().MetadataAddr, "")
 	flag.StringVar(&argv.MetadataNet, "metadata-net", aggregator.DefaultConfigAggregator().MetadataNet, "")
@@ -245,6 +265,8 @@ func parseCommandLine() error {
 	flag.StringVar(&argv.KHUser, "kh-user", "", "clickhouse user")
 	flag.StringVar(&argv.KHPasswordFile, "kh-password-file", "", "file with clickhouse password")
 	flag.StringVar(&argv.pprofListenAddr, "pprof", "", "HTTP pprof listen address")
+	flag.IntVar(&argv.MappingsFileCount, "mappings-file-count", 16, "count of files for sharding metadata mappings")
+	argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 	build.FlagParseShowVersionHelp()
 
 	if len(argv.aggAddr) == 0 {
@@ -261,13 +283,12 @@ func parseCommandLine() error {
 		if p, err := os.ReadFile(argv.KHPasswordFile); err == nil {
 			p = bytes.TrimSpace(p)
 			argv.KHPassword = string(p)
-			log.Printf("got dpassword '%s' from file %s", argv.KHPassword, argv.KHPasswordFile)
 		} else {
 			return fmt.Errorf("failed to open --kh-password-file %q: %v", argv.KHPasswordFile, err)
 		}
 	}
 
-	return aggregator.ValidateConfigAggregator(argv.ConfigAggregator)
+	return aggregator.ValidateConfigAggregator(&argv.ConfigAggregator)
 }
 
 func runPprof() {

@@ -9,8 +9,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
-	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
@@ -18,51 +16,48 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/VKCOM/statshouse-go"
-	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 	"github.com/cloudflare/tableflip"
 	"github.com/gorilla/handlers"
+
+	statshouseui "github.com/VKCOM/statshouse/statshouse-ui"
 
 	"github.com/VKCOM/statshouse/internal/api"
 	"github.com/VKCOM/statshouse/internal/chutil"
 	"github.com/VKCOM/statshouse/internal/config"
+	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/pcache/sqlitecache"
+	"github.com/VKCOM/statshouse/internal/metajournal"
+	"github.com/VKCOM/statshouse/internal/trustedsubnets"
 	"github.com/VKCOM/statshouse/internal/util"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
 	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 	"github.com/VKCOM/statshouse/internal/vkgo/vkuth"
 )
 
 const (
 	shutdownTimeout = 30 * time.Second
 	exitTimeout     = 45 * time.Second
-	upgradeTimeout  = 60 * time.Second
+	upgradeTimeout  = 2 * time.Minute
 
 	httpReadHeaderTimeout = 10 * time.Second
 	httpReadTimeout       = 30 * time.Second
 	httpIdleTimeout       = 5 * time.Minute
 
 	chDialTimeout = 5 * time.Second
-
-	diskCacheTxDuration = 5 * time.Second
 )
 
 var argv struct {
 	accessLog                bool
 	rpcCryptoKeyPath         string
 	brsMaxChunksCount        int
-	chV1Addrs                []string
-	chV1Debug                bool
-	chV1MaxConns             int
-	chV1Password             string
-	chV1PasswordFile         string
-	chV1User                 string
 	chV2Addrs                []string
 	chV2Debug                bool
 	chV2MaxLightFastConns    int
@@ -71,6 +66,7 @@ var argv struct {
 	chV2MaxLightSlowConns    int
 	chV2MaxHardwareFastConns int
 	chV2MaxHardwareSlowConns int
+	ShardByMetricShards      int
 
 	chV2Password             string
 	chV2PasswordFile         string
@@ -83,7 +79,6 @@ var argv struct {
 	adminDash                int
 	eventPreset              []string
 	defaultNumSeries         int
-	diskCache                string // TODO: remove, use "cacheDir"
 	cacheDir                 string
 	help                     bool
 	listenHTTPAddr           string
@@ -105,6 +100,10 @@ var argv struct {
 	metadataActorID          int64
 	metadataAddr             string
 	metadataNet              string
+	cluster                  string
+	mappingsFileCount        int
+
+	trustedSubnetGroupsFlag trustedsubnets.Flag
 
 	api.HandlerOptions
 	api.Config
@@ -140,6 +139,8 @@ func run() int {
 	}
 	defer tf.Stop()
 
+	sigCtx, sigCancel := context.WithCancel(context.Background())
+	defer sigCancel()
 	go func() {
 		ch := make(chan os.Signal, 3)
 		signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -148,6 +149,7 @@ func run() int {
 			case syscall.SIGINT, syscall.SIGTERM:
 				log.Printf("got %v, exiting...", sig)
 				tf.Stop()
+				sigCancel()
 			case syscall.SIGHUP:
 				log.Printf("got %v, upgrading...", sig)
 				err := tf.Upgrade()
@@ -164,33 +166,16 @@ func run() int {
 		return 1
 	}
 
-	var chV1 *chutil.ClickHouse
-	if len(argv.chV1Addrs) > 0 {
-		// argv.chV1MaxConns, argv.chV2MaxHeavyConns, argv.chV1Addrs, argv.chV1User, argv.chV1Password, argv.chV1Debug, chDialTimeout
-		chV1, err = chutil.OpenClickHouse(chutil.ChConnOptions{
-			Addrs:       argv.chV1Addrs,
-			User:        argv.chV1User,
-			Password:    argv.chV1Password,
-			DialTimeout: chDialTimeout,
-			ConnLimits: chutil.ConnLimits{
-				FastLightMaxConns: argv.chV1MaxConns,
-				FastHeavyMaxConns: argv.chV1MaxConns,
-				SlowLightMaxConns: argv.chV1MaxConns,
-				SlowHeavyMaxConns: argv.chV1MaxConns,
-			},
-		})
-		if err != nil {
-			log.Printf("failed to open ClickHouse-v1: %v", err)
-			return 1
-		}
-		defer func() { chV1.Close() }()
-	}
 	// argv.chV2MaxLightFastConns, argv.chV2MaxHeavyConns, , , argv.chV2Password, argv.chV2Debug, chDialTimeout
 	chV2, err := chutil.OpenClickHouse(chutil.ChConnOptions{
-		Addrs:       argv.chV2Addrs,
-		User:        argv.chV2User,
-		Password:    argv.chV2Password,
-		DialTimeout: chDialTimeout,
+		Addrs:               argv.chV2Addrs,
+		User:                argv.chV2User,
+		Password:            argv.chV2Password,
+		ShardByMetricShards: argv.ShardByMetricShards,
+		MaxShardConnsRatio:  argv.CHMaxShardConnsRatio,
+		DialTimeout:         chDialTimeout,
+		SelectTimeout:       argv.QuerySelectTimeout,
+		RateLimitConfig:     argv.RateLimitConfig,
 		ConnLimits: chutil.ConnLimits{
 			FastLightMaxConns:    argv.chV2MaxLightFastConns,
 			FastHeavyMaxConns:    argv.chV2MaxHeavyFastConns,
@@ -205,20 +190,36 @@ func run() int {
 		return 1
 	}
 	defer func() { chV2.Close() }()
-	c := rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups()))
+	c := rpc.NewClient(
+		// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
+		rpc.ClientWithLogf(log.Printf),
+		rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())))
 	defer func() { _ = c.Close() }()
 
-	dc, err := sqlitecache.OpenSqliteDiskCache(argv.diskCache, diskCacheTxDuration)
+	var mappingFiles []*os.File
+	for i := 0; i < argv.mappingsFileCount; i++ {
+		// Use cluster name as suffix to avoid conflicts between clusters (same as aggregator)
+		fpmc, err := os.OpenFile(filepath.Join(argv.cacheDir, fmt.Sprintf("mappings-%s-v2-%d-%d.cache", argv.cluster, argv.mappingsFileCount, i)), os.O_CREATE|os.O_RDWR, 0666)
+		if err != nil {
+			log.Printf("failed to open mappings storage file %v", err)
+			return 1
+		}
+		defer fpmc.Close()
+		mappingFiles = append(mappingFiles, fpmc)
+	}
+	mappingsStorage, err := metajournal.LoadMappingsFiles(sigCtx, mappingFiles, data_model.JournalDDOSProtectionTimeout, true)
 	if err != nil {
-		log.Printf("failed to open disk cache: %v", err)
+		// cache can be damaged
+		log.Printf("failed to load mappings storage from %v", err)
+	}
+
+	// we do not want to confuse journal from different clusters, this would be a disaster
+	fj, err := os.OpenFile(filepath.Join(argv.cacheDir, fmt.Sprintf("journal-%s.cache", argv.cluster)), os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		log.Printf("failed to open journal cache: %v", err)
 		return 1
 	}
-	defer func() {
-		err := dc.Close()
-		if err != nil {
-			log.Printf("failed to close disk cache: %v", err)
-		}
-	}()
+	defer fj.Close()
 
 	statshouse.ConfigureNetwork(log.Printf, argv.statsHouseNetwork, argv.statsHouseAddr, argv.statsHouseEnv)
 	defer func() { _ = statshouse.Close() }()
@@ -236,8 +237,11 @@ func run() int {
 		rpcCryptoKey = rpcCryptoKeys[0]
 	}
 
+	staticFS := statshouseui.FS()
 	if staticFS == nil {
 		staticFS = os.DirFS(argv.staticDir)
+	} else if argv.staticDir != "" {
+		log.Printf("[warning] staticDir %q ignored, running build with embedded static files", argv.staticDir)
 	}
 
 	jwtHelper := vkuth.NewJWTHelper(argv.vkuthPublicKeys, argv.vkuthAppName)
@@ -268,7 +272,6 @@ func run() int {
 		DefaultMetricFilterNotIn: defaultMetricFilterNotIn,
 		EventPreset:              argv.eventPreset,
 		DefaultNumSeries:         argv.defaultNumSeries,
-		DisableV1:                len(argv.chV1Addrs) == 0,
 		AdminDash:                argv.adminDash,
 	}
 	if argv.LocalMode {
@@ -278,15 +281,17 @@ func run() int {
 		staticFS,
 		jsSettings,
 		argv.showInvisible,
-		chV1,
 		chV2,
 		&tlmetadata.Client{
-			Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(rpcCryptoKey), rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+			Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(rpcCryptoKey), rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
 			Network: argv.metadataNet,
 			Address: argv.metadataAddr,
 			ActorID: argv.metadataActorID,
 		},
-		dc,
+		fj,
+		argv.cacheDir,
+		argv.cluster,
+		mappingsStorage,
 		jwtHelper,
 		argv.HandlerOptions,
 		&argv.Config,
@@ -394,25 +399,20 @@ func run() int {
 	chunksCountMeasurementID := statshouse.StartRegularMeasurement(api.CurrentChunksCount(brs))
 	defer statshouse.StopRegularMeasurement(chunksCountMeasurementID)
 
-	startTimestamp := time.Now().Unix()
+	startTimestamp := time.Now()
 	heartbeatTags := statshouse.Tags{
-		1: "4",
-		2: fmt.Sprint(format.TagValueIDHeartbeatEventStart),
-		4: fmt.Sprint(build.CommitTag()),
-		6: fmt.Sprint(build.CommitTimestamp()),
-		7: srvfunc.HostnameForStatshouse(),
-	}
-	if build.Commit() != "?" {
-		commitRaw, err := hex.DecodeString(build.Commit())
-		if err == nil && len(commitRaw) >= 4 {
-			heartbeatTags[4] = fmt.Sprint(int32(binary.BigEndian.Uint32(commitRaw)))
-		}
+		1:                       fmt.Sprint(format.TagValueIDComponentAPI),
+		2:                       fmt.Sprint(format.TagValueIDHeartbeatEventStart),
+		4:                       fmt.Sprint(build.CommitTag()),
+		6:                       fmt.Sprint(build.CommitTimestamp()),
+		7:                       srvfunc.HostnameForStatshouse(),
+		statshouse.StringTopTag: build.Commit(),
 	}
 	statshouse.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, 0)
 
 	heartbeatTags[2] = fmt.Sprint(format.TagValueIDHeartbeatEventHeartbeat)
 	defer statshouse.StopRegularMeasurement(statshouse.StartRegularMeasurement(func(c *statshouse.Client) {
-		uptime := float64(time.Now().Unix() - startTimestamp)
+		uptime := time.Since(startTimestamp).Seconds()
 		c.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, uptime)
 	}))
 
@@ -424,7 +424,7 @@ func run() int {
 			hijackListener.AddConnection(conn)
 		}),
 		rpc.ServerWithLogf(log.Printf),
-		rpc.ServerWithTrustedSubnetGroups(build.TrustedSubnetGroups()),
+		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())),
 		rpc.ServerWithHandler(handlerRPC.Handle),
 		rpc.ServerWithCryptoKeys(rpcCryptoKeys),
 		metrics.ServerWithMetrics,
@@ -475,7 +475,6 @@ func run() int {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	s.Shutdown(ctx)
-
 	return 0
 }
 
@@ -485,20 +484,15 @@ func parseCommandLine() (err error) {
 	flag.IntVar(&argv.brsMaxChunksCount, "max-chunks-count", 1000, "in memory data chunks count limit for RPC server")
 	var chMaxQueries int // not used any more, TODO - remove?
 	flag.IntVar(&chMaxQueries, "clickhouse-max-queries", 32, "maximum number of concurrent ClickHouse queries")
-	config.StringSliceVar(flag.CommandLine, &argv.chV1Addrs, "clickhouse-v1-addrs", "", "comma-separated list of ClickHouse-v1 addresses")
-	flag.BoolVar(&argv.chV1Debug, "clickhouse-v1-debug", false, "ClickHouse-v1 debug mode")
-	flag.IntVar(&argv.chV1MaxConns, "clickhouse-v1-max-conns", 16, "maximum number of ClickHouse-v1 connections (fast and slow)")
-	flag.StringVar(&argv.chV1Password, "clickhouse-v1-password", "", "ClickHouse-v1 password")
-	flag.StringVar(&argv.chV1PasswordFile, "clickhouse-v1-password-file", "", "file with ClickHouse-v1 password")
-	flag.StringVar(&argv.chV1User, "clickhouse-v1-user", "", "ClickHouse-v1 user")
 	config.StringSliceVar(flag.CommandLine, &argv.chV2Addrs, "clickhouse-v2-addrs", "", "comma-separated list of ClickHouse-v2 addresses")
 	flag.BoolVar(&argv.chV2Debug, "clickhouse-v2-debug", false, "ClickHouse-v2 debug mode")
-	flag.IntVar(&argv.chV2MaxLightFastConns, "clickhouse-v2-max-conns", 40, "maximum number of ClickHouse-v2 connections (light fast)")
-	flag.IntVar(&argv.chV2MaxLightSlowConns, "clickhouse-v2-max-light-slow-conns", 12, "maximum number of ClickHouse-v2 connections (light slow)")
-	flag.IntVar(&argv.chV2MaxHeavyFastConns, "clickhouse-v2-max-heavy-conns", 5, "maximum number of ClickHouse-v2 connections (heavy fast)")
+	flag.IntVar(&argv.chV2MaxLightFastConns, "clickhouse-v2-max-conns", 12, "maximum number of ClickHouse-v2 connections (light fast)")
+	flag.IntVar(&argv.chV2MaxLightSlowConns, "clickhouse-v2-max-light-slow-conns", 4, "maximum number of ClickHouse-v2 connections (light slow)")
+	flag.IntVar(&argv.chV2MaxHeavyFastConns, "clickhouse-v2-max-heavy-conns", 1, "maximum number of ClickHouse-v2 connections (heavy fast)")
 	flag.IntVar(&argv.chV2MaxHeavySlowConns, "clickhouse-v2-max-heavy-slow-conns", 1, "maximum number of ClickHouse-v2 connections (heavy slow)")
-	flag.IntVar(&argv.chV2MaxHardwareFastConns, "clickhouse-v2-max-hardware-fast-conns", 8, "maximum number of ClickHouse-v2 connections (hardware fast)")
-	flag.IntVar(&argv.chV2MaxHardwareSlowConns, "clickhouse-v2-max-hardware-slow-conns", 4, "maximum number of ClickHouse-v2 connections (hardware slow)")
+	flag.IntVar(&argv.chV2MaxHardwareFastConns, "clickhouse-v2-max-hardware-fast-conns", 2, "maximum number of ClickHouse-v2 connections (hardware fast)")
+	flag.IntVar(&argv.chV2MaxHardwareSlowConns, "clickhouse-v2-max-hardware-slow-conns", 1, "maximum number of ClickHouse-v2 connections (hardware slow)")
+	flag.IntVar(&argv.ShardByMetricShards, "shard-by-metric-shards", 16, "number of shards for by-metric shard strategy. A copy from aggregator's config")
 
 	flag.StringVar(&argv.chV2Password, "clickhouse-v2-password", "", "ClickHouse-v2 password")
 	flag.StringVar(&argv.chV2PasswordFile, "clickhouse-v2-password-file", "", "file with ClickHouse-v2 password")
@@ -511,9 +505,7 @@ func parseCommandLine() (err error) {
 	flag.IntVar(&argv.adminDash, "admin-dash-id", 0, "hardware metric dashboard")
 	config.StringSliceVar(flag.CommandLine, &argv.eventPreset, "event-preset", "", "event preset")
 	flag.IntVar(&argv.defaultNumSeries, "default-num-series", 5, "default series number to request")
-	flag.StringVar(&argv.diskCache, "disk-cache", "statshouse_api_cache.db", "disk cache filename")
 	flag.StringVar(&argv.cacheDir, "cache-dir", "", "Directory to store metric metadata cache.")
-	flag.BoolVar(&argv.help, "help", false, "print usage instructions and exit")
 	flag.StringVar(&argv.listenHTTPAddr, "listen-addr", "localhost:8080", "web server listen address")
 	flag.StringVar(&argv.listenRPCAddr, "listen-rpc-addr", "localhost:13347", "RPC server listen address")
 	flag.StringVar(&argv.pidFile, "pid-file", "statshouse_api.pid", "path to PID file") // fpr table flip
@@ -527,16 +519,18 @@ func parseCommandLine() (err error) {
 	flag.StringVar(&argv.statsHouseAddr, "statshouse-addr", statshouse.DefaultAddr, "address of udp socket or path to unix socket")
 	flag.StringVar(&argv.statsHouseEnv, "statshouse-env", "dev", "fill key0/environment with this value in StatHouse statistics")
 	flag.IntVar(&argv.utcOffsetHours, "utc-offset", 0, "UTC offset for aggregation, in hours")
-	flag.BoolVar(&argv.version, "version", false, "show version information and exit")
 	flag.StringVar(&argv.vkuthAppName, "vkuth-app-name", "statshouse-api", "vkuth application name (access bits namespace)")
 	config.StringSliceVar(flag.CommandLine, &argv.vkuthPublicKeysArg, "vkuth-public-keys", "", "comma-separated list of trusted vkuth public keys; empty list disables token-based access control")
 
 	flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "metadata engine actor id")
 	flag.StringVar(&argv.metadataAddr, "metadata-addr", "127.0.0.1:2442", "metadata engine address")
 	flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "metadata engine network")
+	flag.StringVar(&argv.cluster, "cluster", "statlogs2", "cluster name used for cache file names")
+	flag.IntVar(&argv.mappingsFileCount, "mappings-file-count", 16, "count of files for sharding metadata mappings")
 	argv.HandlerOptions.Bind(flag.CommandLine)
 	argv.Config.Bind(flag.CommandLine, api.DefaultConfig())
-	flag.Parse()
+	argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
+	build.FlagParseShowVersionHelp()
 
 	if len(flag.Args()) != 0 {
 		return fmt.Errorf("unexpected command line arguments, check command line for typos: %q", flag.Args())
@@ -544,23 +538,19 @@ func parseCommandLine() (err error) {
 	if len(argv.chV2Addrs) == 0 {
 		return fmt.Errorf("--clickhouse-v2-addrs must be specified")
 	}
+	if argv.cacheDir == "" {
+		return fmt.Errorf("--cache-dir must be specified")
+	}
 
 	if math.Abs(float64(argv.utcOffsetHours)) > 168 { // hours in week (24*7=168)
 		return fmt.Errorf("invalid --utc-offset value")
 	}
-	if staticFS != nil && argv.staticDir != "" {
-		return fmt.Errorf("--static-dir must not be specified when static is embedded into the binary")
-	}
+	//TODO - return check after --static-dir is removed in production
+	//if statshouseui.FS() != nil && argv.staticDir != "" {
+	//	return fmt.Errorf("--static-dir must not be specified when static is embedded into the binary")
+	//}
 	if argv.vkuthPublicKeys, err = vkuth.ParseVkuthKeys(argv.vkuthPublicKeysArg); err != nil {
 		return err
-	}
-	if argv.chV1PasswordFile != "" {
-		if p, err := os.ReadFile(argv.chV1PasswordFile); err == nil {
-			p = bytes.TrimSpace(p)
-			argv.chV1Password = string(p)
-		} else {
-			return fmt.Errorf("failed to read --clickhouse-v1-password-file: %w", err)
-		}
 	}
 	if argv.chV2PasswordFile != "" {
 		if p, err := os.ReadFile(argv.chV2PasswordFile); err == nil {

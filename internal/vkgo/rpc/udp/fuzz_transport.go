@@ -21,24 +21,23 @@ import (
 /*
 UDP Transport Fuzzing
 
-8 agents - every is a single Transport
+several agents - every is a single Transport
 
 Events:
   1) new message
   2) one goWrite()'s iteration - all events handling and one datagram send (if any)
   3) one goRead()'s iteration - datagram receive, handling and enc header push to Transport::newHdrRcvs
   4) enc header adding to goWrite()'s queue
-  5) [Resend / AckSend / ResendRequest] timer expiration
+  5) [Resend / AckSend / ResendRequest / Regenerate] timer expiration
   6) datagram duplication
   7) datagram loss
 */
 
-// transports must be degree of 2 !!!
+// transports must be degree of 2 and <= 16 !!!
 const transportsDegree = 4
 const transports = 1 << transportsDegree
 
 const MaxFuzzChunkSize = 1 << 5
-const MaxFuzzPayloadSize = MaxFuzzChunkSize
 const MaxFuzzMessageSize = (1 << 8) - 1
 const MaxFuzzTransportMemory = 2 * MaxFuzzMessageSize
 const testStreamLikeIncoming = true
@@ -61,6 +60,9 @@ type FuzzTransportContext struct {
 
 	sentMessages     map[RandomMessage]int
 	receivedMessages map[RandomMessage]int
+
+	allocatedMessages   int
+	deallocatedMessages int
 }
 
 func receiveMessageHandler(fctx *FuzzTransportContext, srcId, dstId int) MessageHandler {
@@ -76,11 +78,18 @@ func receiveMessageHandler(fctx *FuzzTransportContext, srcId, dstId int) Message
 			dst:     dstId,
 			message: string(*message),
 		}] += 1
+		fctx.deallocatedMessages++
 	}
 }
 
-func FuzzTransport(fuzz []byte) int {
+const debugFuzzing = false
+
+// for https://github.com/dvyukov/go-fuzz
+func FuzzDyukov(fuzz []byte, withBumpGenerationsAndRestarts bool) int {
 	MaxChunkSize = MaxFuzzChunkSize
+	if debugFuzzing {
+		println("MaxFuzzChunkSize =", MaxFuzzChunkSize)
+	}
 
 	fctx := &FuzzTransportContext{
 		sentMessages:     make(map[RandomMessage]int),
@@ -92,27 +101,40 @@ func FuzzTransport(fuzz []byte) int {
 		if err != nil {
 			panic(err)
 		}
-		conn, err := net.ListenUDP("udp", udpAddr)
-		if err != nil {
-			panic(err)
-		}
 		tIdCopy := tId
+		debugLevel := 0
+		if debugFuzzing {
+			debugLevel = 3
+		}
 		fctx.ts[tId], err = NewTransport(
 			MaxFuzzTransportMemory,
 			[]string{
 				"01234567890123456789012345678901",
 			},
-			conn,
+			nil,
+			udpAddr,
 			uint32(time.Now().Unix()),
 			func(conn *Connection) {
-				conn.MessageHandle = receiveMessageHandler(fctx, addressToTransportId(conn.remoteAddr.String()), tIdCopy)
+				conn.MessageHandle = receiveMessageHandler(fctx, addressToTransportId(conn.remoteAddr().String()), tIdCopy)
 				conn.StreamLikeIncoming = testStreamLikeIncoming
 			},
 			func(_ *Connection) {},
+			func(size int) *[]byte {
+				fctx.allocatedMessages++
+				m := make([]byte, size)
+				return &m
+			},
+			func(*[]byte) {
+				fctx.deallocatedMessages++
+			},
+			0,
+			debugLevel,
+			false,
+			false,
 			nil,
 			nil,
-			0,
-			0,
+			nil,
+			nil,
 		)
 		if err != nil {
 			panic(err)
@@ -137,14 +159,17 @@ func FuzzTransport(fuzz []byte) int {
 			dstId := fuzzVerbToDstId(fuzz[i+1])
 			if dstId <= transportId {
 				// Out protocol currently doesn't support 2 active connection sides
-				return -1
+				i += 3
+				continue
 			}
 			messageSize := fuzzVerbToMessageSize(fuzz[i+2])
 			if messageSize == 0 {
 				// Out protocol doesn't support empty messages
-				return -1
+				i += 3
+				continue
 			}
 
+			fctx.allocatedMessages++
 			doNewMessage(fctx, transportId, dstId, messageSize, &nonce)
 
 			i += 3
@@ -188,8 +213,12 @@ func FuzzTransport(fuzz []byte) int {
 			} else if timerId == 2 {
 				// resend request timer
 				doResendRequestTimerBurn(fctx, transportId)
+			} else if withBumpGenerationsAndRestarts && timerId == 3 {
+				// regenerate timer
+				doRegenerateTimerBurn(fctx, transportId)
 			} else {
-				return -1
+				i += 2
+				continue
 			}
 
 			i += 2
@@ -227,13 +256,16 @@ func FuzzTransport(fuzz []byte) int {
 			i += 3
 
 		default:
-			return -1
+			i += 1
 		}
 	}
 
 	// at every step we will check this status in every connection
 	// at least one connection must increase it
 	type ConnProgressStatus struct {
+		// part of connection id
+		generation uint32
+
 		// incoming part
 		receivedPrefix   uint32
 		receivedInWindow int
@@ -247,7 +279,9 @@ func FuzzTransport(fuzz []byte) int {
 	// Now we should "repair" network, let protocol run its state machines to have progress and finally receive all messages
 	step := 0
 	for ; ; step++ {
-		//log.Printf("step %d", step)
+		if debugFuzzing {
+			log.Printf("step %d", step)
+		}
 
 		// TODO with window control enabled we must pass datagram with last actual windowControl before resend timers,
 		// otherwise OutgoingConnections can be blocked because of an old windowControl value.
@@ -260,8 +294,11 @@ func FuzzTransport(fuzz []byte) int {
 		}
 
 		// send datagrams with resend request
-		for tId := range fctx.ts {
-			doGoWriteStep(fctx, tId)
+		for tId, t := range fctx.ts {
+			conns := len(t.handshakeByPid)
+			for i := 0; i < conns; i++ {
+				doGoWriteStep(fctx, tId)
+			}
 		}
 
 		// receive datagrams with resend request
@@ -288,8 +325,11 @@ func FuzzTransport(fuzz []byte) int {
 			}
 
 			// send datagram with payload
-			for tId := range fctx.ts {
-				doGoWriteStep(fctx, tId)
+			for tId, t := range fctx.ts {
+				conns := len(t.handshakeByPid)
+				for j := 0; j < conns; j++ {
+					doGoWriteStep(fctx, tId)
+				}
 			}
 		}
 
@@ -315,8 +355,11 @@ func FuzzTransport(fuzz []byte) int {
 		}
 
 		// send datagram with acks
-		for tId := range fctx.ts {
-			doGoWriteStep(fctx, tId)
+		for tId, t := range fctx.ts {
+			conns := len(t.handshakeByPid)
+			for i := 0; i < conns; i++ {
+				doGoWriteStep(fctx, tId)
+			}
 		}
 
 		// receive datagrams with acks
@@ -334,101 +377,183 @@ func FuzzTransport(fuzz []byte) int {
 		}
 
 		// handle enc headers with ack nums
-		for tId := range fctx.ts {
-			doGoWriteStep(fctx, tId)
+		for tId, t := range fctx.ts {
+			conns := len(t.handshakeByPid)
+			for i := 0; i < conns; i++ {
+				doGoWriteStep(fctx, tId)
+			}
 		}
 
 		var connHaveDataToSend *Connection = nil
-		newReceivedOrAckedChunks := false
+		haveProgress := false
 		for tId, t := range fctx.ts {
 			for _, conn := range t.handshakeByPid {
 
-				srcId := portToTransportId(int(conn.remoteAddr.Port()))
+				srcId := portToTransportId(int(portFromNetPid(conn.remotePid())))
 
 				receivedChunks := 0
-				for i := 0; i < conn.incoming.windowChunks.Len(); i++ {
-					if conn.incoming.windowChunks.Index(i).received {
+				for s := conn.incoming.ackPrefix; s < conn.incoming.nextSeqNo; s++ {
+					ch, _ := conn.incoming.windowChunks.Get(s)
+					if ch.received() {
 						receivedChunks++
 					}
 				}
 				ackedChunks := 0
-				for i := 0; i < conn.outgoing.Window.Len(); i++ {
-					if conn.outgoing.Window.Index(i).acked {
+				for s := conn.outgoing.ackSeqNoPrefix; s < conn.outgoing.nextSeqNo; s++ {
+					if conn.outgoing.window.GetPtr(s).acked() {
 						ackedChunks++
 					}
 				}
 
-				// check incoming progress
 				statusWas := progressStatuses[srcId][tId]
+
+				// check connection establishment progress
+				if statusWas.generation > conn.generation {
+					panic("connection generation decreased")
+				} else if statusWas.generation < conn.generation {
+					haveProgress = true
+				}
+
+				// check incoming progress
 				if statusWas.receivedPrefix > conn.incoming.ackPrefix {
-					panic("connection received prefix decreased")
+					if !withBumpGenerationsAndRestarts {
+						panic("connection received prefix decreased")
+					}
 				} else if statusWas.receivedPrefix == conn.incoming.ackPrefix {
 					if statusWas.receivedInWindow > receivedChunks {
-						panic("connection received chunks in window decreased")
+						if !withBumpGenerationsAndRestarts {
+							panic("connection received chunks in window decreased")
+						}
 					}
 					if statusWas.receivedInWindow < receivedChunks {
-						newReceivedOrAckedChunks = true
+						haveProgress = true
 					}
 				} else {
-					newReceivedOrAckedChunks = true
+					haveProgress = true
 				}
 
 				// check outgoing progress
-				if statusWas.AckedPrefix > conn.outgoing.AckSeqNoPrefix {
-					panic("connection acked prefix decreased")
-				} else if statusWas.AckedPrefix == conn.outgoing.AckSeqNoPrefix {
+				if statusWas.AckedPrefix > conn.outgoing.ackSeqNoPrefix {
+					if !withBumpGenerationsAndRestarts {
+						panic("connection acked prefix decreased")
+					}
+				} else if statusWas.AckedPrefix == conn.outgoing.ackSeqNoPrefix {
 					if statusWas.AcksInWindow > ackedChunks {
-						panic("connection acked chunks in window decreased")
+						if !withBumpGenerationsAndRestarts {
+							panic("connection acked chunks in window decreased")
+						}
 					}
 					if statusWas.AcksInWindow < ackedChunks {
-						newReceivedOrAckedChunks = true
+						haveProgress = true
 					}
 				} else {
-					newReceivedOrAckedChunks = true
+					haveProgress = true
 				}
 
 				progressStatuses[srcId][tId] = ConnProgressStatus{
+					generation: conn.generation,
+
 					receivedPrefix:   conn.incoming.ackPrefix,
 					receivedInWindow: receivedChunks,
 
-					AckedPrefix:  conn.outgoing.AckSeqNoPrefix,
+					AckedPrefix:  conn.outgoing.ackSeqNoPrefix,
 					AcksInWindow: ackedChunks,
 				}
 
-				if conn.outgoing.haveChunksToSendNow() || conn.inResendQueue || conn.inAckQueue {
+				a := conn.outgoing.messageQueue.Len() > 0
+				b := conn.outgoing.timeoutedSeqNum < conn.outgoing.nextSeqNo
+				c := conn.incoming.windowChunks.LenMoreThan1()
+				if connHaveDataToSend == nil && (a || b || c) {
 					connHaveDataToSend = conn
+					if debugFuzzing {
+						fmt.Printf("%s->%s connHaveDataToSend because: new-messages(%t) un-acked-suffix(%t) unreceived-chunks(%t)\n", conn.LocalAddr(), conn.remoteAddr(), a, b, c)
+						fmt.Printf("IN: %+v\n", connHaveDataToSend.incoming)
+						fmt.Printf("OUT: %+v\n", connHaveDataToSend.outgoing)
+					}
 				}
 			}
 		}
 
-		if connHaveDataToSend == nil || len(fctx.receivedMessages) == len(fctx.sentMessages) {
+		if connHaveDataToSend == nil || len(fctx.receivedMessages) == len(fctx.sentMessages) || fctx.allocatedMessages == fctx.deallocatedMessages {
 			break
 		}
 
-		if !newReceivedOrAckedChunks {
+		if !haveProgress {
 			log.Println("Last progress state:")
 			for tId, t := range fctx.ts {
 				for _, conn := range t.handshakeByPid {
-					srcId := portToTransportId(int(conn.remoteAddr.Port()))
+					srcId := portToTransportId(int(portFromNetPid(conn.remotePid())))
 					log.Printf("progress %d -> %d: %+v", srcId, tId, progressStatuses[tId][srcId])
 				}
 			}
 			log.Printf(
 				"Connection %d -> %d have data (chunks or acks) to send",
 				portToTransportId(int(connHaveDataToSend.incoming.transport.localPid.PortPid&0xffff)),
-				portToTransportId(int(connHaveDataToSend.remoteAddr.Port())),
+				portToTransportId(int(portFromNetPid(connHaveDataToSend.remotePid()))),
 			)
-			panic("But no new received or acked chunks in any connection")
+			log.Printf("%+v\n", connHaveDataToSend.acks)
+			log.Println("Sent messages:")
+			for mm := range fctx.sentMessages {
+				log.Printf("%d -> %d (%d, len=%d)", mm.src, mm.dst, mm.message[0], len(mm.message))
+			}
+			log.Println()
+			log.Printf("Received messages:")
+			for mm := range fctx.receivedMessages {
+				log.Printf("%d -> %d (%d, len=%d)", mm.src, mm.dst, mm.message[0], len(mm.message))
+			}
+			log.Println()
+
+			/*for _, t := range fctx.ts {
+				for _, conn := range t.handshakeByPid {
+					if portFromNetPid(t.localPid) == 22801 && conn.remotePort == 22815 {
+						//log.Printf("CONN: %+v", conn)
+						log.Printf("OUT: %+v", conn.outgoing)
+					}
+					if portFromNetPid(t.localPid) == 22815 && conn.remotePort == 22801 {
+						//log.Printf("CONN: %+v", conn)
+						log.Printf("IN: %+v", conn.incoming)
+						log.Printf("ACKS: %+v", conn.acks)
+					}
+				}
+			}*/
+			log.Println("allocated messages", fctx.allocatedMessages)
+			log.Println("deallocated messages", fctx.deallocatedMessages)
+			panic("But no new received or acked chunks in any connection or increased generation")
+		} else if debugFuzzing {
+			log.Println("Some progress state:")
+			for tId, t := range fctx.ts {
+				for _, conn := range t.handshakeByPid {
+					srcId := portToTransportId(int(portFromNetPid(conn.remotePid())))
+					log.Printf("progress %d -> %d: %+v", srcId, tId, progressStatuses[tId][srcId])
+				}
+			}
+			println()
+			println()
 		}
 	}
 
-	for m := range fctx.sentMessages {
-		if _, exists := fctx.receivedMessages[m]; !exists {
-			log.Panicf(
-				"message from %s to %s sent but not received",
-				transportIdToAddress(m.src),
-				transportIdToAddress(m.dst),
-			)
+	if !withBumpGenerationsAndRestarts {
+		for m := range fctx.sentMessages {
+			if _, exists := fctx.receivedMessages[m]; !exists {
+				log.Println("Sent messages:")
+				for mm := range fctx.sentMessages {
+					log.Printf("%d -> %d (%d, len=%d)", mm.src, mm.dst, mm.message[0], len(mm.message))
+				}
+				log.Println()
+				log.Printf("Received messages:")
+				for mm := range fctx.receivedMessages {
+					log.Printf("%d -> %d (%d, len=%d)", mm.src, mm.dst, mm.message[0], len(mm.message))
+				}
+				log.Println()
+
+				log.Panicf(
+					"message (%d, len=%d) from %s to %s sent but not received",
+					m.message[0],
+					len(m.message),
+					transportIdToAddress(m.src),
+					transportIdToAddress(m.dst),
+				)
+			}
 		}
 	}
 
@@ -447,7 +572,7 @@ func checkInvariants(fctx *FuzzTransportContext) {
 	for _, t := range fctx.ts {
 		t.checkInvariants()
 		for _, conn := range t.handshakeByPid {
-			conn.checkInvariants()
+			conn.checkInvariants(t)
 		}
 	}
 }
@@ -457,29 +582,43 @@ func (t *Transport) checkInvariants() {
 		panic("Transport acquiredMemory > incomingMessagesMemoryLimit")
 	}
 	if t.memoryWaiters.Len() > 0 {
-		if t.acquiredMemory+t.memoryWaiters.Front().requestedMemorySize <= t.incomingMessagesMemoryLimit {
+		if t.acquiredMemory+t.memoryWaiters.Front().incoming.requestedMemorySize <= t.incomingMessagesMemoryLimit {
 			panic("Transport can acquire memory for the first IncomingConnection in Transport queue")
 		}
 	}
-	conns := make(map[*IncomingConnection]int)
+
+	realMemoryWaiters := make(map[*Connection]struct{})
 	for i := 0; i < t.memoryWaiters.Len(); i++ {
-		conn := t.memoryWaiters.Index(i)
-		if j, exists := conns[conn]; exists {
+		memoryWaiter := t.memoryWaiters.Index(i)
+		if j, exists := realMemoryWaiters[memoryWaiter]; exists {
 			panic(fmt.Sprintf("IncomingConnection attends twice in Transport queue (indices %d and %d)", j, i))
 		}
-		if conn.transport != t {
-			panic(fmt.Sprintf("IncomingConnection in Transport queue (%d index) has different transport pointer", i))
-		}
-		if !conn.inMemoryWaitersQueue {
+		realMemoryWaiters[memoryWaiter] = struct{}{}
+		if !memoryWaiter.incoming.inMemoryWaitersQueue {
 			panic(fmt.Sprintf("IncomingConnection is in Transport queue (%d index), but has no flag inMemoryWaitersQueue", i))
+		}
+	}
+
+	for _, conn := range t.handshakeByPid {
+		if conn.incoming.inMemoryWaitersQueue {
+			if _, exists := realMemoryWaiters[conn]; !exists {
+				panic("IncomingConnection has flag inMemoryWaitersQueue, but doesn't exists in memory waiters queue")
+			}
 		}
 	}
 }
 
-func (c *Connection) checkInvariants() {
+func (c *Connection) checkInvariants(t *Transport) {
 	c.incoming.checkInvariants()
 	c.outgoing.checkInvariants()
 	c.acks.checkInvariantsFuzz()
+
+	if c.outgoing.nonTimeoutedSeqNum < c.outgoing.nextSeqNo && !(c.outgoing.haveChunksToSendNow(t) || c.GetFlag(inResendQueueFlag)) {
+		log.Printf("conn %s -> %s has not acked outgoing chunk from message %d, len=%d", c.LocalAddr(), c.RemoteAddr(), (*c.outgoing.window.Front().V.message.payload)[0], len(*c.outgoing.window.Front().V.message.payload))
+		log.Println("BUT (c.outgoing.haveChunksToSendNow(t) || c.GetFlag(inResendQueueFlag)) == false")
+		log.Printf("%+v", c)
+		panic("conn have not-acked chunks, but will not send it")
+	}
 
 	// all acked seqNums in c.acks must be in c.incoming
 	if c.acks.ackPrefix > c.incoming.ackPrefix {
@@ -492,9 +631,8 @@ func (c *Connection) checkInvariants() {
 				continue
 			}
 
-			index := int(ackNum - c.incoming.ackPrefix)
-			chunks := c.incoming.windowChunks
-			if index < chunks.Len() && chunks.Index(index).received {
+			chunk, _ := c.incoming.windowChunks.Get(ackNum)
+			if chunk.received() {
 				continue
 			}
 			log.Panicf(
@@ -523,32 +661,14 @@ func (o *OutgoingConnection) checkInvariants() {
 }
 
 func (c *IncomingConnection) checkInvariants() {
-	if c.windowChunks.Len() > 0 && c.windowChunks.Front().received {
-		panic("IncomingConnection first chunk in window is received")
-	}
-	if c.windowChunks.Len() > 1 && !c.windowChunks.Index(c.windowChunks.Len()-1).received {
-		panic("IncomingConnection last chunk in window (with length > 1) is not received")
-	}
-
-	lastMessageOffset := c.firstMessageOffset
-
-	for i := 0; i < c.windowChunks.Len(); i++ {
-		chunk := c.windowChunks.Index(i)
-		if chunk.message != nil {
-			if chunk.received {
-				lastMessageOffset = max(chunk.chunkOffset+int64(len(chunk.payload))+int64(chunk.nextLength), lastMessageOffset)
-			} else {
-				// This code is for the case when we don't have any received chunk of this message
-				// and thus don't know chunk.chunkOffset and chunk.nextLength
-				if chunk.prevParts >= uint32(i) {
-					// this message is first in window
-					lastMessageOffset = c.firstMessageOffset + int64(len(*chunk.message.data))
-				}
-			}
+	if !c.windowChunks.Empty() {
+		ch, _ := c.windowChunks.Get(c.ackPrefix)
+		if ch.received() {
+			panic("IncomingConnection first chunk in window is received")
 		}
 	}
-	if lastMessageOffset-c.firstMessageOffset != c.messagesTotalSize {
-		panic("realTotalMessagesSize != c.messagesTotalSize")
+	if c.windowChunks.LenMoreThan1() && !c.windowChunks.Back().V.received() {
+		panic("IncomingConnection last chunk in window (with length > 1) is not received")
 	}
 }
 
@@ -569,7 +689,7 @@ func doNewMessage(fctx *FuzzTransportContext, transportId int, dstId int, messag
 	}
 
 	conn, err := fctx.ts[transportId].ConnectTo(
-		netip.MustParseAddrPort(fctx.ts[dstId].socket.LocalAddr().(*net.UDPAddr).String()),
+		netip.MustParseAddrPort(fctx.ts[dstId].socketAddr.String()),
 		// note: for incoming message handler source is dstId and destination is our transportId
 		receiveMessageHandler(fctx, dstId, transportId),
 		testStreamLikeIncoming,
@@ -595,25 +715,30 @@ func doGoWriteStep(fctx *FuzzTransportContext, transportId int) {
 	defer checkInvariants(fctx)
 
 	fctx.ts[transportId].writeMu.Lock()
-	datagram, conn, newResendTimer, _ := fctx.ts[transportId].goWriteStep()
+	datagram, conn, needResendTimer, needRegenerateTimer, _, _ := fctx.ts[transportId].goWriteStep()
 	if datagram != nil {
-		if conn.outgoing.haveChunksToSendNow() {
+		if conn.outgoing.haveChunksToSendNow(fctx.ts[transportId]) {
 			fctx.ts[transportId].addConnectionToSendQueueLocked(conn)
 		}
 
 		// datagram send
-		dstId := addressToTransportId(conn.remoteAddr.String())
+		dstId := addressToTransportId(conn.remoteAddr().String())
 		datagramCopy := make([]byte, len(datagram))
 		copy(datagramCopy, datagram)
 		fctx.network[dstId] = append(fctx.network[dstId], TestDatagram{
 			datagram: datagramCopy,
-			addr:     netip.MustParseAddrPort(fctx.ts[transportId].socket.LocalAddr().(*net.UDPAddr).String()),
+			addr:     netip.MustParseAddrPort(fctx.ts[transportId].socketAddr.String()),
 		})
 
-		if newResendTimer {
+		if needResendTimer {
 			// resend timer activation
-			fctx.ts[transportId].resendTimers.PushBack(conn)
-			conn.inResendQueue = true
+			fctx.ts[transportId].resendTimers.Add(conn)
+			conn.SetFlag(inResendQueueFlag, true)
+		}
+		if needRegenerateTimer {
+			// regenerate timer activation
+			fctx.ts[transportId].regenerateTimers.PushBack(conn)
+			conn.SetFlag(inRegenerateQueue, true)
 		}
 	} else {
 		fctx.ts[transportId].writeMu.Unlock()
@@ -623,6 +748,31 @@ func doGoWriteStep(fctx *FuzzTransportContext, transportId int) {
 // transport writeMu must be unlocked
 func doGoReadStep(fctx *FuzzTransportContext, transportId int, dgrmId int) {
 	defer checkInvariants(fctx)
+
+	t := fctx.ts[transportId]
+	for t.newGoReadRegenerates.Len() > 0 {
+		conn := t.newGoReadRegenerates.PopFront()
+		if conn.GetFlag(closedFlag) {
+			continue
+		}
+		if conn.GetFlag(stopRegenerateTimerFlag) {
+			conn.SetFlag(stopRegenerateTimerFlag, false)
+			continue
+		}
+
+		conn.SetFlag(closedFlag, true)
+		conn.resetLockedState()
+		t.closedConnections.PushBack(conn)
+
+		t.newGoReadRegeneratesLocal.PushBack(conn)
+	}
+	for t.newGoReadRegeneratesLocal.Len() > 0 {
+		conn := t.newGoReadRegeneratesLocal.PopFront()
+		if t.debugUdpRPC >= 1 {
+			log.Printf("bump generation for %s", conn.remoteAddr().String())
+		}
+		t.goReadOnRegenerate(conn)
+	}
 
 	l := len(fctx.network[transportId])
 	if l == 0 {
@@ -641,28 +791,58 @@ func doGoReadStep(fctx *FuzzTransportContext, transportId int, dgrmId int) {
 		panic(err)
 	}
 
-	if closed {
-		conn.closed = true
-	}
+	if conn != nil {
+		if closed {
+			remoteAddr := conn.remoteAddr()
+			connID := conn.id
 
-	goReadHandleEncHdr(fctx, transportId, conn, enc)
+			if conn.id.Hash != 0 {
+				delete(t.connectionById, conn.id)
+				t.stats.ConnectionsMapSize.Store(int64(len(t.connectionById)))
+			}
 
-	// send enc header with acquired chunks
-	if len(fctx.ts[transportId].acquiredMemoryEvents) > 0 {
-		for _, e := range fctx.ts[transportId].acquiredMemoryEvents {
-			var encHdrAcquired tlnetUdpPacket.EncHeader
-			encHdrAcquired.SetPacketNum(e.seqNum)
+			handshakeCid := conn.id
+			handshakeCid.Hash = 0
+			delete(t.handshakeByPid, handshakeCid)
+			t.closeHandler(conn)
 
-			goReadHandleEncHdr(fctx, transportId, e.conn, encHdrAcquired)
+			conn.SetFlag(closedFlag, true)
+			conn.resetLockedState()
+			t.closedConnections.PushBack(conn)
+			conn.resetGoReadUnlockedState()
+
+			if t.debugUdpRPC >= 1 {
+				log.Printf("closed connection %s (%+v)", remoteAddr, connID)
+			}
+
+			// need to process this datagram again, to create new connection
+			// TODO remove this kostil sraniy and create new connection directly in place, where we closed this one !!!!!!
+			// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+			// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+			conn, closed, err = t.processIncomingDatagram(fuzzDatagram.addr, fctx.ts[transportId].localPid.Ip, fuzzDatagram.datagram, &enc, &resendReq)
+			if err != nil {
+				panic(err)
+			}
+			if closed {
+				log.Panicf("unreachable: connection %s closed again. It is bug in udp rpc code. Send this log to https://vk.com/udp2", conn.remoteAddr().String())
+			}
+			if conn == nil {
+				return
+			}
 		}
-		fctx.ts[transportId].acquiredMemoryEvents = fctx.ts[transportId].acquiredMemoryEvents[:0]
-	}
 
-	if len(resendReq.Ranges) > 0 {
-		fctx.ts[transportId].newResendRequestsRcvs.PushBack(ConnResendRequest{
-			conn: conn,
-			req:  resendReq,
-		})
+		if conn.GetFlag(inRegenerateQueue) {
+			conn.SetFlag(stopRegenerateTimerFlag, true)
+		}
+
+		goReadHandleEncHdr(fctx, transportId, conn, enc)
+
+		if len(resendReq.Ranges) > 0 {
+			fctx.ts[transportId].newResendRequestsRcvs.PushBack(ConnResendRequest{
+				conn: conn,
+				req:  resendReq,
+			})
+		}
 	}
 }
 
@@ -674,16 +854,10 @@ func goReadHandleEncHdr(fctx *FuzzTransportContext, transportId int, conn *Conne
 	})
 
 	if enc.IsSetPacketNum() || enc.IsSetPacketsFrom() {
-		if !conn.inAckQueue && !conn.inSendQueue {
+		if !conn.GetFlag(inAckQueueFlag) && !conn.GetFlag(inSendQueueFlag) {
 			// start ack timer
 			fctx.ts[transportId].ackTimers.PushBack(conn)
-			conn.inAckQueue = true
-		}
-
-		// start resend request timer if have holes
-		if conn.incoming.haveHoles() && !conn.inResendRequestQueue {
-			fctx.ts[transportId].resendRequestTimers.PushBack(conn)
-			conn.inResendRequestQueue = true
+			conn.SetFlag(inAckQueueFlag, true)
 		}
 	}
 }
@@ -704,7 +878,7 @@ func doResendTimerBurn(fctx *FuzzTransportContext, transportId int) {
 	if fctx.ts[transportId].resendTimers.Len() == 0 {
 		return
 	}
-	connResendTimeout := fctx.ts[transportId].resendTimers.PopFront()
+	connResendTimeout := fctx.ts[transportId].resendTimers.ExtractMin()
 	fctx.ts[transportId].newResends.PushBack(connResendTimeout)
 }
 
@@ -715,7 +889,7 @@ func doAckTimerBurn(fctx *FuzzTransportContext, transportId int) {
 		return
 	}
 	conn := fctx.ts[transportId].ackTimers.PopFront()
-	conn.inAckQueue = false
+	conn.SetFlag(inAckQueueFlag, false)
 	fctx.ts[transportId].newAckSnds.PushBack(conn)
 }
 
@@ -725,9 +899,20 @@ func doResendRequestTimerBurn(fctx *FuzzTransportContext, transportId int) {
 	if fctx.ts[transportId].resendRequestTimers.Len() == 0 {
 		return
 	}
-	conn := fctx.ts[transportId].resendRequestTimers.PopFront()
-	conn.inResendRequestQueue = false
+	conn := fctx.ts[transportId].resendRequestTimers.ExtractMin()
+	conn.SetFlag(inResendRequestQueueFlag, false)
 	fctx.ts[transportId].newResendRequestSnds.PushBack(conn)
+}
+
+func doRegenerateTimerBurn(fctx *FuzzTransportContext, transportId int) {
+	defer checkInvariants(fctx)
+
+	if fctx.ts[transportId].regenerateTimers.Len() == 0 {
+		return
+	}
+	conn := fctx.ts[transportId].regenerateTimers.PopFront()
+	conn.SetFlag(inRegenerateQueue, false)
+	fctx.ts[transportId].newGoReadRegenerates.PushBack(conn)
 }
 
 // util functions to extract fuzzing arguments
@@ -738,7 +923,7 @@ func fuzzVerbToTransportId(b byte) int {
 
 // also used as timerId
 func fuzzVerbToDstId(b byte) int {
-	return int(b) >> transportsDegree
+	return int(b) >> 4
 }
 
 func fuzzVerbToMessageSize(b byte) int {

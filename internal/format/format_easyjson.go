@@ -30,26 +30,55 @@ func easyjson72863a49DecodeGithubComVKCOMStatshouseInternalFormat(in *jlexer.Lex
 	for !in.IsDelim('}') {
 		key := in.UnsafeFieldName(false)
 		in.WantColon()
-		if in.IsNull() {
-			in.Skip()
-			in.WantComma()
-			continue
-		}
 		switch key {
 		case "namespace_id":
-			out.ID = int32(in.Int32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ID = int32(in.Int32())
+			}
 		case "name":
-			out.Name = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Name = string(in.String())
+			}
 		case "version":
-			out.Version = int64(in.Int64())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Version = int64(in.Int64())
+			}
 		case "update_time":
-			out.UpdateTime = uint32(in.Uint32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.UpdateTime = uint32(in.Uint32())
+			}
 		case "delete_time":
-			out.DeleteTime = uint32(in.Uint32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.DeleteTime = uint32(in.Uint32())
+			}
 		case "weight":
-			out.Weight = float64(in.Float64())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Weight = float64(in.Float64())
+			}
 		case "disable":
-			out.Disable = bool(in.Bool())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Disable = bool(in.Bool())
+			}
+		case "shard_nums":
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ShardKeys = string(in.String())
+			}
 		default:
 			in.SkipRecursive()
 		}
@@ -64,40 +93,76 @@ func easyjson72863a49EncodeGithubComVKCOMStatshouseInternalFormat(out *jwriter.W
 	out.RawByte('{')
 	first := true
 	_ = first
-	{
+	if in.ID != 0 {
 		const prefix string = ",\"namespace_id\":"
+		first = false
 		out.RawString(prefix[1:])
 		out.Int32(int32(in.ID))
 	}
-	{
+	if in.Name != "" {
 		const prefix string = ",\"name\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.String(string(in.Name))
 	}
-	{
+	if in.Version != 0 {
 		const prefix string = ",\"version\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Int64(int64(in.Version))
 	}
-	{
+	if in.UpdateTime != 0 {
 		const prefix string = ",\"update_time\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Uint32(uint32(in.UpdateTime))
 	}
-	{
+	if in.DeleteTime != 0 {
 		const prefix string = ",\"delete_time\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Uint32(uint32(in.DeleteTime))
 	}
-	{
+	if in.Weight != 0 {
 		const prefix string = ",\"weight\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Float64(float64(in.Weight))
 	}
 	{
 		const prefix string = ",\"disable\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Bool(bool(in.Disable))
+	}
+	if in.ShardKeys != "" {
+		const prefix string = ",\"shard_nums\":"
+		out.RawString(prefix)
+		out.String(string(in.ShardKeys))
 	}
 	out.RawByte('}')
 }
@@ -124,26 +189,55 @@ func easyjson72863a49DecodeGithubComVKCOMStatshouseInternalFormat1(in *jlexer.Le
 	for !in.IsDelim('}') {
 		key := in.UnsafeFieldName(false)
 		in.WantColon()
-		if in.IsNull() {
-			in.Skip()
-			in.WantComma()
-			continue
-		}
 		switch key {
 		case "group_id":
-			out.ID = int32(in.Int32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ID = int32(in.Int32())
+			}
 		case "namespace_id":
-			out.NamespaceID = int32(in.Int32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.NamespaceID = int32(in.Int32())
+			}
 		case "name":
-			out.Name = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Name = string(in.String())
+			}
 		case "version":
-			out.Version = int64(in.Int64())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Version = int64(in.Int64())
+			}
 		case "update_time":
-			out.UpdateTime = uint32(in.Uint32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.UpdateTime = uint32(in.Uint32())
+			}
 		case "weight":
-			out.Weight = float64(in.Float64())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Weight = float64(in.Float64())
+			}
 		case "disable":
-			out.Disable = bool(in.Bool())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Disable = bool(in.Bool())
+			}
+		case "shard_keys":
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ShardKeys = string(in.String())
+			}
 		default:
 			in.SkipRecursive()
 		}
@@ -158,40 +252,81 @@ func easyjson72863a49EncodeGithubComVKCOMStatshouseInternalFormat1(out *jwriter.
 	out.RawByte('{')
 	first := true
 	_ = first
-	{
+	if in.ID != 0 {
 		const prefix string = ",\"group_id\":"
+		first = false
 		out.RawString(prefix[1:])
 		out.Int32(int32(in.ID))
 	}
-	{
+	if in.NamespaceID != 0 {
 		const prefix string = ",\"namespace_id\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Int32(int32(in.NamespaceID))
 	}
-	{
+	if in.Name != "" {
 		const prefix string = ",\"name\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.String(string(in.Name))
 	}
-	{
+	if in.Version != 0 {
 		const prefix string = ",\"version\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Int64(int64(in.Version))
 	}
-	{
+	if in.UpdateTime != 0 {
 		const prefix string = ",\"update_time\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Uint32(uint32(in.UpdateTime))
 	}
 	if in.Weight != 0 {
 		const prefix string = ",\"weight\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Float64(float64(in.Weight))
 	}
 	if in.Disable {
 		const prefix string = ",\"disable\":"
-		out.RawString(prefix)
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
 		out.Bool(bool(in.Disable))
+	}
+	if in.ShardKeys != "" {
+		const prefix string = ",\"shard_keys\":"
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
+		out.String(string(in.ShardKeys))
 	}
 	out.RawByte('}')
 }
@@ -218,22 +353,37 @@ func easyjson72863a49DecodeGithubComVKCOMStatshouseInternalFormat2(in *jlexer.Le
 	for !in.IsDelim('}') {
 		key := in.UnsafeFieldName(false)
 		in.WantColon()
-		if in.IsNull() {
-			in.Skip()
-			in.WantComma()
-			continue
-		}
 		switch key {
 		case "metric_id":
-			out.MetricID = int32(in.Int32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.MetricID = int32(in.Int32())
+			}
 		case "namespace_id":
-			out.NamespaceID = int32(in.Int32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.NamespaceID = int32(in.Int32())
+			}
 		case "name":
-			out.Name = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Name = string(in.String())
+			}
 		case "version":
-			out.Version = int64(in.Int64())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Version = int64(in.Int64())
+			}
 		case "description":
-			out.Description = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Description = string(in.String())
+			}
 		case "tags":
 			if in.IsNull() {
 				in.Skip()
@@ -278,31 +428,83 @@ func easyjson72863a49DecodeGithubComVKCOMStatshouseInternalFormat2(in *jlexer.Le
 				in.Delim('}')
 			}
 		case "disable":
-			out.Disable = bool(in.Bool())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Disable = bool(in.Bool())
+			}
 		case "kind":
-			out.Kind = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Kind = string(in.String())
+			}
 		case "weight":
-			out.Weight = float64(in.Float64())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Weight = float64(in.Float64())
+			}
 		case "resolution":
-			out.Resolution = int(in.Int())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Resolution = int(in.Int())
+			}
 		case "string_top_name":
-			out.StringTopName = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.StringTopName = string(in.String())
+			}
 		case "string_top_description":
-			out.StringTopDescription = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.StringTopDescription = string(in.String())
+			}
 		case "pre_key_tag_id":
-			out.PreKeyTagID = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.PreKeyTagID = string(in.String())
+			}
 		case "pre_key_from":
-			out.PreKeyFrom = uint32(in.Uint32())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.PreKeyFrom = uint32(in.Uint32())
+			}
 		case "skip_max_host":
-			out.SkipMaxHost = bool(in.Bool())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.SkipMaxHost = bool(in.Bool())
+			}
 		case "skip_min_host":
-			out.SkipMinHost = bool(in.Bool())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.SkipMinHost = bool(in.Bool())
+			}
 		case "skip_sum_square":
-			out.SkipSumSquare = bool(in.Bool())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.SkipSumSquare = bool(in.Bool())
+			}
 		case "pre_key_only":
-			out.PreKeyOnly = bool(in.Bool())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.PreKeyOnly = bool(in.Bool())
+			}
 		case "metric_type":
-			out.MetricType = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.MetricType = string(in.String())
+			}
 		case "fair_key_tag_ids":
 			if in.IsNull() {
 				in.Skip()
@@ -320,18 +522,46 @@ func easyjson72863a49DecodeGithubComVKCOMStatshouseInternalFormat2(in *jlexer.Le
 				}
 				for !in.IsDelim(']') {
 					var v3 string
-					v3 = string(in.String())
+					if in.IsNull() {
+						in.Skip()
+					} else {
+						v3 = string(in.String())
+					}
 					out.FairKeyTagIDs = append(out.FairKeyTagIDs, v3)
 					in.WantComma()
 				}
 				in.Delim(']')
 			}
 		case "shard_strategy":
-			out.ShardStrategy = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ShardStrategy = string(in.String())
+			}
 		case "shard_num":
-			out.ShardNum = uint32(in.Uint32())
-		case "pipeline_version":
-			out.PipelineVersion = uint8(in.Uint8())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ShardNum = uint32(in.Uint32())
+			}
+		case "shard":
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ShardFixedKey = uint32(in.Uint32())
+			}
+		case "shard2":
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ShardFixedKey2 = uint32(in.Uint32())
+			}
+		case "shard2_timestamp":
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.ShardFixedKey2Timestamp = uint32(in.Uint32())
+			}
 		default:
 			in.SkipRecursive()
 		}
@@ -604,15 +834,35 @@ func easyjson72863a49EncodeGithubComVKCOMStatshouseInternalFormat2(out *jwriter.
 		}
 		out.Uint32(uint32(in.ShardNum))
 	}
-	if in.PipelineVersion != 0 {
-		const prefix string = ",\"pipeline_version\":"
+	if in.ShardFixedKey != 0 {
+		const prefix string = ",\"shard\":"
 		if first {
 			first = false
 			out.RawString(prefix[1:])
 		} else {
 			out.RawString(prefix)
 		}
-		out.Uint8(uint8(in.PipelineVersion))
+		out.Uint32(uint32(in.ShardFixedKey))
+	}
+	if in.ShardFixedKey2 != 0 {
+		const prefix string = ",\"shard2\":"
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
+		out.Uint32(uint32(in.ShardFixedKey2))
+	}
+	if in.ShardFixedKey2Timestamp != 0 {
+		const prefix string = ",\"shard2_timestamp\":"
+		if first {
+			first = false
+			out.RawString(prefix[1:])
+		} else {
+			out.RawString(prefix)
+		}
+		out.Uint32(uint32(in.ShardFixedKey2Timestamp))
 	}
 	out.RawByte('}')
 }
@@ -639,18 +889,25 @@ func easyjson72863a49DecodeGithubComVKCOMStatshouseInternalFormat3(in *jlexer.Le
 	for !in.IsDelim('}') {
 		key := in.UnsafeFieldName(false)
 		in.WantColon()
-		if in.IsNull() {
-			in.Skip()
-			in.WantComma()
-			continue
-		}
 		switch key {
 		case "name":
-			out.Name = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Name = string(in.String())
+			}
 		case "description":
-			out.Description = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.Description = string(in.String())
+			}
 		case "raw_kind":
-			out.RawKind = string(in.String())
+			if in.IsNull() {
+				in.Skip()
+			} else {
+				out.RawKind = string(in.String())
+			}
 		case "value_comments":
 			if in.IsNull() {
 				in.Skip()
@@ -665,7 +922,11 @@ func easyjson72863a49DecodeGithubComVKCOMStatshouseInternalFormat3(in *jlexer.Le
 					key := string(in.String())
 					in.WantColon()
 					var v9 string
-					v9 = string(in.String())
+					if in.IsNull() {
+						in.Skip()
+					} else {
+						v9 = string(in.String())
+					}
 					(out.ValueComments)[key] = v9
 					in.WantComma()
 				}

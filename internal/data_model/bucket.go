@@ -7,7 +7,6 @@
 package data_model
 
 import (
-	"bytes"
 	"encoding/binary"
 	"sort"
 	"unsafe"
@@ -26,11 +25,11 @@ const oldTagNumber = 16
 type (
 	TagUnion struct {
 		S string
-		I int32
+		I int32 // should always have priority over S
 	}
-	TagUnionBytes struct {
+	TagUnionBytes struct { // TODO - deprecate and remove
 		S []byte
-		I int32
+		I int32 // should always have priority over S
 	}
 
 	// Time Series Key, will be optimized to single human-readable string
@@ -43,15 +42,15 @@ type (
 
 	ItemCounter struct {
 		counter           float64
-		MaxCounterHostTag TagUnionBytes // Example hostname randomized according to distribution
+		MaxCounterHostTag TagUnion // Example hostname randomized according to distribution
 	}
 
 	ItemValue struct {
 		ItemCounter
 		ValueMin, ValueMax, ValueSum float64 // Aggregates of Value
 		ValueSumSquare               float64 // Aggregates of Value
-		MinHostTag                   TagUnionBytes
-		MaxHostTag                   TagUnionBytes
+		MinHostTag                   TagUnion
+		MaxHostTag                   TagUnion
 		ValueSet                     bool // first value is assigned to Min&Max
 	}
 
@@ -69,7 +68,6 @@ type (
 		sampleFactorLog2 int
 		SF               float64 // set when Marshalling/Sampling
 		MetricMeta       *format.MetricMetaValue
-		WeightMultiplier int // Temporary weight boost if all metric rows is written to single shard. Can be 1 or NumShards.
 	}
 
 	MetricsBucket struct {
@@ -82,13 +80,39 @@ type (
 		MultiItems map[string]*MultiItem // string is unsafe and points to part of the keysBuffer
 		keysBuffer []byte
 	}
+
+	AgentEnvRouteArch struct {
+		AgentEnv  int32
+		Route     int32
+		BuildArch int32
+	}
+
+	// TODO - better place?
+	CreateMappingExtra struct {
+		Create    bool
+		Metric    string // set by old conveyor, TODO - remove?
+		MetricID  int32  // set by new conveyor
+		TagIDKey  int32
+		ClientEnv int32
+		Aera      AgentEnvRouteArch
+		HostTag   TagUnion
+	}
 )
 
-func (t TagUnionBytes) Equal(rhs TagUnionBytes) bool {
-	if t.I != 0 || rhs.I != 0 {
-		return t.I == rhs.I
+func (t *TagUnion) Normalize() {
+	if t.I != 0 {
+		t.S = ""
 	}
-	return bytes.Equal(t.S, rhs.S)
+}
+
+func (t *TagUnionBytes) Normalize() {
+	if t.I != 0 {
+		t.S = nil
+	}
+}
+
+func (t TagUnion) Empty() bool {
+	return t.I == 0 && len(t.S) == 0
 }
 
 func (t TagUnionBytes) Empty() bool {
@@ -97,12 +121,19 @@ func (t TagUnionBytes) Empty() bool {
 
 func (s *ItemCounter) Count() float64 { return s.counter }
 
-func (k *Key) SetSTag(i int, s string) {
-	k.STags[i] = s
+func (k *Key) SetTagUnion(i int, tag TagUnion) {
+	if tag.I != 0 {
+		k.Tags[i] = tag.I
+	} else {
+		k.STags[i] = tag.S
+	}
 }
 
-func (k *Key) GetSTag(i int) string {
-	return k.STags[i]
+func (k *Key) RemoveStringTopTag() TagUnion {
+	result := TagUnion{S: k.STags[format.StringTopTagIndexV3], I: k.Tags[format.StringTopTagIndexV3]}
+	k.STags[format.StringTopTagIndexV3] = ""
+	k.Tags[format.StringTopTagIndexV3] = 0
+	return result
 }
 
 func (k *Key) MarshalAppend(buffer []byte) (updatedBuffer []byte, newKey []byte) {
@@ -154,13 +185,13 @@ func (k *Key) XXHash(scratch []byte) ([]byte, uint64) {
 	return scratch, xxh3.Hash(scratch[4:]) // skip timestamp in first 4 bytes
 }
 
-func SimpleItemValue(value float64, count float64, hostTag TagUnionBytes) ItemValue {
+func SimpleItemValue(value float64, count float64, hostTag TagUnion) ItemValue {
 	item := SimpleItemCounter(count, hostTag)
 	item.addOnlyValue(value, count, hostTag)
 	return item
 }
 
-func SimpleItemCounter(count float64, hostTag TagUnionBytes) ItemValue {
+func SimpleItemCounter(count float64, hostTag TagUnion) ItemValue {
 	return ItemValue{ItemCounter: ItemCounter{counter: count, MaxCounterHostTag: hostTag}}
 }
 
@@ -168,7 +199,7 @@ func (s *ItemValue) AddValue(value float64) {
 	s.AddValueCounter(value, 1)
 }
 
-func (s *ItemValue) addOnlyValue(value float64, count float64, hostTag TagUnionBytes) {
+func (s *ItemValue) addOnlyValue(value float64, count float64, hostTag TagUnion) {
 	s.ValueSum += value * count
 	s.ValueSumSquare += value * value * count
 
@@ -185,15 +216,15 @@ func (s *ItemValue) addOnlyValue(value float64, count float64, hostTag TagUnionB
 
 func (s *ItemValue) AddValueCounter(value float64, count float64) {
 	s.AddCounter(count)
-	s.addOnlyValue(value, count, TagUnionBytes{})
+	s.addOnlyValue(value, count, TagUnion{})
 }
 
-func (s *ItemValue) AddValueCounterHost(rng *rand.Rand, value float64, count float64, hostTag TagUnionBytes) {
+func (s *ItemValue) AddValueCounterHost(rng *rand.Rand, value float64, count float64, hostTag TagUnion) {
 	s.AddCounterHost(rng, count, hostTag)
 	s.addOnlyValue(value, count, hostTag)
 }
 
-func (s *ItemValue) AddValueArrayHost(rng *rand.Rand, values []float64, mult float64, hostTag TagUnionBytes) {
+func (s *ItemValue) AddValueArrayHost(rng *rand.Rand, values []float64, mult float64, hostTag TagUnion) {
 	s.AddCounterHost(rng, mult*float64(len(values)), hostTag)
 	for _, value := range values {
 		s.addOnlyValue(value, mult, hostTag)
@@ -233,7 +264,7 @@ func (b *MetricsBucket) Empty() bool {
 	return len(b.MultiItems) == 0
 }
 
-func (b *MultiItemMap) GetOrCreateMultiItem(key *Key, metricInfo *format.MetricMetaValue, weightMul int, keyBytes []byte) (item *MultiItem, created bool) {
+func (b *MultiItemMap) GetOrCreateMultiItem(key *Key, metricInfo *format.MetricMetaValue, keyBytes []byte) (item *MultiItem, created bool) {
 	//if key.Timestamp == 0 { // TODO - remove check before merge to master
 	//	fmt.Printf("key: %v\n", *key)
 	//	panic("timestamp must be always set at this point of conveyor")
@@ -261,7 +292,7 @@ func (b *MultiItemMap) GetOrCreateMultiItem(key *Key, metricInfo *format.MetricM
 		b.keysBuffer = b.keysBuffer[:wasLen]
 		return
 	}
-	item = &MultiItem{Key: *key, SF: 1, MetricMeta: metricInfo, WeightMultiplier: weightMul}
+	item = &MultiItem{Key: *key, SF: 1, MetricMeta: metricInfo}
 	b.MultiItems[keyString] = item
 	return
 }
@@ -279,9 +310,10 @@ func (b *MultiItemMap) DeleteMultiItem(key *Key) {
 }
 
 func (s *MultiItem) MapStringTop(rng *rand.Rand, capacity int, tag TagUnion, count float64) *MultiValue {
-	if len(tag.S) == 0 && tag.I == 0 {
+	if tag.Empty() {
 		return &s.Tail
 	}
+	tag.Normalize() // important here
 	if s.Top == nil {
 		s.Top = map[TagUnion]*MultiValue{}
 	}
@@ -305,13 +337,15 @@ func (s *MultiItem) MapStringTop(rng *rand.Rand, capacity int, tag TagUnion, cou
 }
 
 func (s *MultiItem) MapStringTopBytes(rng *rand.Rand, capacity int, tag TagUnionBytes, count float64) *MultiValue {
-	if len(tag.S) == 0 && tag.I == 0 {
+	if tag.Empty() {
 		return &s.Tail
 	}
+	tag.Normalize() // important here
 	if s.Top == nil {
 		s.Top = map[TagUnion]*MultiValue{}
 	}
-	c, ok := s.Top[TagUnion{S: string(tag.S), I: tag.I}]
+	unsafeTagS := unsafe.String(unsafe.SliceData(tag.S), len(tag.S)) // avoid allocation for existing tag
+	c, ok := s.Top[TagUnion{S: unsafeTagS, I: tag.I}]
 	if ok {
 		return c
 	}
@@ -421,22 +455,22 @@ func (s *MultiValue) Empty() bool {
 }
 
 func (s *MultiValue) AddCounter(rng *rand.Rand, count float64) {
-	s.Value.AddCounterHost(rng, count, TagUnionBytes{})
+	s.Value.AddCounterHost(rng, count, TagUnion{})
 }
 
-func (s *MultiValue) AddCounterHost(rng *rand.Rand, count float64, hostTag TagUnionBytes) {
+func (s *MultiValue) AddCounterHost(rng *rand.Rand, count float64, hostTag TagUnion) {
 	s.Value.AddCounterHost(rng, count, hostTag)
 }
 
 func (s *MultiValue) AddValueCounter(rng *rand.Rand, value float64, count float64) {
-	s.Value.AddValueCounterHost(rng, value, count, TagUnionBytes{})
+	s.Value.AddValueCounterHost(rng, value, count, TagUnion{})
 }
 
-func (s *MultiValue) AddValueCounterHost(rng *rand.Rand, value float64, count float64, hostTag TagUnionBytes) {
+func (s *MultiValue) AddValueCounterHost(rng *rand.Rand, value float64, count float64, hostTag TagUnion) {
 	s.Value.AddValueCounterHost(rng, value, count, hostTag)
 }
 
-func (s *MultiValue) AddValueCounterHostPercentile(rng *rand.Rand, value float64, count float64, hostTag TagUnionBytes, compression float64) {
+func (s *MultiValue) AddValueCounterHostPercentile(rng *rand.Rand, value float64, count float64, hostTag TagUnion, compression float64) {
 	wasValue, wasCount, wasSet := s.Value.ValueMax, s.Value.counter, s.Value.ValueSet
 	s.Value.AddValueCounterHost(rng, value, count, hostTag)
 	if s.Value.ValueMin == s.Value.ValueMax {
@@ -452,7 +486,7 @@ func (s *MultiValue) AddValueCounterHostPercentile(rng *rand.Rand, value float64
 }
 
 // for tests between existing and new percentiles transfer
-func (s *MultiValue) AddValueCounterHostPercentileLegacy(rng *rand.Rand, value float64, count float64, hostTag TagUnionBytes, compression float64) {
+func (s *MultiValue) AddValueCounterHostPercentileLegacy(rng *rand.Rand, value float64, count float64, hostTag TagUnion, compression float64) {
 	s.Value.AddValueCounterHost(rng, value, count, hostTag)
 	if s.ValueTDigest == nil {
 		s.ValueTDigest = tdigest.NewWithCompression(compression)
@@ -460,7 +494,7 @@ func (s *MultiValue) AddValueCounterHostPercentileLegacy(rng *rand.Rand, value f
 	s.ValueTDigest.Add(value, count)
 }
 
-func (s *MultiValue) ApplyValues(rng *rand.Rand, histogram [][2]float64, values []float64, count float64, totalCount float64, hostTag TagUnionBytes, compression float64, hasPercentiles bool) {
+func (s *MultiValue) ApplyValues(rng *rand.Rand, histogram [][2]float64, values []float64, count float64, totalCount float64, hostTag TagUnion, compression float64, hasPercentiles bool) {
 	if totalCount <= 0 { // should be never, but as we divide by it, we keep check here
 		return
 	}
@@ -513,7 +547,7 @@ func (s *MultiValue) ApplyValues(rng *rand.Rand, histogram [][2]float64, values 
 }
 
 // for tests between existing and new percentiles transfer
-func (s *MultiValue) ApplyValuesLegacy(rng *rand.Rand, histogram [][2]float64, values []float64, count float64, totalCount float64, hostTag TagUnionBytes, compression float64, hasPercentiles bool) {
+func (s *MultiValue) ApplyValuesLegacy(rng *rand.Rand, histogram [][2]float64, values []float64, count float64, totalCount float64, hostTag TagUnion, compression float64, hasPercentiles bool) {
 	if totalCount <= 0 { // should be never, but as we divide by it, we keep check here
 		return
 	}
@@ -552,7 +586,7 @@ func (s *MultiValue) ApplyValuesLegacy(rng *rand.Rand, histogram [][2]float64, v
 	s.Value.Merge(rng, &tmp)
 }
 
-func (s *MultiValue) ApplyUnique(rng *rand.Rand, hashes []int64, count float64, hostTag TagUnionBytes) {
+func (s *MultiValue) ApplyUnique(rng *rand.Rand, hashes []int64, count float64, hostTag TagUnion) {
 	totalCount := float64(len(hashes))
 	if totalCount <= 0 { // should be never, but as we divide by it, we keep check here
 		return

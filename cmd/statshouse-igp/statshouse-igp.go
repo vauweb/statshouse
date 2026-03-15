@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,30 +20,30 @@ import (
 	"syscall"
 	"time"
 
-	_ "net/http/pprof"
-
 	"github.com/VKCOM/statshouse/internal/agent"
 	"github.com/VKCOM/statshouse/internal/pcache"
+	"github.com/VKCOM/statshouse/internal/trustedsubnets"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/platform"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/vkgo/vkd/platform"
 )
 
 const defaultPathToPwd = `/etc/engine/pass`
 
 var argv struct {
-	logFile            string
-	userLogin          string // логин для setuid
-	userGroup          string // логин для setguid
-	maxOpenFiles       uint64
-	pprofListenAddr    string
-	pprofHTTP          bool
-	aesPwdFile         string
-	cacheDir           string
-	aggAddr            string
-	ingressExtAddr     string
-	ingressExtAddrIPv6 string
-	ingressPwdDir      string
+	logFile                 string
+	userLogin               string // логин для setuid
+	userGroup               string // логин для setguid
+	maxOpenFiles            uint64
+	pprofListenAddr         string
+	pprofHTTP               bool
+	aesPwdFile              string
+	cacheDir                string
+	aggAddr                 string
+	ingressExtAddr          string
+	ingressExtAddrIPv6      string
+	ingressPwdDir           string
+	trustedSubnetGroupsFlag trustedsubnets.Flag
 	ConfigIngressProxy
 }
 
@@ -117,7 +118,7 @@ func mainIngressProxy() int {
 	ctx, cancel := context.WithCancel(context.Background())
 	exit := make(chan error, 1)
 	go func() {
-		exit <- RunIngressProxy(ctx, argv.ConfigIngressProxy, aesPwd, mappingsCache)
+		exit <- RunIngressProxy(ctx, argv.ConfigIngressProxy, aesPwd, mappingsCache, argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))
 	}()
 	signalC := make(chan os.Signal, 1)
 	signal.Notify(signalC, syscall.SIGINT, syscall.SIGUSR1)
@@ -134,7 +135,7 @@ main_loop:
 			case <-exit:
 			case <-time.After(5 * time.Second):
 			}
-			log.Println("Buy")
+			log.Println("Bye")
 		}
 	case err := <-exit:
 		log.Println(err)
@@ -153,10 +154,10 @@ func parseCommandLine() error {
 	}
 	var dummyVerb bool
 	flag.BoolVar(&dummyVerb, conveyorName, false, "not used, you can safely remote it")
-	var dummyConveyor, dummyHostname, dummyMetadataAddr string
+	var dummyConveyor, dummyMetadataAddr string
 	flag.StringVar(&argv.Version, "ingress-version", "", "ingress version")
 	flag.StringVar(&dummyConveyor, "new-conveyor", "", "not used, you can safely remote it")
-	flag.StringVar(&dummyHostname, "hostname", "", "not used, you can safely remote it")
+	flag.StringVar(&argv.customHostName, "hostname", "", "override auto detected hostname")
 	flag.StringVar(&dummyMetadataAddr, "metadata-addr", "", "not used, you can safely remote it")
 	var dummyMaxResponseMem int
 	flag.IntVar(&dummyMaxResponseMem, "max-response-mem", 0, "not used, you can safely remote it")
@@ -178,9 +179,15 @@ func parseCommandLine() error {
 	flag.StringVar(&argv.ingressPwdDir, "ingress-pwd-dir", "", "path to AES passwords dir for clients of ingress proxy.")
 	flag.StringVar(&argv.UpstreamAddr, "ingress-upstream-addr", "", "Upstream server address (for debug purpose, do not use in production).")
 	flag.BoolVar(&argv.Debug, "debug", false, "enable debug logging")
+	flag.IntVar(&argv.LegacyAddrLimit, "max-address-count", 48, "Maximum number of addresses allowed for legacy ingress clients.")
 	argv.ConfigAgent.Bind(flag.CommandLine, agent.DefaultConfig())
+	argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 	build.FlagParseShowVersionHelp()
 
+	if argv.customHostName == "" {
+		argv.customHostName = srvfunc.HostnameForStatshouse()
+		log.Printf("detected statshouse hostname as %q from OS hostname %q\n", argv.customHostName, srvfunc.Hostname())
+	}
 	switch dummyConveyor {
 	case "": // ok
 	case conveyorName:

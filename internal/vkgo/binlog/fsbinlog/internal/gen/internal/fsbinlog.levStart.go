@@ -33,6 +33,9 @@ func (item *FsbinlogLevStart) Reset() {
 }
 
 func (item *FsbinlogLevStart) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *FsbinlogLevStart) ReadTL1(w []byte) (_ []byte, err error) {
 	if w, err = basictl.IntRead(w, &item.SchemaId); err != nil {
 		return w, err
 	}
@@ -49,10 +52,16 @@ func (item *FsbinlogLevStart) Read(w []byte) (_ []byte, err error) {
 }
 
 func (item *FsbinlogLevStart) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *FsbinlogLevStart) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *FsbinlogLevStart) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *FsbinlogLevStart) WriteTL1(w []byte) []byte {
 	w = basictl.IntWrite(w, item.SchemaId)
 	w = basictl.IntWrite(w, item.ExtraBytes)
 	w = basictl.IntWrite(w, item.SplitMod)
@@ -62,19 +71,28 @@ func (item *FsbinlogLevStart) Write(w []byte) []byte {
 }
 
 func (item *FsbinlogLevStart) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *FsbinlogLevStart) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x044c644b); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *FsbinlogLevStart) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *FsbinlogLevStart) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *FsbinlogLevStart) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *FsbinlogLevStart) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x044c644b)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item FsbinlogLevStart) String() string {
@@ -82,6 +100,11 @@ func (item FsbinlogLevStart) String() string {
 }
 
 func (item *FsbinlogLevStart) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *FsbinlogLevStart) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propSchemaIdPresented bool
 	var propExtraBytesPresented bool
 	var propSplitModPresented bool
@@ -166,14 +189,15 @@ func (item *FsbinlogLevStart) ReadJSON(legacyTypeNames bool, in *basictl.JsonLex
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *FsbinlogLevStart) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *FsbinlogLevStart) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *FsbinlogLevStart) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *FsbinlogLevStart) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *FsbinlogLevStart) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexSchemaId := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)

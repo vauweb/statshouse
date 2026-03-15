@@ -28,6 +28,12 @@ func (item *MetadataEditEntityEvent) Reset() {
 	item.OldVersion = 0
 }
 
+func (item *MetadataEditEntityEvent) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomUint(rg)
+	item.Metric.FillRandom(rg)
+	item.OldVersion = basictl.RandomLong(rg)
+}
+
 func (item *MetadataEditEntityEvent) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
@@ -38,7 +44,6 @@ func (item *MetadataEditEntityEvent) Read(w []byte) (_ []byte, err error) {
 	return basictl.LongRead(w, &item.OldVersion)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataEditEntityEvent) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -57,7 +62,6 @@ func (item *MetadataEditEntityEvent) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataEditEntityEvent) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -72,6 +76,11 @@ func (item MetadataEditEntityEvent) String() string {
 }
 
 func (item *MetadataEditEntityEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataEditEntityEvent) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propMetricPresented bool
 	var propOldVersionPresented bool
@@ -97,7 +106,7 @@ func (item *MetadataEditEntityEvent) ReadJSON(legacyTypeNames bool, in *basictl.
 				if propMetricPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("metadata.editEntityEvent", "metric")
 				}
-				if err := item.Metric.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Metric.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propMetricPresented = true
@@ -132,14 +141,15 @@ func (item *MetadataEditEntityEvent) ReadJSON(legacyTypeNames bool, in *basictl.
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataEditEntityEvent) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataEditEntityEvent) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataEditEntityEvent) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataEditEntityEvent) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataEditEntityEvent) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -150,7 +160,7 @@ func (item *MetadataEditEntityEvent) WriteJSONOpt(newTypeNames bool, short bool,
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"metric":`...)
-	w = item.Metric.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Metric.WriteJSONOpt(tctx, w)
 	backupIndexOldVersion := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"old_version":`...)
@@ -170,4 +180,12 @@ func (item *MetadataEditEntityEvent) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.editEntityEvent", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataEditEntityEvent) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.editEntityEvent"))
+}
+
+func (item *MetadataEditEntityEvent) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.editEntityEvent")
 }

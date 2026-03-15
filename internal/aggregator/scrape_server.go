@@ -38,26 +38,25 @@ import (
 
 type scrapeServer struct {
 	discovery scrapeDiscovery
-	configS   string       // configuration string
-	configMu  sync.RWMutex // serialize access to "configS"
-	configH   atomic.Int32 // configuration string SHA1 hash
 
 	// set on "run"
 	sh2     *agent.Agent // used to report statistics
 	running bool         // guard against double "run"
 
+	configMu sync.RWMutex // everything below is atomic under this mutex
+
+	configS string       // configuration string
+	configH atomic.Int32 // configuration string SHA1 hash
+
 	// current targets, updated on discovery events
 	targetsByName map[string]tlstatshouse.GetTargetsResultBytes
 	targetsByAddr map[netip.Addr]tlstatshouse.GetTargetsResultBytes
-	targetsMu     sync.RWMutex
 
 	// long poll requests
-	requests   map[*rpc.HandlerContext]scrapeRequest
-	requestsMu sync.Mutex
+	requests map[rpc.LongpollHandle]scrapeRequest
 }
 
 type scrapeRequest struct {
-	hctx *rpc.HandlerContext
 	name []byte
 	addr netip.Addr
 	args tlstatshouse.GetTargets2Bytes
@@ -67,19 +66,19 @@ func newScrapeServer() *scrapeServer {
 	res := &scrapeServer{
 		targetsByName: make(map[string]tlstatshouse.GetTargetsResultBytes),
 		targetsByAddr: make(map[netip.Addr]tlstatshouse.GetTargetsResultBytes),
-		requests:      make(map[*rpc.HandlerContext]scrapeRequest),
+		requests:      make(map[rpc.LongpollHandle]scrapeRequest),
 	}
 	res.discovery = newScrapeDiscovery(res.applyScrapeConfig)
 	return res
 }
 
-func (s *scrapeServer) run(meta *metajournal.MetricsStorage, journal *metajournal.MetricMetaLoader, sh2 *agent.Agent) {
+func (s *scrapeServer) run(meta *metajournal.MetricsStorage, journal metajournal.MetadataLoader, sh2 *agent.Agent) {
 	if s.running {
 		return
 	}
-	s.discovery.run(meta, journal, sh2)
 	s.sh2 = sh2
 	s.running = true
+	s.discovery.run(meta, journal, sh2)
 }
 
 func (s *scrapeServer) reportStats(m map[string]string) {
@@ -97,7 +96,7 @@ func (s *scrapeServer) applyConfig(configID int32, configS string) {
 			log.Println("scrape server panic!", r)
 		}
 	}()
-	s.discovery.applyConfig(configS)
+	_ = s.discovery.applyConfig(configS)
 }
 
 func (s *scrapeServer) applyScrapeConfig(cs []ScrapeConfig) {
@@ -210,56 +209,53 @@ func (s *scrapeServer) applyScrapeConfig(cs []ScrapeConfig) {
 		v.Hash = sum[:]
 	}
 	// publish targets
-	func() {
-		s.targetsMu.Lock()
-		defer s.targetsMu.Unlock()
-		for k := range s.targetsByName {
-			s.targetsByName[k] = tlstatshouse.GetTargetsResultBytes{}
-		}
-		for k := range s.targetsByAddr {
-			s.targetsByAddr[k] = tlstatshouse.GetTargetsResultBytes{}
-		}
-		for k, v := range targets {
-			var host string
-			if k.name != "" {
-				s.targetsByName[k.name] = *v
-				host = k.name
-			} else {
-				s.targetsByAddr[k.addr] = *v
-				host = k.addr.String()
-			}
-			if s.sh2 != nil {
-				// success, targets_ready
-				s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
-					[]int32{0, 0, 1}, []byte(host), 1)
-			}
-		}
-	}()
-	// serve long poll requests
-	pendingRequests := func() []scrapeRequest {
-		s.requestsMu.Lock()
-		defer s.requestsMu.Unlock()
-		res := make([]scrapeRequest, 0, len(s.requests))
-		for _, v := range s.requests {
-			res = append(res, v)
-		}
-		return res
-	}()
-	for _, v := range pendingRequests {
-		done, err := s.tryGetNewTargetsAndWriteResult(v)
-		if done {
-			v.hctx.SendHijackedResponse(err)
-			s.CancelHijack(v.hctx)
-		}
-	}
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+
 	// config applied successfully
+	// TODO - we should obviously panic here, if cannot marshal JSON
 	if b, err := json.Marshal(cs); err == nil {
 		configS := string(b)
-		s.configMu.Lock()
 		s.configS = configS
-		s.configMu.Unlock()
 		h := sha1.Sum(b)
 		s.configH.Store(int32(binary.BigEndian.Uint32(h[:])))
+	}
+
+	for k := range s.targetsByName {
+		s.targetsByName[k] = tlstatshouse.GetTargetsResultBytes{}
+	}
+	for k := range s.targetsByAddr {
+		s.targetsByAddr[k] = tlstatshouse.GetTargetsResultBytes{}
+	}
+	for k, v := range targets {
+		var host string
+		if k.name != "" {
+			s.targetsByName[k.name] = *v
+			host = k.name
+		} else {
+			s.targetsByAddr[k.addr] = *v
+			host = k.addr.String()
+		}
+		if s.sh2 != nil {
+			// success, targets_ready
+			s.sh2.AddCounterS(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
+				[]int32{0, 0, 1},
+				[]string{format.StringTopTagIndexV3: host},
+				1)
+		}
+	}
+	// serve long poll requests
+	for lh, v := range s.requests {
+		res, changed := s.tryGetNewTargetsLocked(v)
+		if !changed {
+			continue
+		}
+		delete(s.requests, lh)
+		if hctx, _ := lh.FinishLongpoll(); hctx != nil {
+			var err error
+			hctx.Response, err = v.args.WriteResult(hctx.Response, res)
+			hctx.SendLongpollResponse(err)
+		}
 	}
 }
 
@@ -284,63 +280,56 @@ func (s *scrapeServer) handleGetTargets(_ context.Context, hctx *rpc.HandlerCont
 	}
 	// fast path, try respond without taking "requestsMu"
 	req := scrapeRequest{
-		hctx: hctx,
 		name: args.PromHostName,
 		addr: ipp.Addr(),
 		args: args,
 	}
-	done, err := s.tryGetNewTargetsAndWriteResult(req)
-	if done || err != nil {
-		return err
-	}
-	// slow path, take "requestsMu" and try again
-	s.requestsMu.Lock()
-	defer s.requestsMu.Unlock()
-	done, err = s.tryGetNewTargetsAndWriteResult(req)
-	if done || err != nil {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	res, changed := s.tryGetNewTargetsLocked(req)
+	if changed {
+		hctx.Response, err = args.WriteResult(hctx.Response, res)
 		return err
 	}
 	// long poll, scrape targets will be sent once ready
-	err = hctx.HijackResponse(s)
-	if rpc.IsHijackedResponse(err) {
-		s.requests[hctx] = req
+	lh, err := hctx.StartLongpoll(s)
+	if err != nil {
+		return err
 	}
-	return err
+	s.requests[lh] = req
+	return nil
 }
 
-func (s *scrapeServer) tryGetNewTargetsAndWriteResult(req scrapeRequest) (done bool, err error) {
+func (s *scrapeServer) tryGetNewTargetsLocked(req scrapeRequest) (_ tlstatshouse.GetTargetsResultBytes, changed bool) {
 	var ok bool
 	var res tlstatshouse.GetTargetsResultBytes
-	s.targetsMu.RLock()
 	if len(req.name) != 0 && len(s.targetsByName) != 0 {
 		res, ok = s.targetsByName[string(req.name)]
 	}
 	if !ok && len(s.targetsByAddr) != 0 {
 		res, ok = s.targetsByAddr[req.addr]
 	}
-	s.targetsMu.RUnlock()
 	if !ok || bytes.Equal(req.args.OldHash, res.Hash) {
-		return false, nil
+		return res, false
 	}
-	req.hctx.Response, err = req.args.WriteResult(req.hctx.Response, res)
 	if s.sh2 != nil {
-		if err != nil {
-			// failure, targets_sent
-			s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
-				[]int32{0, 1, 2}, []byte(req.addr.String()), 1)
-		} else {
-			// success, targets_sent
-			s.sh2.AddCounterStringBytes(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
-				[]int32{0, 0, 2}, []byte(req.addr.String()), 1)
-		}
+		s.sh2.AddCounterS(0, format.BuiltinMetricMetaAggScrapeTargetDispatch,
+			[]int32{0, 0, 2},
+			[]string{format.StringTopTagIndexV3: req.addr.String()},
+			1)
 	}
-	return true, err
+	return res, true
 }
 
-func (s *scrapeServer) CancelHijack(hctx *rpc.HandlerContext) {
-	s.requestsMu.Lock()
-	defer s.requestsMu.Unlock()
-	delete(s.requests, hctx)
+func (s *scrapeServer) CancelLongpoll(lh rpc.LongpollHandle) {
+	s.configMu.Lock()
+	defer s.configMu.Unlock()
+	delete(s.requests, lh)
+}
+
+func (s *scrapeServer) WriteEmptyResponse(lh rpc.LongpollHandle, hctx *rpc.HandlerContext) error {
+	s.CancelLongpoll(lh)
+	return rpc.ErrLongpollNoEmptyResponse
 }
 
 func (job *scrapeJobConfig) toPromTargetBytes(addr string, labels []tl.DictionaryFieldStringBytes) tlstatshouse.PromTargetBytes {

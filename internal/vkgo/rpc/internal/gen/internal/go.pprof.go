@@ -29,35 +29,56 @@ func (item *GoPprof) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *GoPprof) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *GoPprof) ReadTL1(w []byte) (_ []byte, err error) {
 	return basictl.StringRead(w, &item.Params)
 }
 
 func (item *GoPprof) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *GoPprof) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *GoPprof) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *GoPprof) WriteTL1(w []byte) []byte {
 	w = basictl.StringWrite(w, item.Params)
 	return w
 }
 
 func (item *GoPprof) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *GoPprof) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xea2876a6); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *GoPprof) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *GoPprof) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *GoPprof) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *GoPprof) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0xea2876a6)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item *GoPprof) ReadResult(w []byte, ret *string) (_ []byte, err error) {
+	return item.ReadResultTL1(w, ret)
+}
+func (item *GoPprof) ReadResultTL1(w []byte, ret *string) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xb5286e24); err != nil {
 		return w, err
 	}
@@ -65,6 +86,9 @@ func (item *GoPprof) ReadResult(w []byte, ret *string) (_ []byte, err error) {
 }
 
 func (item *GoPprof) WriteResult(w []byte, ret string) (_ []byte, err error) {
+	return item.WriteResultTL1(w, ret)
+}
+func (item *GoPprof) WriteResultTL1(w []byte, ret string) (_ []byte, err error) {
 	w = basictl.NatWrite(w, 0xb5286e24)
 	w = basictl.StringWrite(w, ret)
 	return w, nil
@@ -78,39 +102,36 @@ func (item *GoPprof) ReadResultJSON(legacyTypeNames bool, in *basictl.JsonLexer,
 }
 
 func (item *GoPprof) WriteResultJSON(w []byte, ret string) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *GoPprof) writeResultJSON(newTypeNames bool, short bool, w []byte, ret string) (_ []byte, err error) {
+func (item *GoPprof) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret string) (_ []byte, err error) {
 	w = basictl.JSONWriteString(w, ret)
 	return w, nil
 }
 
-func (item *GoPprof) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *GoPprof) FillRandomResultTL1(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
 	var ret string
-	if r, err = item.ReadResult(r, &ret); err != nil {
+	ret = basictl.RandomString(rg)
+	return item.WriteResultTL1(w, ret)
+}
+
+func (item *GoPprof) ReadResultTL1WriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	var ret string
+	if r, err = item.ReadResultTL1(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *GoPprof) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *GoPprof) ReadResultJSONWriteResultTL1(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret string
-	if r, err = item.ReadResult(r, &ret); err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *GoPprof) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret string
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
-		return r, w, err
-	}
-	w, err = item.WriteResult(w, ret)
+	w, err = item.WriteResultTL1(w, ret)
 	return r, w, err
 }
 
@@ -119,6 +140,11 @@ func (item GoPprof) String() string {
 }
 
 func (item *GoPprof) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *GoPprof) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propParamsPresented bool
 
 	if in != nil {
@@ -155,14 +181,15 @@ func (item *GoPprof) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *GoPprof) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *GoPprof) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *GoPprof) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *GoPprof) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *GoPprof) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexParams := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)

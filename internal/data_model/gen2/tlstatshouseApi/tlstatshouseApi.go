@@ -22,6 +22,8 @@ type (
 	Function              = internal.StatshouseApiFunction
 	GetChunk              = internal.StatshouseApiGetChunk
 	GetChunkResponse      = internal.StatshouseApiGetChunkResponse
+	GetMapping            = internal.StatshouseApiGetMapping
+	GetMappingResponse    = internal.StatshouseApiGetMappingResponse
 	GetQuery              = internal.StatshouseApiGetQuery
 	GetQueryPoint         = internal.StatshouseApiGetQueryPoint
 	GetQueryPointResponse = internal.StatshouseApiGetQueryPointResponse
@@ -34,6 +36,11 @@ type (
 	Series                = internal.StatshouseApiSeries
 	SeriesMeta            = internal.StatshouseApiSeriesMeta
 	TagValue              = internal.StatshouseApiTagValue
+	VectorFilter          = internal.VectorStatshouseApiFilter
+	VectorFunction        = internal.VectorStatshouseApiFunction
+	VectorPointMeta       = internal.VectorStatshouseApiPointMeta
+	VectorSeriesMeta      = internal.VectorStatshouseApiSeriesMeta
+	VectorTagValue        = internal.VectorStatshouseApiTagValue
 )
 
 func FlagAuto() Flag                   { return internal.StatshouseApiFlagAuto() }
@@ -91,11 +98,20 @@ func (c *Client) GetChunk(ctx context.Context, args GetChunk, extra *rpc.InvokeR
 	if extra != nil {
 		req.Extra = extra.RequestExtra
 		req.FailIfNoConnection = extra.FailIfNoConnection
+		if extra.PreferTL2 {
+			req.BodyFormatTL2 = true
+		}
 	}
 	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
-	req.Body, err = args.WriteBoxedGeneral(req.Body)
-	if err != nil {
-		return internal.ErrorClientWrite("statshouseApi.getChunk", err)
+	if req.BodyFormatTL2 {
+		req.Body = basictl.NatWrite(req.Body, args.TLTag())
+		tctx := basictl.TL2WriteContext{}
+		req.Body = args.WriteTL2(req.Body, &tctx)
+	} else {
+		req.Body, err = args.WriteBoxedGeneral(req.Body)
+		if err != nil {
+			return internal.ErrorClientWrite("statshouseApi.getChunk", err)
+		}
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
 	if extra != nil && resp != nil {
@@ -106,8 +122,58 @@ func (c *Client) GetChunk(ctx context.Context, args GetChunk, extra *rpc.InvokeR
 		return internal.ErrorClientDo("statshouseApi.getChunk", c.Network, c.ActorID, c.Address, err)
 	}
 	if ret != nil {
-		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+		if resp.BodyFormatTL2() {
+			tctx := basictl.TL2ReadContext{}
+			resp.Body, err = args.ReadResultTL2(resp.Body, &tctx, ret)
+		} else {
+			resp.Body, err = args.ReadResult(resp.Body, ret)
+		}
+		if err != nil {
 			return internal.ErrorClientReadResult("statshouseApi.getChunk", c.Network, c.ActorID, c.Address, err)
+		}
+	}
+	return nil
+}
+
+func (c *Client) GetMapping(ctx context.Context, args GetMapping, extra *rpc.InvokeReqExtra, ret *GetMappingResponse) (err error) {
+	req := c.Client.GetRequest()
+	req.ActorID = c.ActorID
+	req.FunctionName = "statshouseApi.getMapping"
+	if extra != nil {
+		req.Extra = extra.RequestExtra
+		req.FailIfNoConnection = extra.FailIfNoConnection
+		if extra.PreferTL2 {
+			req.BodyFormatTL2 = true
+		}
+	}
+	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
+	if req.BodyFormatTL2 {
+		req.Body = basictl.NatWrite(req.Body, args.TLTag())
+		tctx := basictl.TL2WriteContext{}
+		req.Body = args.WriteTL2(req.Body, &tctx)
+	} else {
+		req.Body, err = args.WriteBoxedGeneral(req.Body)
+		if err != nil {
+			return internal.ErrorClientWrite("statshouseApi.getMapping", err)
+		}
+	}
+	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
+	if extra != nil && resp != nil {
+		extra.ResponseExtra = resp.Extra
+	}
+	defer c.Client.PutResponse(resp)
+	if err != nil {
+		return internal.ErrorClientDo("statshouseApi.getMapping", c.Network, c.ActorID, c.Address, err)
+	}
+	if ret != nil {
+		if resp.BodyFormatTL2() {
+			tctx := basictl.TL2ReadContext{}
+			resp.Body, err = args.ReadResultTL2(resp.Body, &tctx, ret)
+		} else {
+			resp.Body, err = args.ReadResult(resp.Body, ret)
+		}
+		if err != nil {
+			return internal.ErrorClientReadResult("statshouseApi.getMapping", c.Network, c.ActorID, c.Address, err)
 		}
 	}
 	return nil
@@ -120,11 +186,20 @@ func (c *Client) GetQuery(ctx context.Context, args GetQuery, extra *rpc.InvokeR
 	if extra != nil {
 		req.Extra = extra.RequestExtra
 		req.FailIfNoConnection = extra.FailIfNoConnection
+		if extra.PreferTL2 {
+			req.BodyFormatTL2 = true
+		}
 	}
 	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
-	req.Body, err = args.WriteBoxedGeneral(req.Body)
-	if err != nil {
-		return internal.ErrorClientWrite("statshouseApi.getQuery", err)
+	if req.BodyFormatTL2 {
+		req.Body = basictl.NatWrite(req.Body, args.TLTag())
+		tctx := basictl.TL2WriteContext{}
+		req.Body = args.WriteTL2(req.Body, &tctx)
+	} else {
+		req.Body, err = args.WriteBoxedGeneral(req.Body)
+		if err != nil {
+			return internal.ErrorClientWrite("statshouseApi.getQuery", err)
+		}
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
 	if extra != nil && resp != nil {
@@ -135,7 +210,13 @@ func (c *Client) GetQuery(ctx context.Context, args GetQuery, extra *rpc.InvokeR
 		return internal.ErrorClientDo("statshouseApi.getQuery", c.Network, c.ActorID, c.Address, err)
 	}
 	if ret != nil {
-		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+		if resp.BodyFormatTL2() {
+			tctx := basictl.TL2ReadContext{}
+			resp.Body, err = args.ReadResultTL2(resp.Body, &tctx, ret)
+		} else {
+			resp.Body, err = args.ReadResult(resp.Body, ret)
+		}
+		if err != nil {
 			return internal.ErrorClientReadResult("statshouseApi.getQuery", c.Network, c.ActorID, c.Address, err)
 		}
 	}
@@ -150,11 +231,20 @@ func (c *Client) GetQueryPoint(ctx context.Context, args GetQueryPoint, extra *r
 	if extra != nil {
 		req.Extra = extra.RequestExtra
 		req.FailIfNoConnection = extra.FailIfNoConnection
+		if extra.PreferTL2 {
+			req.BodyFormatTL2 = true
+		}
 	}
 	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
-	req.Body, err = args.WriteBoxedGeneral(req.Body)
-	if err != nil {
-		return internal.ErrorClientWrite("statshouseApi.getQueryPoint", err)
+	if req.BodyFormatTL2 {
+		req.Body = basictl.NatWrite(req.Body, args.TLTag())
+		tctx := basictl.TL2WriteContext{}
+		req.Body = args.WriteTL2(req.Body, &tctx)
+	} else {
+		req.Body, err = args.WriteBoxedGeneral(req.Body)
+		if err != nil {
+			return internal.ErrorClientWrite("statshouseApi.getQueryPoint", err)
+		}
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
 	if extra != nil && resp != nil {
@@ -165,7 +255,13 @@ func (c *Client) GetQueryPoint(ctx context.Context, args GetQueryPoint, extra *r
 		return internal.ErrorClientDo("statshouseApi.getQueryPoint", c.Network, c.ActorID, c.Address, err)
 	}
 	if ret != nil {
-		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+		if resp.BodyFormatTL2() {
+			tctx := basictl.TL2ReadContext{}
+			resp.Body, err = args.ReadResultTL2(resp.Body, &tctx, ret)
+		} else {
+			resp.Body, err = args.ReadResult(resp.Body, ret)
+		}
+		if err != nil {
 			return internal.ErrorClientReadResult("statshouseApi.getQueryPoint", c.Network, c.ActorID, c.Address, err)
 		}
 	}
@@ -179,11 +275,20 @@ func (c *Client) ReleaseChunks(ctx context.Context, args ReleaseChunks, extra *r
 	if extra != nil {
 		req.Extra = extra.RequestExtra
 		req.FailIfNoConnection = extra.FailIfNoConnection
+		if extra.PreferTL2 {
+			req.BodyFormatTL2 = true
+		}
 	}
 	rpc.UpdateExtraTimeout(&req.Extra, c.Timeout)
-	req.Body, err = args.WriteBoxedGeneral(req.Body)
-	if err != nil {
-		return internal.ErrorClientWrite("statshouseApi.releaseChunks", err)
+	if req.BodyFormatTL2 {
+		req.Body = basictl.NatWrite(req.Body, args.TLTag())
+		tctx := basictl.TL2WriteContext{}
+		req.Body = args.WriteTL2(req.Body, &tctx)
+	} else {
+		req.Body, err = args.WriteBoxedGeneral(req.Body)
+		if err != nil {
+			return internal.ErrorClientWrite("statshouseApi.releaseChunks", err)
+		}
 	}
 	resp, err := c.Client.Do(ctx, c.Network, c.Address, req)
 	if extra != nil && resp != nil {
@@ -194,7 +299,13 @@ func (c *Client) ReleaseChunks(ctx context.Context, args ReleaseChunks, extra *r
 		return internal.ErrorClientDo("statshouseApi.releaseChunks", c.Network, c.ActorID, c.Address, err)
 	}
 	if ret != nil {
-		if _, err = args.ReadResult(resp.Body, ret); err != nil {
+		if resp.BodyFormatTL2() {
+			tctx := basictl.TL2ReadContext{}
+			resp.Body, err = args.ReadResultTL2(resp.Body, &tctx, ret)
+		} else {
+			resp.Body, err = args.ReadResult(resp.Body, ret)
+		}
+		if err != nil {
 			return internal.ErrorClientReadResult("statshouseApi.releaseChunks", c.Network, c.ActorID, c.Address, err)
 		}
 	}
@@ -203,139 +314,172 @@ func (c *Client) ReleaseChunks(ctx context.Context, args ReleaseChunks, extra *r
 
 type Handler struct {
 	GetChunk      func(ctx context.Context, args GetChunk) (GetChunkResponse, error)           // statshouseApi.getChunk
+	GetMapping    func(ctx context.Context, args GetMapping) (GetMappingResponse, error)       // statshouseApi.getMapping
 	GetQuery      func(ctx context.Context, args GetQuery) (GetQueryResponse, error)           // statshouseApi.getQuery
 	GetQueryPoint func(ctx context.Context, args GetQueryPoint) (GetQueryPointResponse, error) // statshouseApi.getQueryPoint
 	ReleaseChunks func(ctx context.Context, args ReleaseChunks) (ReleaseChunksResponse, error) // statshouseApi.releaseChunks
 
-	RawGetChunk      func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouseApi.getChunk
-	RawGetQuery      func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouseApi.getQuery
-	RawGetQueryPoint func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouseApi.getQueryPoint
-	RawReleaseChunks func(ctx context.Context, hctx *rpc.HandlerContext) error // statshouseApi.releaseChunks
 }
 
 func (h *Handler) Handle(ctx context.Context, hctx *rpc.HandlerContext) (err error) {
 	tag, r, _ := basictl.NatReadTag(hctx.Request) // keep hctx.Request intact for handler chaining
 	switch tag {
 	case 0x52721884: // statshouseApi.getChunk
-		hctx.RequestFunctionName = "statshouseApi.getChunk"
-		if h.RawGetChunk != nil {
-			hctx.Request = r
-			err = h.RawGetChunk(ctx, hctx)
-			if rpc.IsHijackedResponse(err) {
-				return err
-			}
-			if err != nil {
-				return internal.ErrorServerHandle("statshouseApi.getChunk", err)
-			}
-			return nil
-		}
+		hctx.SetRequestFunctionName("statshouseApi.getChunk")
 		if h.GetChunk != nil {
 			var args GetChunk
-			if _, err = args.Read(r); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2ReadContext{}
+				_, err = args.ReadTL2(r, &tctx)
+			} else {
+				_, err = args.Read(r)
+			}
+			if err != nil {
 				return internal.ErrorServerRead("statshouseApi.getChunk", err)
 			}
 			ctx = hctx.WithContext(ctx)
 			ret, err := h.GetChunk(ctx, args)
-			if rpc.IsHijackedResponse(err) {
+			if hctx.LongpollStarted() || rpc.IsLongpollResponse(err) {
 				return err
 			}
 			if err != nil {
 				return internal.ErrorServerHandle("statshouseApi.getChunk", err)
 			}
-			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2WriteContext{}
+				hctx.Response, err = args.WriteResultTL2(hctx.Response, &tctx, ret)
+			} else {
+				hctx.Response, err = args.WriteResult(hctx.Response, ret)
+			}
+			if err != nil {
 				return internal.ErrorServerWriteResult("statshouseApi.getChunk", err)
 			}
 			return nil
 		}
-	case 0x0c7349bb: // statshouseApi.getQuery
-		hctx.RequestFunctionName = "statshouseApi.getQuery"
-		if h.RawGetQuery != nil {
-			hctx.Request = r
-			err = h.RawGetQuery(ctx, hctx)
-			if rpc.IsHijackedResponse(err) {
+	case 0x4239a8f8: // statshouseApi.getMapping
+		hctx.SetRequestFunctionName("statshouseApi.getMapping")
+		if h.GetMapping != nil {
+			var args GetMapping
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2ReadContext{}
+				_, err = args.ReadTL2(r, &tctx)
+			} else {
+				_, err = args.Read(r)
+			}
+			if err != nil {
+				return internal.ErrorServerRead("statshouseApi.getMapping", err)
+			}
+			ctx = hctx.WithContext(ctx)
+			ret, err := h.GetMapping(ctx, args)
+			if hctx.LongpollStarted() || rpc.IsLongpollResponse(err) {
 				return err
 			}
 			if err != nil {
-				return internal.ErrorServerHandle("statshouseApi.getQuery", err)
+				return internal.ErrorServerHandle("statshouseApi.getMapping", err)
+			}
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2WriteContext{}
+				hctx.Response, err = args.WriteResultTL2(hctx.Response, &tctx, ret)
+			} else {
+				hctx.Response, err = args.WriteResult(hctx.Response, ret)
+			}
+			if err != nil {
+				return internal.ErrorServerWriteResult("statshouseApi.getMapping", err)
 			}
 			return nil
 		}
+	case 0x0c7349bb: // statshouseApi.getQuery
+		hctx.SetRequestFunctionName("statshouseApi.getQuery")
 		if h.GetQuery != nil {
 			var args GetQuery
-			if _, err = args.Read(r); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2ReadContext{}
+				_, err = args.ReadTL2(r, &tctx)
+			} else {
+				_, err = args.Read(r)
+			}
+			if err != nil {
 				return internal.ErrorServerRead("statshouseApi.getQuery", err)
 			}
 			ctx = hctx.WithContext(ctx)
 			ret, err := h.GetQuery(ctx, args)
-			if rpc.IsHijackedResponse(err) {
+			if hctx.LongpollStarted() || rpc.IsLongpollResponse(err) {
 				return err
 			}
 			if err != nil {
 				return internal.ErrorServerHandle("statshouseApi.getQuery", err)
 			}
-			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2WriteContext{}
+				hctx.Response, err = args.WriteResultTL2(hctx.Response, &tctx, ret)
+			} else {
+				hctx.Response, err = args.WriteResult(hctx.Response, ret)
+			}
+			if err != nil {
 				return internal.ErrorServerWriteResult("statshouseApi.getQuery", err)
 			}
 			return nil
 		}
 	case 0x0c7348bb: // statshouseApi.getQueryPoint
-		hctx.RequestFunctionName = "statshouseApi.getQueryPoint"
-		if h.RawGetQueryPoint != nil {
-			hctx.Request = r
-			err = h.RawGetQueryPoint(ctx, hctx)
-			if rpc.IsHijackedResponse(err) {
-				return err
-			}
-			if err != nil {
-				return internal.ErrorServerHandle("statshouseApi.getQueryPoint", err)
-			}
-			return nil
-		}
+		hctx.SetRequestFunctionName("statshouseApi.getQueryPoint")
 		if h.GetQueryPoint != nil {
 			var args GetQueryPoint
-			if _, err = args.Read(r); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2ReadContext{}
+				_, err = args.ReadTL2(r, &tctx)
+			} else {
+				_, err = args.Read(r)
+			}
+			if err != nil {
 				return internal.ErrorServerRead("statshouseApi.getQueryPoint", err)
 			}
 			ctx = hctx.WithContext(ctx)
 			ret, err := h.GetQueryPoint(ctx, args)
-			if rpc.IsHijackedResponse(err) {
+			if hctx.LongpollStarted() || rpc.IsLongpollResponse(err) {
 				return err
 			}
 			if err != nil {
 				return internal.ErrorServerHandle("statshouseApi.getQueryPoint", err)
 			}
-			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2WriteContext{}
+				hctx.Response, err = args.WriteResultTL2(hctx.Response, &tctx, ret)
+			} else {
+				hctx.Response, err = args.WriteResult(hctx.Response, ret)
+			}
+			if err != nil {
 				return internal.ErrorServerWriteResult("statshouseApi.getQueryPoint", err)
 			}
 			return nil
 		}
 	case 0x62adc773: // statshouseApi.releaseChunks
-		hctx.RequestFunctionName = "statshouseApi.releaseChunks"
-		if h.RawReleaseChunks != nil {
-			hctx.Request = r
-			err = h.RawReleaseChunks(ctx, hctx)
-			if rpc.IsHijackedResponse(err) {
-				return err
-			}
-			if err != nil {
-				return internal.ErrorServerHandle("statshouseApi.releaseChunks", err)
-			}
-			return nil
-		}
+		hctx.SetRequestFunctionName("statshouseApi.releaseChunks")
 		if h.ReleaseChunks != nil {
 			var args ReleaseChunks
-			if _, err = args.Read(r); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2ReadContext{}
+				_, err = args.ReadTL2(r, &tctx)
+			} else {
+				_, err = args.Read(r)
+			}
+			if err != nil {
 				return internal.ErrorServerRead("statshouseApi.releaseChunks", err)
 			}
 			ctx = hctx.WithContext(ctx)
 			ret, err := h.ReleaseChunks(ctx, args)
-			if rpc.IsHijackedResponse(err) {
+			if hctx.LongpollStarted() || rpc.IsLongpollResponse(err) {
 				return err
 			}
 			if err != nil {
 				return internal.ErrorServerHandle("statshouseApi.releaseChunks", err)
 			}
-			if hctx.Response, err = args.WriteResult(hctx.Response, ret); err != nil {
+			if hctx.BodyFormatTL2() {
+				tctx := basictl.TL2WriteContext{}
+				hctx.Response, err = args.WriteResultTL2(hctx.Response, &tctx, ret)
+			} else {
+				hctx.Response, err = args.WriteResult(hctx.Response, ret)
+			}
+			if err != nil {
 				return internal.ErrorServerWriteResult("statshouseApi.releaseChunks", err)
 			}
 			return nil

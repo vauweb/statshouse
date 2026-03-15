@@ -13,6 +13,12 @@ import (
 
 var _ = basictl.NatWrite
 
+// Top-level packet magic. Server sends RpcServerWantsFin once per connection to ask for gracefully closing connection.
+// Client should finish sending current request, send RpcClientWantsFin, send no more requests and wait connection to be closed by server.
+// Server will send all non-longpoll responses, then close connection. Client will send all new requests to a new connection.
+// Long poll requests make this protocol more complicated, as client does not know which requests have been added to long poll map,
+// hence client cannot rely on waiting to finish all responses.
+// Supported by vkgo rpc.Server/rpc.Client for now. Support is advertised during PacketConn handshake with flag bit.
 type RpcServerWantsFin struct {
 }
 
@@ -23,30 +29,48 @@ func (item *RpcServerWantsFin) Reset() {}
 
 func (item *RpcServerWantsFin) FillRandom(rg *basictl.RandGenerator) {}
 
-func (item *RpcServerWantsFin) Read(w []byte) (_ []byte, err error) { return w, nil }
+func (item *RpcServerWantsFin) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *RpcServerWantsFin) ReadTL1(w []byte) (_ []byte, err error) { return w, nil }
 
 func (item *RpcServerWantsFin) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *RpcServerWantsFin) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *RpcServerWantsFin) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *RpcServerWantsFin) WriteTL1(w []byte) []byte {
 	return w
 }
 
 func (item *RpcServerWantsFin) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *RpcServerWantsFin) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xa8ddbc46); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *RpcServerWantsFin) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *RpcServerWantsFin) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *RpcServerWantsFin) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *RpcServerWantsFin) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0xa8ddbc46)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item RpcServerWantsFin) String() string {
@@ -54,6 +78,11 @@ func (item RpcServerWantsFin) String() string {
 }
 
 func (item *RpcServerWantsFin) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *RpcServerWantsFin) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	if in != nil {
 		in.Delim('{')
 		if !in.Ok() {
@@ -71,14 +100,15 @@ func (item *RpcServerWantsFin) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *RpcServerWantsFin) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *RpcServerWantsFin) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *RpcServerWantsFin) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *RpcServerWantsFin) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *RpcServerWantsFin) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	return append(w, '}')
 }

@@ -26,6 +26,11 @@ func (item *MetadataGetInvertMapping) Reset() {
 	item.Id = 0
 }
 
+func (item *MetadataGetInvertMapping) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldMask = basictl.RandomUint(rg)
+	item.Id = basictl.RandomInt(rg)
+}
+
 func (item *MetadataGetInvertMapping) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldMask); err != nil {
 		return w, err
@@ -33,7 +38,6 @@ func (item *MetadataGetInvertMapping) Read(w []byte) (_ []byte, err error) {
 	return basictl.IntRead(w, &item.Id)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataGetInvertMapping) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -51,7 +55,6 @@ func (item *MetadataGetInvertMapping) ReadBoxed(w []byte) (_ []byte, err error) 
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataGetInvertMapping) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -71,47 +74,61 @@ func (item *MetadataGetInvertMapping) WriteResult(w []byte, ret MetadataGetInver
 }
 
 func (item *MetadataGetInvertMapping) ReadResultJSON(legacyTypeNames bool, in *basictl.JsonLexer, ret *MetadataGetInvertMappingResponse) error {
-	if err := ret.ReadJSON(legacyTypeNames, in, item.FieldMask); err != nil {
+	tctx := &basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	if err := ret.ReadJSONGeneral(tctx, in, item.FieldMask); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (item *MetadataGetInvertMapping) WriteResultJSON(w []byte, ret MetadataGetInvertMappingResponse) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *MetadataGetInvertMapping) writeResultJSON(newTypeNames bool, short bool, w []byte, ret MetadataGetInvertMappingResponse) (_ []byte, err error) {
-	w = ret.WriteJSONOpt(newTypeNames, short, w, item.FieldMask)
+func (item *MetadataGetInvertMapping) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret MetadataGetInvertMappingResponse) (_ []byte, err error) {
+	w = ret.WriteJSONOpt(tctx, w, item.FieldMask)
 	return w, nil
 }
 
-func (item *MetadataGetInvertMapping) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *MetadataGetInvertMapping) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret MetadataGetInvertMappingResponse
+	ret.FillRandom(rg, item.FieldMask)
+	return item.WriteResult(w, ret)
+}
+
+func (item *MetadataGetInvertMapping) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret MetadataGetInvertMappingResponse
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *MetadataGetInvertMapping) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *MetadataGetInvertMapping) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret MetadataGetInvertMappingResponse
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *MetadataGetInvertMapping) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret MetadataGetInvertMappingResponse
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *MetadataGetInvertMapping) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.getInvertMapping")
+}
+
+func (item *MetadataGetInvertMapping) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.getInvertMapping")
+}
+
+func (item *MetadataGetInvertMapping) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.getInvertMapping")
+}
+
+func (item *MetadataGetInvertMapping) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("metadata.getInvertMapping")
 }
 
 func (item MetadataGetInvertMapping) String() string {
@@ -119,6 +136,11 @@ func (item MetadataGetInvertMapping) String() string {
 }
 
 func (item *MetadataGetInvertMapping) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataGetInvertMapping) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldMaskPresented bool
 	var propIdPresented bool
 
@@ -167,14 +189,15 @@ func (item *MetadataGetInvertMapping) ReadJSON(legacyTypeNames bool, in *basictl
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataGetInvertMapping) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataGetInvertMapping) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataGetInvertMapping) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataGetInvertMapping) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataGetInvertMapping) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -202,4 +225,12 @@ func (item *MetadataGetInvertMapping) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.getInvertMapping", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataGetInvertMapping) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.getInvertMapping"))
+}
+
+func (item *MetadataGetInvertMapping) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.getInvertMapping")
 }

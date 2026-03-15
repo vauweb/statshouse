@@ -14,7 +14,7 @@ import (
 var _ = basictl.NatWrite
 
 type NetUdpPacketObsoleteHash struct {
-	Hash uint32
+	Hash int64
 	Pid  NetPid
 }
 
@@ -27,41 +27,59 @@ func (item *NetUdpPacketObsoleteHash) Reset() {
 }
 
 func (item *NetUdpPacketObsoleteHash) FillRandom(rg *basictl.RandGenerator) {
-	item.Hash = basictl.RandomUint(rg)
+	item.Hash = basictl.RandomLong(rg)
 	item.Pid.FillRandom(rg)
 }
 
 func (item *NetUdpPacketObsoleteHash) Read(w []byte) (_ []byte, err error) {
-	if w, err = basictl.NatRead(w, &item.Hash); err != nil {
+	return item.ReadTL1(w)
+}
+func (item *NetUdpPacketObsoleteHash) ReadTL1(w []byte) (_ []byte, err error) {
+	if w, err = basictl.LongRead(w, &item.Hash); err != nil {
 		return w, err
 	}
-	return item.Pid.ReadBoxed(w)
+	return item.Pid.ReadTL1(w)
 }
 
 func (item *NetUdpPacketObsoleteHash) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *NetUdpPacketObsoleteHash) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *NetUdpPacketObsoleteHash) Write(w []byte) []byte {
-	w = basictl.NatWrite(w, item.Hash)
-	w = item.Pid.WriteBoxed(w)
+	return item.WriteTL1(w)
+}
+func (item *NetUdpPacketObsoleteHash) WriteTL1(w []byte) []byte {
+	w = basictl.LongWrite(w, item.Hash)
+	w = item.Pid.WriteTL1(w)
 	return w
 }
 
 func (item *NetUdpPacketObsoleteHash) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *NetUdpPacketObsoleteHash) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x1adb0f4e); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *NetUdpPacketObsoleteHash) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *NetUdpPacketObsoleteHash) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *NetUdpPacketObsoleteHash) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *NetUdpPacketObsoleteHash) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x1adb0f4e)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item NetUdpPacketObsoleteHash) String() string {
@@ -69,6 +87,11 @@ func (item NetUdpPacketObsoleteHash) String() string {
 }
 
 func (item *NetUdpPacketObsoleteHash) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *NetUdpPacketObsoleteHash) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propHashPresented bool
 	var propPidPresented bool
 
@@ -85,7 +108,7 @@ func (item *NetUdpPacketObsoleteHash) ReadJSON(legacyTypeNames bool, in *basictl
 				if propHashPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("netUdpPacket.obsoleteHash", "hash")
 				}
-				if err := Json2ReadUint32(in, &item.Hash); err != nil {
+				if err := Json2ReadInt64(in, &item.Hash); err != nil {
 					return err
 				}
 				propHashPresented = true
@@ -93,7 +116,7 @@ func (item *NetUdpPacketObsoleteHash) ReadJSON(legacyTypeNames bool, in *basictl
 				if propPidPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("netUdpPacket.obsoleteHash", "pid")
 				}
-				if err := item.Pid.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Pid.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propPidPresented = true
@@ -117,25 +140,26 @@ func (item *NetUdpPacketObsoleteHash) ReadJSON(legacyTypeNames bool, in *basictl
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *NetUdpPacketObsoleteHash) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *NetUdpPacketObsoleteHash) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *NetUdpPacketObsoleteHash) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *NetUdpPacketObsoleteHash) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *NetUdpPacketObsoleteHash) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexHash := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"hash":`...)
-	w = basictl.JSONWriteUint32(w, item.Hash)
+	w = basictl.JSONWriteInt64(w, item.Hash)
 	if (item.Hash != 0) == false {
 		w = w[:backupIndexHash]
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"pid":`...)
-	w = item.Pid.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Pid.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 

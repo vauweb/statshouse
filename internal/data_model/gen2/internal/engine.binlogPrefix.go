@@ -13,6 +13,15 @@ import (
 
 var _ = basictl.NatWrite
 
+func BuiltinVectorEngineBinlogPrefixFillRandom(rg *basictl.RandGenerator, vec *[]EngineBinlogPrefix) {
+	rg.IncreaseDepth()
+	l := basictl.RandomSize(rg)
+	*vec = make([]EngineBinlogPrefix, l)
+	for i := range *vec {
+		(*vec)[i].FillRandom(rg)
+	}
+	rg.DecreaseDepth()
+}
 func BuiltinVectorEngineBinlogPrefixRead(w []byte, vec *[]EngineBinlogPrefix) (_ []byte, err error) {
 	var l uint32
 	if w, err = basictl.NatRead(w, &l); err != nil {
@@ -42,7 +51,11 @@ func BuiltinVectorEngineBinlogPrefixWrite(w []byte, vec []EngineBinlogPrefix) []
 	return w
 }
 
-func BuiltinVectorEngineBinlogPrefixReadJSON(legacyTypeNames bool, in *basictl.JsonLexer, vec *[]EngineBinlogPrefix) error {
+func BuiltinVectorEngineBinlogPrefixInternalReadTL2(r []byte, vec *[]EngineBinlogPrefix) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("[]EngineBinlogPrefix")
+}
+
+func BuiltinVectorEngineBinlogPrefixReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer, vec *[]EngineBinlogPrefix) error {
 	*vec = (*vec)[:cap(*vec)]
 	index := 0
 	if in != nil {
@@ -56,7 +69,7 @@ func BuiltinVectorEngineBinlogPrefixReadJSON(legacyTypeNames bool, in *basictl.J
 				*vec = append(*vec, newValue)
 				*vec = (*vec)[:cap(*vec)]
 			}
-			if err := (*vec)[index].ReadJSON(legacyTypeNames, in); err != nil {
+			if err := (*vec)[index].ReadJSONGeneral(tctx, in); err != nil {
 				return err
 			}
 			in.WantComma()
@@ -71,13 +84,14 @@ func BuiltinVectorEngineBinlogPrefixReadJSON(legacyTypeNames bool, in *basictl.J
 }
 
 func BuiltinVectorEngineBinlogPrefixWriteJSON(w []byte, vec []EngineBinlogPrefix) []byte {
-	return BuiltinVectorEngineBinlogPrefixWriteJSONOpt(true, false, w, vec)
+	tctx := basictl.JSONWriteContext{}
+	return BuiltinVectorEngineBinlogPrefixWriteJSONOpt(&tctx, w, vec)
 }
-func BuiltinVectorEngineBinlogPrefixWriteJSONOpt(newTypeNames bool, short bool, w []byte, vec []EngineBinlogPrefix) []byte {
+func BuiltinVectorEngineBinlogPrefixWriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte, vec []EngineBinlogPrefix) []byte {
 	w = append(w, '[')
 	for _, elem := range vec {
 		w = basictl.JSONAddCommaIfNeeded(w)
-		w = elem.WriteJSONOpt(newTypeNames, short, w)
+		w = elem.WriteJSONOpt(tctx, w)
 	}
 	return append(w, ']')
 }
@@ -95,6 +109,11 @@ func (item *EngineBinlogPrefix) Reset() {
 	item.SnapshotPrefix = ""
 }
 
+func (item *EngineBinlogPrefix) FillRandom(rg *basictl.RandGenerator) {
+	item.BinlogPrefix = basictl.RandomString(rg)
+	item.SnapshotPrefix = basictl.RandomString(rg)
+}
+
 func (item *EngineBinlogPrefix) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.StringRead(w, &item.BinlogPrefix); err != nil {
 		return w, err
@@ -102,7 +121,6 @@ func (item *EngineBinlogPrefix) Read(w []byte) (_ []byte, err error) {
 	return basictl.StringRead(w, &item.SnapshotPrefix)
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineBinlogPrefix) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -120,7 +138,6 @@ func (item *EngineBinlogPrefix) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineBinlogPrefix) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -135,6 +152,11 @@ func (item EngineBinlogPrefix) String() string {
 }
 
 func (item *EngineBinlogPrefix) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineBinlogPrefix) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propBinlogPrefixPresented bool
 	var propSnapshotPrefixPresented bool
 
@@ -183,14 +205,15 @@ func (item *EngineBinlogPrefix) ReadJSON(legacyTypeNames bool, in *basictl.JsonL
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineBinlogPrefix) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineBinlogPrefix) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineBinlogPrefix) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineBinlogPrefix) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineBinlogPrefix) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexBinlogPrefix := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -218,4 +241,12 @@ func (item *EngineBinlogPrefix) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.binlogPrefix", err.Error())
 	}
 	return nil
+}
+
+func (item *EngineBinlogPrefix) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.binlogPrefix"))
+}
+
+func (item *EngineBinlogPrefix) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.binlogPrefix")
 }

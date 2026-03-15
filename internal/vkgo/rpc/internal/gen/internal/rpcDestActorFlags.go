@@ -32,36 +32,54 @@ func (item *RpcDestActorFlags) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *RpcDestActorFlags) Read(w []byte) (_ []byte, err error) {
+	return item.ReadTL1(w)
+}
+func (item *RpcDestActorFlags) ReadTL1(w []byte) (_ []byte, err error) {
 	if w, err = basictl.LongRead(w, &item.ActorId); err != nil {
 		return w, err
 	}
-	return item.Extra.Read(w)
+	return item.Extra.ReadTL1(w)
 }
 
 func (item *RpcDestActorFlags) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *RpcDestActorFlags) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *RpcDestActorFlags) Write(w []byte) []byte {
+	return item.WriteTL1(w)
+}
+func (item *RpcDestActorFlags) WriteTL1(w []byte) []byte {
 	w = basictl.LongWrite(w, item.ActorId)
-	w = item.Extra.Write(w)
+	w = item.Extra.WriteTL1(w)
 	return w
 }
 
 func (item *RpcDestActorFlags) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *RpcDestActorFlags) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0xf0a5acf7); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *RpcDestActorFlags) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *RpcDestActorFlags) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *RpcDestActorFlags) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *RpcDestActorFlags) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0xf0a5acf7)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item RpcDestActorFlags) String() string {
@@ -69,6 +87,11 @@ func (item RpcDestActorFlags) String() string {
 }
 
 func (item *RpcDestActorFlags) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *RpcDestActorFlags) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propActorIdPresented bool
 	var propExtraPresented bool
 
@@ -93,7 +116,7 @@ func (item *RpcDestActorFlags) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 				if propExtraPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("rpcDestActorFlags", "extra")
 				}
-				if err := item.Extra.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Extra.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propExtraPresented = true
@@ -117,14 +140,15 @@ func (item *RpcDestActorFlags) ReadJSON(legacyTypeNames bool, in *basictl.JsonLe
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *RpcDestActorFlags) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *RpcDestActorFlags) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *RpcDestActorFlags) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *RpcDestActorFlags) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *RpcDestActorFlags) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexActorId := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -135,7 +159,7 @@ func (item *RpcDestActorFlags) WriteJSONOpt(newTypeNames bool, short bool, w []b
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"extra":`...)
-	w = item.Extra.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Extra.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 

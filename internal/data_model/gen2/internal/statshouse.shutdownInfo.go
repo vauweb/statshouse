@@ -68,6 +68,32 @@ func (item *StatshouseShutdownInfo) Reset() {
 	item.N = 0
 }
 
+func (item *StatshouseShutdownInfo) FillRandom(rg *basictl.RandGenerator) {
+	item.StartShutdownTime = basictl.RandomLong(rg)
+	item.FinishShutdownTime = basictl.RandomLong(rg)
+	item.StopRecentSenders = basictl.RandomLong(rg)
+	item.StopReceivers = basictl.RandomLong(rg)
+	item.StopFlusher = basictl.RandomLong(rg)
+	item.StopFlushing = basictl.RandomLong(rg)
+	item.StopPreprocessor = basictl.RandomLong(rg)
+	item.StopInserters = basictl.RandomLong(rg)
+	item.StopRPCServer = basictl.RandomLong(rg)
+	item.SaveMappings = basictl.RandomLong(rg)
+	item.SaveJournal = basictl.RandomLong(rg)
+	item.C = basictl.RandomLong(rg)
+	item.D = basictl.RandomLong(rg)
+	item.E = basictl.RandomLong(rg)
+	item.F = basictl.RandomLong(rg)
+	item.G = basictl.RandomLong(rg)
+	item.H = basictl.RandomLong(rg)
+	item.I = basictl.RandomLong(rg)
+	item.J = basictl.RandomLong(rg)
+	item.K = basictl.RandomLong(rg)
+	item.L = basictl.RandomLong(rg)
+	item.M = basictl.RandomLong(rg)
+	item.N = basictl.RandomLong(rg)
+}
+
 func (item *StatshouseShutdownInfo) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.LongRead(w, &item.StartShutdownTime); err != nil {
 		return w, err
@@ -138,7 +164,6 @@ func (item *StatshouseShutdownInfo) Read(w []byte) (_ []byte, err error) {
 	return basictl.LongRead(w, &item.N)
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseShutdownInfo) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -177,7 +202,6 @@ func (item *StatshouseShutdownInfo) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseShutdownInfo) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -192,6 +216,11 @@ func (item StatshouseShutdownInfo) String() string {
 }
 
 func (item *StatshouseShutdownInfo) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *StatshouseShutdownInfo) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propStartShutdownTimePresented bool
 	var propFinishShutdownTimePresented bool
 	var propStopRecentSendersPresented bool
@@ -492,14 +521,15 @@ func (item *StatshouseShutdownInfo) ReadJSON(legacyTypeNames bool, in *basictl.J
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseShutdownInfo) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *StatshouseShutdownInfo) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *StatshouseShutdownInfo) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *StatshouseShutdownInfo) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *StatshouseShutdownInfo) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexStartShutdownTime := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -674,4 +704,12 @@ func (item *StatshouseShutdownInfo) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("statshouse.shutdownInfo", err.Error())
 	}
 	return nil
+}
+
+func (item *StatshouseShutdownInfo) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.shutdownInfo"))
+}
+
+func (item *StatshouseShutdownInfo) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.shutdownInfo")
 }

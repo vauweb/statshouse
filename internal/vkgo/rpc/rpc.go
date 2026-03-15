@@ -30,21 +30,6 @@ const (
 	PacketTypeRPCPong = constants.RpcPong
 	// contains 8 byte payload
 
-	// rpc-error-codes.h
-	TLErrorSyntax           = -1000 // TL_ERROR_SYNTAX
-	TlErrorNoHandler        = -2000 // TL_ERROR_UNKNOWN_FUNCTION_ID
-	TlErrorTooLongString    = -2003 // TOO_LONG_STRING
-	TlErrorValueNotInRange  = -2004 // VALUE_NOT_IN_RANGE
-	TlErrorQueryIncorrect   = -2005 // QUERY_INCORRECT
-	TlErrorBadValue         = -2006 // BAD_VALUE
-	TlErrorGracefulShutdown = -2014 // TL_ERROR_GRACEFUL_SHUTDOWN
-	TlErrorTimeout          = -3000 // TL_ERROR_QUERY_TIMEOUT
-	TLErrorNoConnections    = -3002 // TL_ERROR_NO_CONNECTIONS
-	TlErrorInternal         = -3003 // TL_ERROR_INTERNAL
-	TLErrorResultToLarge    = -3011 // TL_ERROR_RESULT_TOO_LARGE
-	TlErrorUnknown          = -4000 // TL_ERROR_UNKNOWN
-	TlErrorResponseSyntax   = -4101 // RESPONSE_SYNTAX
-
 	DefaultPacketTimeout = 10 * time.Second
 	// keeping this above 10 seconds helps to avoid disconnecting engines with default 10 seconds ping interval
 	//
@@ -74,13 +59,10 @@ type InvokeReqExtra struct { // additional parameters to auto generated client c
 	// Here, because generated code calls GetRequest() so caller has no access to request
 	FailIfNoConnection bool
 
-	// By settings this, client certifies that deployed server (and all RPC proxies between) supports TL2
-	// If combinator is TL1-only, request will still use TL1.
-	// If combinator is TL2-only, request will always use TL2.
-	// If TL2 is selected for body format, then rpc2.invokeReq will also be used as a packet format
-	// Once all deployed production servers and proxies support rpc2.invokeReq packet format,
-	// rpc2.invokeReq will always be used, independent of body format (which will stay TL1 for many engines).
-	PreferTL2 bool
+	// By settings this to 1 or 2, user selects preferred format to use, if generated code supports both
+	PreferTLVersion int
+
+	PreferTL2 bool // TODO - remove on the next iteration
 
 	ResponseExtra ResponseExtra // after call, response extra is available here
 }
@@ -107,6 +89,11 @@ func NewDefaultError(description string) *Error {
 	return &Error{
 		Description: description,
 	}
+}
+
+// @see https://confluence.vk.team/pages/viewpage.action?pageId=1405042319
+func (err *Error) IsApplicationLevelError() bool {
+	return err.Code >= -5999 && err.Code <= -5000
 }
 
 type tagError struct {
@@ -158,16 +145,19 @@ func (na NetAddr) String() string {
 	return na.Network + "://" + na.Address
 }
 
+// after header, there is body, then
+// crc32 of (header | body)
+// then (only if encrypted) must contain 0 to 3 zero bytes aligning packet to multiple of 4
+// then can contain 0 to 3 values of uint32(4), aligning packet to multiple of AES encryption block.
 type packetHeader struct {
 	length uint32 // (body size + 16 bytes) for historic reasons
 	seqNum uint32
 	tip    uint32
 }
 
-// after header, there is body, then
-// crc32 of (header | body)
-// then (only if encrypted) must contain 0 to 3 zero bytes aligning packet to multiple of 4
-// then can contain 0 to 3 values of uint32(4), aligning packet to multiple of AES encryption block.
+func (p packetHeader) String() string {
+	return fmt.Sprintf(`{"len":%d,"seq":%d,"tip":"0x%08X"}`, p.length, p.seqNum, p.tip)
+}
 
 func humanByteCountIEC(b int64) string {
 	const unit int64 = 1024
@@ -181,9 +171,4 @@ func humanByteCountIEC(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %ciB",
 		float64(b)/float64(div), "KMGTPE"[exp])
-}
-
-// rpc-error-codes.h
-func IsUserError(errCode int32) bool {
-	return errCode > -3000 && errCode <= -1000
 }

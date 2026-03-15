@@ -26,6 +26,11 @@ func (item *MetadataCreateEntityEvent) Reset() {
 	item.Metric.Reset()
 }
 
+func (item *MetadataCreateEntityEvent) FillRandom(rg *basictl.RandGenerator) {
+	item.FieldsMask = basictl.RandomUint(rg)
+	item.Metric.FillRandom(rg)
+}
+
 func (item *MetadataCreateEntityEvent) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
@@ -33,7 +38,6 @@ func (item *MetadataCreateEntityEvent) Read(w []byte) (_ []byte, err error) {
 	return item.Metric.Read(w)
 }
 
-// This method is general version of Write, use it instead!
 func (item *MetadataCreateEntityEvent) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -51,7 +55,6 @@ func (item *MetadataCreateEntityEvent) ReadBoxed(w []byte) (_ []byte, err error)
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *MetadataCreateEntityEvent) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -66,6 +69,11 @@ func (item MetadataCreateEntityEvent) String() string {
 }
 
 func (item *MetadataCreateEntityEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *MetadataCreateEntityEvent) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propFieldsMaskPresented bool
 	var propMetricPresented bool
 
@@ -90,7 +98,7 @@ func (item *MetadataCreateEntityEvent) ReadJSON(legacyTypeNames bool, in *basict
 				if propMetricPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("metadata.createEntityEvent", "metric")
 				}
-				if err := item.Metric.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Metric.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propMetricPresented = true
@@ -114,14 +122,15 @@ func (item *MetadataCreateEntityEvent) ReadJSON(legacyTypeNames bool, in *basict
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *MetadataCreateEntityEvent) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *MetadataCreateEntityEvent) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *MetadataCreateEntityEvent) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *MetadataCreateEntityEvent) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *MetadataCreateEntityEvent) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexFieldsMask := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -132,7 +141,7 @@ func (item *MetadataCreateEntityEvent) WriteJSONOpt(newTypeNames bool, short boo
 	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"metric":`...)
-	w = item.Metric.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Metric.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 
@@ -145,4 +154,12 @@ func (item *MetadataCreateEntityEvent) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("metadata.createEntityEvent", err.Error())
 	}
 	return nil
+}
+
+func (item *MetadataCreateEntityEvent) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("metadata.createEntityEvent"))
+}
+
+func (item *MetadataCreateEntityEvent) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("metadata.createEntityEvent")
 }

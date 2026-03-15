@@ -29,32 +29,50 @@ func (item *ReleaseSlotEvent) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *ReleaseSlotEvent) Read(w []byte) (_ []byte, err error) {
-	return item.Key.Read(w)
+	return item.ReadTL1(w)
+}
+func (item *ReleaseSlotEvent) ReadTL1(w []byte) (_ []byte, err error) {
+	return item.Key.ReadTL1(w)
 }
 
 func (item *ReleaseSlotEvent) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *ReleaseSlotEvent) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *ReleaseSlotEvent) Write(w []byte) []byte {
-	w = item.Key.Write(w)
+	return item.WriteTL1(w)
+}
+func (item *ReleaseSlotEvent) WriteTL1(w []byte) []byte {
+	w = item.Key.WriteTL1(w)
 	return w
 }
 
 func (item *ReleaseSlotEvent) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *ReleaseSlotEvent) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x7f045ccc); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *ReleaseSlotEvent) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *ReleaseSlotEvent) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *ReleaseSlotEvent) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *ReleaseSlotEvent) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x7f045ccc)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item ReleaseSlotEvent) String() string {
@@ -62,6 +80,11 @@ func (item ReleaseSlotEvent) String() string {
 }
 
 func (item *ReleaseSlotEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *ReleaseSlotEvent) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propKeyPresented bool
 
 	if in != nil {
@@ -77,7 +100,7 @@ func (item *ReleaseSlotEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLex
 				if propKeyPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("releaseSlotEvent", "key")
 				}
-				if err := item.Key.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.Key.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propKeyPresented = true
@@ -98,18 +121,19 @@ func (item *ReleaseSlotEvent) ReadJSON(legacyTypeNames bool, in *basictl.JsonLex
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *ReleaseSlotEvent) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *ReleaseSlotEvent) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *ReleaseSlotEvent) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *ReleaseSlotEvent) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *ReleaseSlotEvent) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"key":`...)
-	w = item.Key.WriteJSONOpt(newTypeNames, short, w)
+	w = item.Key.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 

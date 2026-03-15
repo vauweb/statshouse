@@ -24,11 +24,14 @@ func (item *EngineSetMetafileMemory) Reset() {
 	item.Megabytes = 0
 }
 
+func (item *EngineSetMetafileMemory) FillRandom(rg *basictl.RandGenerator) {
+	item.Megabytes = basictl.RandomInt(rg)
+}
+
 func (item *EngineSetMetafileMemory) Read(w []byte) (_ []byte, err error) {
 	return basictl.IntRead(w, &item.Megabytes)
 }
 
-// This method is general version of Write, use it instead!
 func (item *EngineSetMetafileMemory) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -45,7 +48,6 @@ func (item *EngineSetMetafileMemory) ReadBoxed(w []byte) (_ []byte, err error) {
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *EngineSetMetafileMemory) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -65,47 +67,61 @@ func (item *EngineSetMetafileMemory) WriteResult(w []byte, ret BoolStat) (_ []by
 }
 
 func (item *EngineSetMetafileMemory) ReadResultJSON(legacyTypeNames bool, in *basictl.JsonLexer, ret *BoolStat) error {
-	if err := ret.ReadJSON(legacyTypeNames, in); err != nil {
+	tctx := &basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	if err := ret.ReadJSONGeneral(tctx, in); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (item *EngineSetMetafileMemory) WriteResultJSON(w []byte, ret BoolStat) (_ []byte, err error) {
-	return item.writeResultJSON(true, false, w, ret)
+	tctx := basictl.JSONWriteContext{}
+	return item.writeResultJSON(&tctx, w, ret)
 }
 
-func (item *EngineSetMetafileMemory) writeResultJSON(newTypeNames bool, short bool, w []byte, ret BoolStat) (_ []byte, err error) {
-	w = ret.WriteJSONOpt(newTypeNames, short, w)
+func (item *EngineSetMetafileMemory) writeResultJSON(tctx *basictl.JSONWriteContext, w []byte, ret BoolStat) (_ []byte, err error) {
+	w = ret.WriteJSONOpt(tctx, w)
 	return w, nil
 }
 
-func (item *EngineSetMetafileMemory) ReadResultWriteResultJSON(r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineSetMetafileMemory) FillRandomResult(rg *basictl.RandGenerator, w []byte) ([]byte, error) {
+	var ret BoolStat
+	ret.FillRandom(rg)
+	return item.WriteResult(w, ret)
+}
+
+func (item *EngineSetMetafileMemory) ReadResultWriteResultJSON(tctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret BoolStat
 	if r, err = item.ReadResult(r, &ret); err != nil {
 		return r, w, err
 	}
-	w, err = item.WriteResultJSON(w, ret)
+	w, err = item.writeResultJSON(tctx, w, ret)
 	return r, w, err
 }
 
-func (item *EngineSetMetafileMemory) ReadResultWriteResultJSONOpt(newTypeNames bool, short bool, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+func (item *EngineSetMetafileMemory) ReadResultJSONWriteResult(r []byte, w []byte) (_ []byte, _ []byte, err error) {
 	var ret BoolStat
-	if r, err = item.ReadResult(r, &ret); err != nil {
-		return r, w, err
-	}
-	w, err = item.writeResultJSON(newTypeNames, short, w, ret)
-	return r, w, err
-}
-
-func (item *EngineSetMetafileMemory) ReadResultJSONWriteResult(r []byte, w []byte) ([]byte, []byte, error) {
-	var ret BoolStat
-	err := item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret)
-	if err != nil {
+	if err = item.ReadResultJSON(true, &basictl.JsonLexer{Data: r}, &ret); err != nil {
 		return r, w, err
 	}
 	w, err = item.WriteResult(w, ret)
 	return r, w, err
+}
+
+func (item *EngineSetMetafileMemory) ReadResultWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setMetafileMemory")
+}
+
+func (item *EngineSetMetafileMemory) ReadResultTL2WriteResult(tctx *basictl.TL2ReadContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setMetafileMemory")
+}
+
+func (item *EngineSetMetafileMemory) ReadResultTL2WriteResultJSON(tctx *basictl.TL2ReadContext, jctx *basictl.JSONWriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setMetafileMemory")
+}
+
+func (item *EngineSetMetafileMemory) ReadResultJSONWriteResultTL2(tctx *basictl.TL2WriteContext, r []byte, w []byte) (_ []byte, _ []byte, err error) {
+	return r, w, ErrorTL2SerializersNotGenerated("engine.setMetafileMemory")
 }
 
 func (item EngineSetMetafileMemory) String() string {
@@ -113,6 +129,11 @@ func (item EngineSetMetafileMemory) String() string {
 }
 
 func (item *EngineSetMetafileMemory) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *EngineSetMetafileMemory) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propMegabytesPresented bool
 
 	if in != nil {
@@ -149,14 +170,15 @@ func (item *EngineSetMetafileMemory) ReadJSON(legacyTypeNames bool, in *basictl.
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *EngineSetMetafileMemory) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *EngineSetMetafileMemory) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *EngineSetMetafileMemory) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *EngineSetMetafileMemory) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *EngineSetMetafileMemory) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexMegabytes := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
@@ -177,4 +199,12 @@ func (item *EngineSetMetafileMemory) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("engine.setMetafileMemory", err.Error())
 	}
 	return nil
+}
+
+func (item *EngineSetMetafileMemory) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("engine.setMetafileMemory"))
+}
+
+func (item *EngineSetMetafileMemory) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("engine.setMetafileMemory")
 }

@@ -13,6 +13,7 @@ import (
 
 var _ = basictl.NatWrite
 
+// if the query header specifies exactlyOnce.commitRequest, then the engine will respond with this type
 type ExactlyOnceAckResponse struct {
 	PersistentQueryUuid ExactlyOnceUuid
 }
@@ -29,32 +30,50 @@ func (item *ExactlyOnceAckResponse) FillRandom(rg *basictl.RandGenerator) {
 }
 
 func (item *ExactlyOnceAckResponse) Read(w []byte) (_ []byte, err error) {
-	return item.PersistentQueryUuid.Read(w)
+	return item.ReadTL1(w)
+}
+func (item *ExactlyOnceAckResponse) ReadTL1(w []byte) (_ []byte, err error) {
+	return item.PersistentQueryUuid.ReadTL1(w)
 }
 
 func (item *ExactlyOnceAckResponse) WriteGeneral(w []byte) (_ []byte, err error) {
-	return item.Write(w), nil
+	return item.WriteTL1General(w)
+}
+func (item *ExactlyOnceAckResponse) WriteTL1General(w []byte) (_ []byte, err error) {
+	return item.WriteTL1(w), nil
 }
 
 func (item *ExactlyOnceAckResponse) Write(w []byte) []byte {
-	w = item.PersistentQueryUuid.Write(w)
+	return item.WriteTL1(w)
+}
+func (item *ExactlyOnceAckResponse) WriteTL1(w []byte) []byte {
+	w = item.PersistentQueryUuid.WriteTL1(w)
 	return w
 }
 
 func (item *ExactlyOnceAckResponse) ReadBoxed(w []byte) (_ []byte, err error) {
+	return item.ReadTL1Boxed(w)
+}
+func (item *ExactlyOnceAckResponse) ReadTL1Boxed(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatReadExactTag(w, 0x17641550); err != nil {
 		return w, err
 	}
-	return item.Read(w)
+	return item.ReadTL1(w)
 }
 
 func (item *ExactlyOnceAckResponse) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteBoxed(w), nil
+	return item.WriteTL1BoxedGeneral(w)
+}
+func (item *ExactlyOnceAckResponse) WriteTL1BoxedGeneral(w []byte) (_ []byte, err error) {
+	return item.WriteTL1Boxed(w), nil
 }
 
 func (item *ExactlyOnceAckResponse) WriteBoxed(w []byte) []byte {
+	return item.WriteTL1Boxed(w)
+}
+func (item *ExactlyOnceAckResponse) WriteTL1Boxed(w []byte) []byte {
 	w = basictl.NatWrite(w, 0x17641550)
-	return item.Write(w)
+	return item.WriteTL1(w)
 }
 
 func (item ExactlyOnceAckResponse) String() string {
@@ -62,6 +81,11 @@ func (item ExactlyOnceAckResponse) String() string {
 }
 
 func (item *ExactlyOnceAckResponse) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *ExactlyOnceAckResponse) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propPersistentQueryUuidPresented bool
 
 	if in != nil {
@@ -77,7 +101,7 @@ func (item *ExactlyOnceAckResponse) ReadJSON(legacyTypeNames bool, in *basictl.J
 				if propPersistentQueryUuidPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("exactlyOnce.ackResponse", "persistent_query_uuid")
 				}
-				if err := item.PersistentQueryUuid.ReadJSON(legacyTypeNames, in); err != nil {
+				if err := item.PersistentQueryUuid.ReadJSONGeneral(tctx, in); err != nil {
 					return err
 				}
 				propPersistentQueryUuidPresented = true
@@ -98,18 +122,19 @@ func (item *ExactlyOnceAckResponse) ReadJSON(legacyTypeNames bool, in *basictl.J
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *ExactlyOnceAckResponse) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *ExactlyOnceAckResponse) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *ExactlyOnceAckResponse) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *ExactlyOnceAckResponse) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *ExactlyOnceAckResponse) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"persistent_query_uuid":`...)
-	w = item.PersistentQueryUuid.WriteJSONOpt(newTypeNames, short, w)
+	w = item.PersistentQueryUuid.WriteJSONOpt(tctx, w)
 	return append(w, '}')
 }
 

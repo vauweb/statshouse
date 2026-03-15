@@ -16,18 +16,44 @@ var _ = basictl.NatWrite
 type StatshouseGetConfigResult3 struct {
 	Addresses          []string
 	ShardByMetricCount uint32
-	Unused             [12]int32
-	UnusedS            [4]string
+	FieldsMask         uint32
+	// IngressProxy (TrueType) // Conditional: item.FieldsMask.0
+	AgentIp     [4]int32
+	Unused      [7]int32
+	ConnectedTo string
+	UnusedS     [3]string
 }
 
 func (StatshouseGetConfigResult3) TLName() string { return "statshouse.getConfigResult3" }
 func (StatshouseGetConfigResult3) TLTag() uint32  { return 0xf13698cb }
 
+func (item *StatshouseGetConfigResult3) SetIngressProxy(v bool) {
+	if v {
+		item.FieldsMask |= 1 << 0
+	} else {
+		item.FieldsMask &^= 1 << 0
+	}
+}
+func (item *StatshouseGetConfigResult3) IsSetIngressProxy() bool { return item.FieldsMask&(1<<0) != 0 }
+
 func (item *StatshouseGetConfigResult3) Reset() {
 	item.Addresses = item.Addresses[:0]
 	item.ShardByMetricCount = 0
-	BuiltinTuple12IntReset(&item.Unused)
-	BuiltinTuple4StringReset(&item.UnusedS)
+	item.FieldsMask = 0
+	BuiltinTuple4IntReset(&item.AgentIp)
+	BuiltinTuple7IntReset(&item.Unused)
+	item.ConnectedTo = ""
+	BuiltinTuple3StringReset(&item.UnusedS)
+}
+
+func (item *StatshouseGetConfigResult3) FillRandom(rg *basictl.RandGenerator) {
+	BuiltinVectorStringFillRandom(rg, &item.Addresses)
+	item.ShardByMetricCount = basictl.RandomUint(rg)
+	item.FieldsMask = basictl.RandomFieldMask(rg, 0b1)
+	BuiltinTuple4IntFillRandom(rg, &item.AgentIp)
+	BuiltinTuple7IntFillRandom(rg, &item.Unused)
+	item.ConnectedTo = basictl.RandomString(rg)
+	BuiltinTuple3StringFillRandom(rg, &item.UnusedS)
 }
 
 func (item *StatshouseGetConfigResult3) Read(w []byte) (_ []byte, err error) {
@@ -37,13 +63,21 @@ func (item *StatshouseGetConfigResult3) Read(w []byte) (_ []byte, err error) {
 	if w, err = basictl.NatRead(w, &item.ShardByMetricCount); err != nil {
 		return w, err
 	}
-	if w, err = BuiltinTuple12IntRead(w, &item.Unused); err != nil {
+	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
 	}
-	return BuiltinTuple4StringRead(w, &item.UnusedS)
+	if w, err = BuiltinTuple4IntRead(w, &item.AgentIp); err != nil {
+		return w, err
+	}
+	if w, err = BuiltinTuple7IntRead(w, &item.Unused); err != nil {
+		return w, err
+	}
+	if w, err = basictl.StringRead(w, &item.ConnectedTo); err != nil {
+		return w, err
+	}
+	return BuiltinTuple3StringRead(w, &item.UnusedS)
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseGetConfigResult3) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -51,8 +85,11 @@ func (item *StatshouseGetConfigResult3) WriteGeneral(w []byte) (_ []byte, err er
 func (item *StatshouseGetConfigResult3) Write(w []byte) []byte {
 	w = BuiltinVectorStringWrite(w, item.Addresses)
 	w = basictl.NatWrite(w, item.ShardByMetricCount)
-	w = BuiltinTuple12IntWrite(w, &item.Unused)
-	w = BuiltinTuple4StringWrite(w, &item.UnusedS)
+	w = basictl.NatWrite(w, item.FieldsMask)
+	w = BuiltinTuple4IntWrite(w, &item.AgentIp)
+	w = BuiltinTuple7IntWrite(w, &item.Unused)
+	w = basictl.StringWrite(w, item.ConnectedTo)
+	w = BuiltinTuple3StringWrite(w, &item.UnusedS)
 	return w
 }
 
@@ -63,7 +100,6 @@ func (item *StatshouseGetConfigResult3) ReadBoxed(w []byte) (_ []byte, err error
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseGetConfigResult3) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -78,9 +114,19 @@ func (item StatshouseGetConfigResult3) String() string {
 }
 
 func (item *StatshouseGetConfigResult3) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *StatshouseGetConfigResult3) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propAddressesPresented bool
 	var propShardByMetricCountPresented bool
+	var propFieldsMaskPresented bool
+	var trueTypeIngressProxyPresented bool
+	var trueTypeIngressProxyValue bool
+	var propAgentIpPresented bool
 	var propUnusedPresented bool
+	var propConnectedToPresented bool
 	var propUnusedSPresented bool
 
 	if in != nil {
@@ -96,7 +142,7 @@ func (item *StatshouseGetConfigResult3) ReadJSON(legacyTypeNames bool, in *basic
 				if propAddressesPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "addresses")
 				}
-				if err := BuiltinVectorStringReadJSON(legacyTypeNames, in, &item.Addresses); err != nil {
+				if err := BuiltinVectorStringReadJSONGeneral(tctx, in, &item.Addresses); err != nil {
 					return err
 				}
 				propAddressesPresented = true
@@ -108,19 +154,51 @@ func (item *StatshouseGetConfigResult3) ReadJSON(legacyTypeNames bool, in *basic
 					return err
 				}
 				propShardByMetricCountPresented = true
+			case "fields_mask":
+				if propFieldsMaskPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "fields_mask")
+				}
+				if err := Json2ReadUint32(in, &item.FieldsMask); err != nil {
+					return err
+				}
+				propFieldsMaskPresented = true
+			case "ingress_proxy":
+				if trueTypeIngressProxyPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "ingress_proxy")
+				}
+				if err := Json2ReadBool(in, &trueTypeIngressProxyValue); err != nil {
+					return err
+				}
+				trueTypeIngressProxyPresented = true
+			case "agent_ip":
+				if propAgentIpPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "agent_ip")
+				}
+				if err := BuiltinTuple4IntReadJSONGeneral(tctx, in, &item.AgentIp); err != nil {
+					return err
+				}
+				propAgentIpPresented = true
 			case "unused":
 				if propUnusedPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "unused")
 				}
-				if err := BuiltinTuple12IntReadJSON(legacyTypeNames, in, &item.Unused); err != nil {
+				if err := BuiltinTuple7IntReadJSONGeneral(tctx, in, &item.Unused); err != nil {
 					return err
 				}
 				propUnusedPresented = true
+			case "connected_to":
+				if propConnectedToPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "connected_to")
+				}
+				if err := Json2ReadString(in, &item.ConnectedTo); err != nil {
+					return err
+				}
+				propConnectedToPresented = true
 			case "unused_s":
 				if propUnusedSPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "unused_s")
 				}
-				if err := BuiltinTuple4StringReadJSON(legacyTypeNames, in, &item.UnusedS); err != nil {
+				if err := BuiltinTuple3StringReadJSONGeneral(tctx, in, &item.UnusedS); err != nil {
 					return err
 				}
 				propUnusedSPresented = true
@@ -140,29 +218,48 @@ func (item *StatshouseGetConfigResult3) ReadJSON(legacyTypeNames bool, in *basic
 	if !propShardByMetricCountPresented {
 		item.ShardByMetricCount = 0
 	}
+	if !propFieldsMaskPresented {
+		item.FieldsMask = 0
+	}
+	if !propAgentIpPresented {
+		BuiltinTuple4IntReset(&item.AgentIp)
+	}
 	if !propUnusedPresented {
-		BuiltinTuple12IntReset(&item.Unused)
+		BuiltinTuple7IntReset(&item.Unused)
+	}
+	if !propConnectedToPresented {
+		item.ConnectedTo = ""
 	}
 	if !propUnusedSPresented {
-		BuiltinTuple4StringReset(&item.UnusedS)
+		BuiltinTuple3StringReset(&item.UnusedS)
+	}
+	if trueTypeIngressProxyPresented {
+		if trueTypeIngressProxyValue {
+			item.FieldsMask |= 1 << 0
+		}
+	}
+	// tries to set bit to zero if it is 1
+	if trueTypeIngressProxyPresented && !trueTypeIngressProxyValue && (item.FieldsMask&(1<<0) != 0) {
+		return ErrorInvalidJSON("statshouse.getConfigResult3", "fieldmask bit item.FieldsMask.0 is indefinite because of the contradictions in values")
 	}
 	return nil
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseGetConfigResult3) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *StatshouseGetConfigResult3) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *StatshouseGetConfigResult3) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *StatshouseGetConfigResult3) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *StatshouseGetConfigResult3) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexAddresses := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"addresses":`...)
-	w = BuiltinVectorStringWriteJSONOpt(newTypeNames, short, w, item.Addresses)
+	w = BuiltinVectorStringWriteJSONOpt(tctx, w, item.Addresses)
 	if (len(item.Addresses) != 0) == false {
 		w = w[:backupIndexAddresses]
 	}
@@ -173,12 +270,33 @@ func (item *StatshouseGetConfigResult3) WriteJSONOpt(newTypeNames bool, short bo
 	if (item.ShardByMetricCount != 0) == false {
 		w = w[:backupIndexShardByMetricCount]
 	}
+	backupIndexFieldsMask := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"fields_mask":`...)
+	w = basictl.JSONWriteUint32(w, item.FieldsMask)
+	if (item.FieldsMask != 0) == false {
+		w = w[:backupIndexFieldsMask]
+	}
+	if item.FieldsMask&(1<<0) != 0 {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = append(w, `"ingress_proxy":true`...)
+	}
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"agent_ip":`...)
+	w = BuiltinTuple4IntWriteJSONOpt(tctx, w, &item.AgentIp)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"unused":`...)
-	w = BuiltinTuple12IntWriteJSONOpt(newTypeNames, short, w, &item.Unused)
+	w = BuiltinTuple7IntWriteJSONOpt(tctx, w, &item.Unused)
+	backupIndexConnectedTo := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"connected_to":`...)
+	w = basictl.JSONWriteString(w, item.ConnectedTo)
+	if (len(item.ConnectedTo) != 0) == false {
+		w = w[:backupIndexConnectedTo]
+	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"unused_s":`...)
-	w = BuiltinTuple4StringWriteJSONOpt(newTypeNames, short, w, &item.UnusedS)
+	w = BuiltinTuple3StringWriteJSONOpt(tctx, w, &item.UnusedS)
 	return append(w, '}')
 }
 
@@ -193,21 +311,57 @@ func (item *StatshouseGetConfigResult3) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (item *StatshouseGetConfigResult3) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.getConfigResult3"))
+}
+
+func (item *StatshouseGetConfigResult3) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.getConfigResult3")
+}
+
 type StatshouseGetConfigResult3Bytes struct {
 	Addresses          [][]byte
 	ShardByMetricCount uint32
-	Unused             [12]int32
-	UnusedS            [4][]byte
+	FieldsMask         uint32
+	// IngressProxy (TrueType) // Conditional: item.FieldsMask.0
+	AgentIp     [4]int32
+	Unused      [7]int32
+	ConnectedTo []byte
+	UnusedS     [3][]byte
 }
 
 func (StatshouseGetConfigResult3Bytes) TLName() string { return "statshouse.getConfigResult3" }
 func (StatshouseGetConfigResult3Bytes) TLTag() uint32  { return 0xf13698cb }
 
+func (item *StatshouseGetConfigResult3Bytes) SetIngressProxy(v bool) {
+	if v {
+		item.FieldsMask |= 1 << 0
+	} else {
+		item.FieldsMask &^= 1 << 0
+	}
+}
+func (item *StatshouseGetConfigResult3Bytes) IsSetIngressProxy() bool {
+	return item.FieldsMask&(1<<0) != 0
+}
+
 func (item *StatshouseGetConfigResult3Bytes) Reset() {
 	item.Addresses = item.Addresses[:0]
 	item.ShardByMetricCount = 0
-	BuiltinTuple12IntReset(&item.Unused)
-	BuiltinTuple4StringBytesReset(&item.UnusedS)
+	item.FieldsMask = 0
+	BuiltinTuple4IntReset(&item.AgentIp)
+	BuiltinTuple7IntReset(&item.Unused)
+	item.ConnectedTo = item.ConnectedTo[:0]
+	BuiltinTuple3StringBytesReset(&item.UnusedS)
+}
+
+func (item *StatshouseGetConfigResult3Bytes) FillRandom(rg *basictl.RandGenerator) {
+	BuiltinVectorStringBytesFillRandom(rg, &item.Addresses)
+	item.ShardByMetricCount = basictl.RandomUint(rg)
+	item.FieldsMask = basictl.RandomFieldMask(rg, 0b1)
+	BuiltinTuple4IntFillRandom(rg, &item.AgentIp)
+	BuiltinTuple7IntFillRandom(rg, &item.Unused)
+	item.ConnectedTo = basictl.RandomStringBytes(rg)
+	BuiltinTuple3StringBytesFillRandom(rg, &item.UnusedS)
 }
 
 func (item *StatshouseGetConfigResult3Bytes) Read(w []byte) (_ []byte, err error) {
@@ -217,13 +371,21 @@ func (item *StatshouseGetConfigResult3Bytes) Read(w []byte) (_ []byte, err error
 	if w, err = basictl.NatRead(w, &item.ShardByMetricCount); err != nil {
 		return w, err
 	}
-	if w, err = BuiltinTuple12IntRead(w, &item.Unused); err != nil {
+	if w, err = basictl.NatRead(w, &item.FieldsMask); err != nil {
 		return w, err
 	}
-	return BuiltinTuple4StringBytesRead(w, &item.UnusedS)
+	if w, err = BuiltinTuple4IntRead(w, &item.AgentIp); err != nil {
+		return w, err
+	}
+	if w, err = BuiltinTuple7IntRead(w, &item.Unused); err != nil {
+		return w, err
+	}
+	if w, err = basictl.StringReadBytes(w, &item.ConnectedTo); err != nil {
+		return w, err
+	}
+	return BuiltinTuple3StringBytesRead(w, &item.UnusedS)
 }
 
-// This method is general version of Write, use it instead!
 func (item *StatshouseGetConfigResult3Bytes) WriteGeneral(w []byte) (_ []byte, err error) {
 	return item.Write(w), nil
 }
@@ -231,8 +393,11 @@ func (item *StatshouseGetConfigResult3Bytes) WriteGeneral(w []byte) (_ []byte, e
 func (item *StatshouseGetConfigResult3Bytes) Write(w []byte) []byte {
 	w = BuiltinVectorStringBytesWrite(w, item.Addresses)
 	w = basictl.NatWrite(w, item.ShardByMetricCount)
-	w = BuiltinTuple12IntWrite(w, &item.Unused)
-	w = BuiltinTuple4StringBytesWrite(w, &item.UnusedS)
+	w = basictl.NatWrite(w, item.FieldsMask)
+	w = BuiltinTuple4IntWrite(w, &item.AgentIp)
+	w = BuiltinTuple7IntWrite(w, &item.Unused)
+	w = basictl.StringWriteBytes(w, item.ConnectedTo)
+	w = BuiltinTuple3StringBytesWrite(w, &item.UnusedS)
 	return w
 }
 
@@ -243,7 +408,6 @@ func (item *StatshouseGetConfigResult3Bytes) ReadBoxed(w []byte) (_ []byte, err 
 	return item.Read(w)
 }
 
-// This method is general version of WriteBoxed, use it instead!
 func (item *StatshouseGetConfigResult3Bytes) WriteBoxedGeneral(w []byte) (_ []byte, err error) {
 	return item.WriteBoxed(w), nil
 }
@@ -258,9 +422,19 @@ func (item StatshouseGetConfigResult3Bytes) String() string {
 }
 
 func (item *StatshouseGetConfigResult3Bytes) ReadJSON(legacyTypeNames bool, in *basictl.JsonLexer) error {
+	tctx := basictl.JSONReadContext{LegacyTypeNames: legacyTypeNames}
+	return item.ReadJSONGeneral(&tctx, in)
+}
+
+func (item *StatshouseGetConfigResult3Bytes) ReadJSONGeneral(tctx *basictl.JSONReadContext, in *basictl.JsonLexer) error {
 	var propAddressesPresented bool
 	var propShardByMetricCountPresented bool
+	var propFieldsMaskPresented bool
+	var trueTypeIngressProxyPresented bool
+	var trueTypeIngressProxyValue bool
+	var propAgentIpPresented bool
 	var propUnusedPresented bool
+	var propConnectedToPresented bool
 	var propUnusedSPresented bool
 
 	if in != nil {
@@ -276,7 +450,7 @@ func (item *StatshouseGetConfigResult3Bytes) ReadJSON(legacyTypeNames bool, in *
 				if propAddressesPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "addresses")
 				}
-				if err := BuiltinVectorStringBytesReadJSON(legacyTypeNames, in, &item.Addresses); err != nil {
+				if err := BuiltinVectorStringBytesReadJSONGeneral(tctx, in, &item.Addresses); err != nil {
 					return err
 				}
 				propAddressesPresented = true
@@ -288,19 +462,51 @@ func (item *StatshouseGetConfigResult3Bytes) ReadJSON(legacyTypeNames bool, in *
 					return err
 				}
 				propShardByMetricCountPresented = true
+			case "fields_mask":
+				if propFieldsMaskPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "fields_mask")
+				}
+				if err := Json2ReadUint32(in, &item.FieldsMask); err != nil {
+					return err
+				}
+				propFieldsMaskPresented = true
+			case "ingress_proxy":
+				if trueTypeIngressProxyPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "ingress_proxy")
+				}
+				if err := Json2ReadBool(in, &trueTypeIngressProxyValue); err != nil {
+					return err
+				}
+				trueTypeIngressProxyPresented = true
+			case "agent_ip":
+				if propAgentIpPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "agent_ip")
+				}
+				if err := BuiltinTuple4IntReadJSONGeneral(tctx, in, &item.AgentIp); err != nil {
+					return err
+				}
+				propAgentIpPresented = true
 			case "unused":
 				if propUnusedPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "unused")
 				}
-				if err := BuiltinTuple12IntReadJSON(legacyTypeNames, in, &item.Unused); err != nil {
+				if err := BuiltinTuple7IntReadJSONGeneral(tctx, in, &item.Unused); err != nil {
 					return err
 				}
 				propUnusedPresented = true
+			case "connected_to":
+				if propConnectedToPresented {
+					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "connected_to")
+				}
+				if err := Json2ReadStringBytes(in, &item.ConnectedTo); err != nil {
+					return err
+				}
+				propConnectedToPresented = true
 			case "unused_s":
 				if propUnusedSPresented {
 					return ErrorInvalidJSONWithDuplicatingKeys("statshouse.getConfigResult3", "unused_s")
 				}
-				if err := BuiltinTuple4StringBytesReadJSON(legacyTypeNames, in, &item.UnusedS); err != nil {
+				if err := BuiltinTuple3StringBytesReadJSONGeneral(tctx, in, &item.UnusedS); err != nil {
 					return err
 				}
 				propUnusedSPresented = true
@@ -320,29 +526,48 @@ func (item *StatshouseGetConfigResult3Bytes) ReadJSON(legacyTypeNames bool, in *
 	if !propShardByMetricCountPresented {
 		item.ShardByMetricCount = 0
 	}
+	if !propFieldsMaskPresented {
+		item.FieldsMask = 0
+	}
+	if !propAgentIpPresented {
+		BuiltinTuple4IntReset(&item.AgentIp)
+	}
 	if !propUnusedPresented {
-		BuiltinTuple12IntReset(&item.Unused)
+		BuiltinTuple7IntReset(&item.Unused)
+	}
+	if !propConnectedToPresented {
+		item.ConnectedTo = item.ConnectedTo[:0]
 	}
 	if !propUnusedSPresented {
-		BuiltinTuple4StringBytesReset(&item.UnusedS)
+		BuiltinTuple3StringBytesReset(&item.UnusedS)
+	}
+	if trueTypeIngressProxyPresented {
+		if trueTypeIngressProxyValue {
+			item.FieldsMask |= 1 << 0
+		}
+	}
+	// tries to set bit to zero if it is 1
+	if trueTypeIngressProxyPresented && !trueTypeIngressProxyValue && (item.FieldsMask&(1<<0) != 0) {
+		return ErrorInvalidJSON("statshouse.getConfigResult3", "fieldmask bit item.FieldsMask.0 is indefinite because of the contradictions in values")
 	}
 	return nil
 }
 
 // This method is general version of WriteJSON, use it instead!
-func (item *StatshouseGetConfigResult3Bytes) WriteJSONGeneral(w []byte) (_ []byte, err error) {
-	return item.WriteJSONOpt(true, false, w), nil
+func (item *StatshouseGetConfigResult3Bytes) WriteJSONGeneral(tctx *basictl.JSONWriteContext, w []byte) (_ []byte, err error) {
+	return item.WriteJSONOpt(tctx, w), nil
 }
 
 func (item *StatshouseGetConfigResult3Bytes) WriteJSON(w []byte) []byte {
-	return item.WriteJSONOpt(true, false, w)
+	tctx := basictl.JSONWriteContext{}
+	return item.WriteJSONOpt(&tctx, w)
 }
-func (item *StatshouseGetConfigResult3Bytes) WriteJSONOpt(newTypeNames bool, short bool, w []byte) []byte {
+func (item *StatshouseGetConfigResult3Bytes) WriteJSONOpt(tctx *basictl.JSONWriteContext, w []byte) []byte {
 	w = append(w, '{')
 	backupIndexAddresses := len(w)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"addresses":`...)
-	w = BuiltinVectorStringBytesWriteJSONOpt(newTypeNames, short, w, item.Addresses)
+	w = BuiltinVectorStringBytesWriteJSONOpt(tctx, w, item.Addresses)
 	if (len(item.Addresses) != 0) == false {
 		w = w[:backupIndexAddresses]
 	}
@@ -353,12 +578,33 @@ func (item *StatshouseGetConfigResult3Bytes) WriteJSONOpt(newTypeNames bool, sho
 	if (item.ShardByMetricCount != 0) == false {
 		w = w[:backupIndexShardByMetricCount]
 	}
+	backupIndexFieldsMask := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"fields_mask":`...)
+	w = basictl.JSONWriteUint32(w, item.FieldsMask)
+	if (item.FieldsMask != 0) == false {
+		w = w[:backupIndexFieldsMask]
+	}
+	if item.FieldsMask&(1<<0) != 0 {
+		w = basictl.JSONAddCommaIfNeeded(w)
+		w = append(w, `"ingress_proxy":true`...)
+	}
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"agent_ip":`...)
+	w = BuiltinTuple4IntWriteJSONOpt(tctx, w, &item.AgentIp)
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"unused":`...)
-	w = BuiltinTuple12IntWriteJSONOpt(newTypeNames, short, w, &item.Unused)
+	w = BuiltinTuple7IntWriteJSONOpt(tctx, w, &item.Unused)
+	backupIndexConnectedTo := len(w)
+	w = basictl.JSONAddCommaIfNeeded(w)
+	w = append(w, `"connected_to":`...)
+	w = basictl.JSONWriteStringBytes(w, item.ConnectedTo)
+	if (len(item.ConnectedTo) != 0) == false {
+		w = w[:backupIndexConnectedTo]
+	}
 	w = basictl.JSONAddCommaIfNeeded(w)
 	w = append(w, `"unused_s":`...)
-	w = BuiltinTuple4StringBytesWriteJSONOpt(newTypeNames, short, w, &item.UnusedS)
+	w = BuiltinTuple3StringBytesWriteJSONOpt(tctx, w, &item.UnusedS)
 	return append(w, '}')
 }
 
@@ -371,4 +617,12 @@ func (item *StatshouseGetConfigResult3Bytes) UnmarshalJSON(b []byte) error {
 		return ErrorInvalidJSON("statshouse.getConfigResult3", err.Error())
 	}
 	return nil
+}
+
+func (item *StatshouseGetConfigResult3Bytes) WriteTL2(w []byte, ctx *basictl.TL2WriteContext) []byte {
+	panic(ErrorTL2SerializersNotGenerated("statshouse.getConfigResult3"))
+}
+
+func (item *StatshouseGetConfigResult3Bytes) ReadTL2(r []byte, ctx *basictl.TL2ReadContext) (_ []byte, err error) {
+	return r, ErrorTL2SerializersNotGenerated("statshouse.getConfigResult3")
 }

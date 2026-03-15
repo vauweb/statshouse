@@ -4,13 +4,14 @@ import (
 	"time"
 
 	"github.com/VKCOM/statshouse-go"
+
 	"github.com/VKCOM/statshouse/internal/env"
 	"github.com/VKCOM/statshouse/internal/vkgo/commonmetrics/metricshandler"
 	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 type RPCServerMetrics struct {
-	сonnCount       statshouse.MetricRef
+	connCount       statshouse.MetricRef
 	workerPoolSize  statshouse.MetricRef
 	longPollWaiting statshouse.MetricRef
 	requestMemory   statshouse.MetricRef
@@ -27,7 +28,7 @@ func NewRPCServerMetrics(service string) *RPCServerMetrics {
 		env.DataCenter,
 	}
 	return &RPCServerMetrics{
-		сonnCount:       statshouse.GetMetricRef("common_rpc_server_conn", tag),
+		connCount:       statshouse.GetMetricRef("common_rpc_server_conn", tag),
 		workerPoolSize:  statshouse.GetMetricRef("common_rpc_server_worker_pool_size", tag),
 		longPollWaiting: statshouse.GetMetricRef("common_rpc_server_longpoll_waiting", tag),
 		requestMemory:   statshouse.GetMetricRef("common_rpc_server_request_mem", tag),
@@ -44,7 +45,7 @@ func (s *RPCServerMetrics) ServerWithMetrics(so *rpc.ServerOptions) {
 
 func (s *RPCServerMetrics) Run(server *rpc.Server) func() {
 	id := statshouse.StartRegularMeasurement(func(client *statshouse.Client) {
-		s.сonnCount.Value(float64(server.ConnectionsCurrent()))
+		s.connCount.Value(float64(server.ConnectionsCurrent()))
 		workerPoolSize, _ := server.WorkersPoolSize()
 		s.workerPoolSize.Value(float64(workerPoolSize))
 		s.longPollWaiting.Value(float64(server.LongPollsWaiting()))
@@ -73,7 +74,7 @@ func (s *RPCServerMetrics) handleConnError(err error) {
 func (s *RPCServerMetrics) handleResponse(hctx *rpc.HandlerContext, err error) {
 	tags := s.commonTags // copy
 	metricshandler.AttachRPC(tags[:], hctx, err)
-	metricshandler.ResponseTimeRaw(tags, time.Since(hctx.RequestTime))
+	metricshandler.ResponseTimeRaw(tags, time.Since(hctx.RequestTime()))
 	metricshandler.ResponseSizeRaw(tags, len(hctx.Response))
 	metricshandler.RequestSizeRaw(tags, len(hctx.Request))
 }
