@@ -5,10 +5,9 @@ go 1.24.11
 require (
 	github.com/ClickHouse/ch-go v0.69.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.42.0
-	github.com/VKCOM/statshouse-go v0.5.16
+	github.com/VKCOM/statshouse-go v0.5.17
+	github.com/VKCOM/tl v1.5.7
 	github.com/cloudflare/tableflip v1.2.3
-	github.com/dchest/siphash v1.2.3
-	github.com/dgryski/go-maglev v0.0.0-20200611225407-8961b9b1b8e6
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-kit/log v0.2.1
 	github.com/gogo/protobuf v1.3.2
@@ -18,7 +17,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/handlers v1.5.2
 	github.com/gorilla/mux v1.8.1
-	github.com/gotd/ige v0.2.2
 	github.com/grafana/grafana-plugin-sdk-go v0.284.0
 	github.com/hrissan/tdigest v0.0.3
 	github.com/mailru/easyjson v0.9.1
@@ -38,10 +36,11 @@ require (
 	go.uber.org/atomic v1.11.0
 	go.uber.org/multierr v1.11.0
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745
-	golang.org/x/crypto v0.46.0
 	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9
+	golang.org/x/image v0.30.0
 	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.39.0
+	gonum.org/v1/plot v0.17.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/apimachinery v0.34.3
@@ -50,9 +49,14 @@ require (
 )
 
 require (
+	codeberg.org/go-fonts/liberation v0.5.0 // indirect
+	codeberg.org/go-latex/latex v0.2.0 // indirect
+	codeberg.org/go-pdf/fpdf v0.11.1 // indirect
 	dario.cat/mergo v1.0.2 // indirect
+	git.sr.ht/~sbinet/gg v0.7.0 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
 	github.com/apache/arrow-go/v18 v18.4.1 // indirect
 	github.com/aws/aws-sdk-go v1.44.20 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
@@ -62,6 +66,8 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
+	github.com/dchest/siphash v1.2.3 // indirect
+	github.com/dgryski/go-maglev v0.0.0-20200611225407-8961b9b1b8e6 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/docker v28.5.2+incompatible // indirect
 	github.com/docker/go-connections v0.6.0 // indirect
@@ -72,6 +78,8 @@ require (
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/goccy/go-json v0.10.5 // indirect
 	github.com/gogo/googleapis v1.4.1 // indirect
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
+	github.com/gotd/ige v0.2.2 // indirect
 	github.com/grafana/otel-profiling-go v0.5.1 // indirect
 	github.com/grafana/pyroscope-go/godeltaprof v0.1.9 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0 // indirect
@@ -115,6 +123,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.7.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/telemetry v0.0.0-20251203150158-8fff8a5912fc // indirect
 	golang.org/x/text v0.32.0 // indirect

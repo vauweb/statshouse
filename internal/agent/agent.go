@@ -28,13 +28,14 @@ import (
 
 	"github.com/VKCOM/statshouse-go"
 
+	"github.com/VKCOM/tl/pkg/rpc"
+
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/VKCOM/statshouse/internal/pcache"
 	"github.com/VKCOM/statshouse/internal/util"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 
 	"go.uber.org/atomic"
 	"pgregory.net/rand"
@@ -139,11 +140,11 @@ func stagingLevel(statsHouseEnv string) int {
 	switch statsHouseEnv {
 	case "production":
 		return 0
-	case "staging", "staging1":
+	case "staging", "staging1": // we have both arguments in producton, so keep them for a long time
 		return 1
 	case "staging2":
 		return 2
-	case "development", "staging3": // TODO: staging3 is an alias for development, remove if after all commands lines are updated
+	case "development":
 		return 3
 	default:
 		// Our built-in metrics are supposed to work without mapping, so all keys must be known in advance
@@ -177,7 +178,7 @@ func MakeAgent(network string, cacheDir string, aesPwd string, trustedSubnetGrou
 		cancelSendsFunc:                          cancelSendsFunc,
 		cancelFlushCtx:                           cancelFlushCtx,
 		cancelFlushFunc:                          cancelFlushFunc,
-		hostName:                                 string(format.ForceValidStringValue(hostName)), // worse alternative is do not run at all
+		hostName:                                 format.ForceValidStringValue(hostName), // worse alternative is do not run at all
 		componentTag:                             componentTag,
 		heartBeatEventType:                       format.TagValueIDHeartbeatEventStart,
 		heartBeatSecondBucket:                    uint32(rnd.Intn(60)),
@@ -187,7 +188,7 @@ func MakeAgent(network string, cacheDir string, aesPwd string, trustedSubnetGrou
 		network:                                  network,
 		argsHash:                                 int32(binary.BigEndian.Uint32(argsHash[:])),
 		argsLen:                                  int32(len(allArgs)),
-		args:                                     string(format.ForceValidStringValue(allArgs)), // if single arg is too big, it is truncated here
+		args:                                     format.ForceValidStringValue(allArgs), // if single arg is too big, it is truncated here
 		logF:                                     logF,
 		buildArchTag:                             format.GetBuildArchKey(runtime.GOARCH),
 		mappingsCache:                            mappingsCache,
@@ -251,16 +252,17 @@ func MakeAgent(network string, cacheDir string, aesPwd string, trustedSubnetGrou
 	commonSpread := time.Duration(rnd.Int63n(int64(time.Second) / int64(len(result.GetConfigResult.Addresses))))
 	for i := 0; i < len(result.GetConfigResult.Addresses)/3; i++ {
 		shard := &Shard{
-			config:              config,
-			agent:               result,
-			ShardNum:            i,
-			ShardKey:            int32(i) + 1,
-			timeSpreadDelta:     3*commonSpread + 3*time.Second*time.Duration(i)/time.Duration(len(result.GetConfigResult.Addresses)),
-			BucketsToSend:       make(chan compressedBucketData),
-			BucketsToPreprocess: make(chan *data_model.MetricsBucket, 1), // length of preprocessor queue
-			rng:                 rnd,
-			CurrentTime:         nowUnix,
-			SendTime:            nowUnix - 2, // accept previous seconds at the start of the agent
+			config:               config,
+			agent:                result,
+			ShardNum:             i,
+			ShardKey:             int32(i) + 1,
+			timeSpreadDelta:      3*commonSpread + 3*time.Second*time.Duration(i)/time.Duration(len(result.GetConfigResult.Addresses)),
+			BucketsToSend:        make(chan compressedBucketData),
+			BucketsToPreprocess:  make(chan *data_model.MetricsBucket, 1), // length of preprocessor queue
+			rng:                  rnd,
+			CurrentTime:          nowUnix,
+			SendTime:             nowUnix - 2, // accept previous seconds at the start of the agent
+			metricBudgetsFromAgg: data_model.NewExpDecay(config.BudgetDecayHalfLife),
 		}
 		shard.hardwareMetricResolutionResolved.Store(int32(config.HardwareMetricResolution))
 		shard.hardwareSlowMetricResolutionResolved.Store(int32(config.HardwareSlowMetricResolution))
@@ -511,6 +513,7 @@ func (s *Agent) updateRemoteConfig() {
 		shard.config = config
 		shard.hardwareMetricResolutionResolved.Store(int32(config.HardwareMetricResolution))
 		shard.hardwareSlowMetricResolutionResolved.Store(int32(config.HardwareSlowMetricResolution))
+		shard.metricBudgetsFromAgg.SetHalfLife(config.BudgetDecayHalfLife)
 		shard.mu.Unlock()
 	}
 	for _, shardReplica := range s.ShardReplicas {
@@ -732,6 +735,9 @@ func (s *Agent) goFlushIteration(now time.Time) {
 			s.beforeFlushBucketFunc(s, s.beforeFlushTime)
 		}
 		s.beforeFlushTime = nowUnix
+		for _, shard := range s.Shards {
+			shard.metricBudgetsFromAgg.Apply(now)
+		}
 	}
 	for _, shard := range s.Shards {
 		gap, sendTime := shard.flushBuckets(now)
@@ -791,7 +797,7 @@ func (s *Agent) CreateBuiltInItemValue(metricInfo *format.MetricMetaValue, tags 
 	return result
 }
 
-func (s *Agent) ApplyMetric(m tlstatshouse.MetricBytes, h data_model.MappedMetricHeader, scratch *[]byte) {
+func (s *Agent) ApplyMetric(m *tlstatshouse.MetricBytes, h *data_model.MappedMetricHeader, scratch *[]byte) {
 	start := time.Now()
 	// Simply writing everything we know about metric ingestion errors would easily double how much metrics data we write
 	// So below is basically a compromise. All info is stored in MappingMetricHeader, if needed we can easily write more
@@ -822,11 +828,11 @@ func (s *Agent) ApplyMetric(m tlstatshouse.MetricBytes, h data_model.MappedMetri
 		// h.InvalidString was validated before mapping attempt.
 		// In case of utf decoding error, it contains hex representation of original string
 		shard.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{h.Key.Tags[0], h.Key.Metric, h.IngestionStatus, h.IngestionTagKey},
+			[]int32{h.Key.Tags[0], h.Key.Metric, h.IngestionStatus, h.IngestionTagKey, format.TagValueIDComponentAgent},
 			h.InvalidString, 1, 0)
 		if shard2 != nil {
 			shard2.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-				[]int32{h.Key.Tags[0], h.Key.Metric, h.IngestionStatus, h.IngestionTagKey},
+				[]int32{h.Key.Tags[0], h.Key.Metric, h.IngestionStatus, h.IngestionTagKey, format.TagValueIDComponentAgent},
 				h.InvalidString, 1, dropIfBeforeTimestamp)
 		}
 		return
@@ -848,11 +854,11 @@ func (s *Agent) ApplyMetric(m tlstatshouse.MetricBytes, h data_model.MappedMetri
 	}()
 	// now set ok status
 	shard.AddCounterHostSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-		[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusOKCached, h.IngestionTagKey},
+		[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusOKCached, h.IngestionTagKey, format.TagValueIDComponentAgent},
 		1, 0)
 	if shard2 != nil {
 		shard2.AddCounterHostSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusOKCached, h.IngestionTagKey},
+			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusOKCached, h.IngestionTagKey, format.TagValueIDComponentAgent},
 			1, dropIfBeforeTimestamp)
 	}
 	// now set all warnings
@@ -860,11 +866,11 @@ func (s *Agent) ApplyMetric(m tlstatshouse.MetricBytes, h data_model.MappedMetri
 		// NotFoundTagName is validated when discovered
 		// This is warning, so written independent of ingestion status
 		shard.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameNotFound}, // tag ID not known
+			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameNotFound, 0, format.TagValueIDComponentAgent}, // tag ID not known
 			h.NotFoundTagName, 1, 0)
 		if shard2 != nil {
 			shard2.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameNotFound}, // tag ID not known
+				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameNotFound, 0, format.TagValueIDComponentAgent}, // tag ID not known
 				h.NotFoundTagName, 1, dropIfBeforeTimestamp)
 		}
 	}
@@ -872,41 +878,41 @@ func (s *Agent) ApplyMetric(m tlstatshouse.MetricBytes, h data_model.MappedMetri
 		// FoundDraftTagName is validated when discovered
 		// This is warning, so written independent of ingestion status
 		shard.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft}, // tag ID is known, but draft
+			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft, 0, format.TagValueIDComponentAgent}, // tag ID is known, but draft
 			h.FoundDraftTagName, 1, 0)
 		if shard2 != nil {
 			shard2.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft}, // tag ID is known, but draft
+				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft, 0, format.TagValueIDComponentAgent}, // tag ID is known, but draft
 				h.FoundDraftTagName, 1, dropIfBeforeTimestamp)
 		}
 	}
 	if h.TagSetTwiceKey != 0 {
 		shard.AddCounterHostSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagSetTwice, h.TagSetTwiceKey},
+			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagSetTwice, h.TagSetTwiceKey, format.TagValueIDComponentAgent},
 			1, 0)
 		if shard2 != nil {
 			shard2.AddCounterHostSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagSetTwice, h.TagSetTwiceKey},
+				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapTagSetTwice, h.TagSetTwiceKey, format.TagValueIDComponentAgent},
 				1, dropIfBeforeTimestamp)
 		}
 	}
 	if h.InvalidRawTagKey != 0 {
 		shard.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue, h.InvalidRawTagKey},
+			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue, h.InvalidRawTagKey, format.TagValueIDComponentAgent},
 			h.InvalidRawValue, 1, 0)
 		if shard2 != nil {
 			shard2.AddCounterHostStringBytesSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue, h.InvalidRawTagKey},
+				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue, h.InvalidRawTagKey, format.TagValueIDComponentAgent},
 				h.InvalidRawValue, 1, dropIfBeforeTimestamp)
 		}
 	}
 	if h.LegacyCanonicalTagKey != 0 {
 		shard.AddCounterHostSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnDeprecatedKeyName, h.LegacyCanonicalTagKey},
+			[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnDeprecatedKeyName, h.LegacyCanonicalTagKey, format.TagValueIDComponentAgent},
 			1, 0)
 		if shard2 != nil {
 			shard2.AddCounterHostSrcIngestionStatus(0, format.BuiltinMetricMetaIngestionStatus,
-				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnDeprecatedKeyName, h.LegacyCanonicalTagKey},
+				[]int32{h.Key.Tags[0], h.Key.Metric, format.TagValueIDSrcIngestionStatusWarnDeprecatedKeyName, h.LegacyCanonicalTagKey, format.TagValueIDComponentAgent},
 				1, dropIfBeforeTimestamp)
 		}
 	}
@@ -943,7 +949,7 @@ func (s *Agent) ApplyMetric(m tlstatshouse.MetricBytes, h data_model.MappedMetri
 		}
 		return
 	}
-	if len(m.Histogram) != 0 || len(m.Value) != 0 {
+	if len(m.Histogram)+len(m.Value) != 0 {
 		shard.ApplyValues(&h.Key, resolutionHash, m.Histogram, m.Value, m.Counter, h.HostTag,
 			h.MetricMeta, 0)
 		if shard2 != nil {

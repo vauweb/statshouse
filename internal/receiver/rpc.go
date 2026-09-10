@@ -10,10 +10,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/VKCOM/tl/pkg/rpc"
+
 	"github.com/VKCOM/statshouse/internal/agent"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tl"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 type RPCReceiver struct {
@@ -43,14 +44,15 @@ func getUserData(hctx *rpc.HandlerContext) *tlstatshouse.AddMetricsBatchBytes {
 func (r *RPCReceiver) RawAddMetricsBatch(ctx context.Context, hctx *rpc.HandlerContext) error {
 	args := getUserData(hctx)
 	packetLen := len(hctx.Request)
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		r.statBatchesTotalErr.Inc()
 		r.Handler.HandleParseError(hctx.Request, err)
 		setValueSize(r.packetSizeRPCErr, packetLen)
 		return fmt.Errorf("failed to deserialize statshouse.addMetricsBatch request: %w", err)
 	}
-	firstError := r.handleAndWaitMetrics(r.Handler, args, &hctx.Response)
+	var firstError error
+	_ = r.handleMetricsBatch(r.Handler, &firstError, args, nil, nil, &hctx.Response, "")
 	hctx.Response = hctx.Response[:0] // trick to use Response as a scratch
 	if firstError != nil {
 		r.statBatchesTotalErr.Inc()
@@ -61,6 +63,6 @@ func (r *RPCReceiver) RawAddMetricsBatch(ctx context.Context, hctx *rpc.HandlerC
 	r.statBatchesTotalOK.Inc()
 	setValueSize(r.batchSizeRPCOK, packetLen)
 	setValueSize(r.packetSizeRPCOK, packetLen)
-	hctx.Response, err = args.WriteResult(hctx.Response, tl.True{})
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, tl.True{})
 	return err
 }

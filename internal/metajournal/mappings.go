@@ -238,7 +238,7 @@ func (ms *MappingsStorage) Save() (bool, error) {
 	if ms.sh2 != nil {
 		ms.sh2.AddValueCounter(0, format.BuiltinMetricMappingStoragePending, []int32{0, ms.component}, float64(allSize), 1)
 	} else {
-		statshouse.Value(format.BuiltinMetricMappingStoragePending.Name, statshouse.Tags{1: strconv.Itoa(int(ms.component)), 2: srvfunc.HostnameForStatshouse()}, float64(allSize))
+		statshouse.Value(format.BuiltinMetricMappingStoragePending.Name, statshouse.Tags{1: strconv.Itoa(int(ms.component)), 2: srvfunc.Hostname()}, float64(allSize))
 	}
 	if err != nil {
 		return false, err
@@ -359,12 +359,12 @@ func (ms *MappingsStorage) updateMappings() error {
 	} else {
 		statshouse.Value(format.BuiltinMetricMappingStorageVersion.Name, statshouse.Tags{
 			1: strconv.Itoa(int(ms.component)),
-			2: srvfunc.HostnameForStatshouse(),
+			2: srvfunc.Hostname(),
 			3: strconv.Itoa(format.TagValueIDMappingStorageVersionCurrent),
 		}, float64(newCurV))
 		statshouse.Value(format.BuiltinMetricMappingStorageVersion.Name, statshouse.Tags{
 			1: strconv.Itoa(int(ms.component)),
-			2: srvfunc.HostnameForStatshouse(),
+			2: srvfunc.Hostname(),
 			3: strconv.Itoa(format.TagValueIDMappingStorageVersionLastKnown),
 		}, float64(newLastV))
 	}
@@ -442,6 +442,43 @@ func (ms *MappingsStorage) goUpdateMappings() {
 	}
 }
 
+func (ms *MappingsStorage) UpdateMappingsUntilVersion(ver int32, componentTag int32, mappingsLoader MappingsLoader) error {
+	ms.component = componentTag
+	ms.mappingsLoader = mappingsLoader
+	backoffTimeout := time.Duration(0)
+	lastVersion := int32(-1)
+	sameVersionRuns := 0
+	for {
+		ms.mu.RLock()
+		currVer := ms.currentVersion
+		ms.mu.RUnlock()
+		if currVer == lastVersion {
+			sameVersionRuns++
+			if sameVersionRuns > 5 {
+				return fmt.Errorf("updating mappings until version %d are stuck at version %d", ver, lastVersion)
+			}
+		} else {
+			sameVersionRuns = 0
+		}
+
+		if currVer >= ver {
+			log.Printf("Successfully updated mappings until version %d", currVer)
+			return nil
+		}
+
+		err := ms.updateMappings()
+		lastVersion = currVer
+		if err == nil {
+			backoffTimeout = 0
+			time.Sleep(ms.mappingsRequestDelay)
+			continue
+		}
+		backoffTimeout = data_model.NextBackoffDuration(backoffTimeout)
+		log.Printf("Failed to update mappings from metadata, will retry: %v", err)
+		time.Sleep(backoffTimeout)
+	}
+}
+
 func (ms *MappingsStorage) GetValue(str string) (int32, bool) {
 	shard := int(xxh3.HashString(str) % uint64(len(ms.shards)))
 	ms.shards[shard].mu.RLock()
@@ -459,7 +496,7 @@ func (ms *MappingsStorage) GetValueBytes(str []byte) (int32, bool) {
 }
 
 func (ms *MappingsStorage) GetString(value int32) (string, bool) {
-	if !ms.reverseEnable {
+	if !ms.reverseEnable || value < 0 {
 		return "", false
 	}
 	shard := int(value) % len(ms.reverseShards)

@@ -7,7 +7,7 @@ REACT_APP_BUILD_VERSION := $(if $(REACT_APP_BUILD_VERSION),$(REACT_APP_BUILD_VER
 TL_BYTE_VERSIONS := statshouse.
 # TODO: BUILD_ID
 
-TL_GEN := go run github.com/vkcom/tl/cmd/tl2gen@v1.3.5
+TL_GEN := go run github.com/VKCOM/tl/cmd/tl2gen@v1.5.7
 #TL_GEN := /home/user/devbox/VKCOM/tl/target/bin/tlgen # for quick switch to locally developed tlgen
 
 COMMON_BUILD_VARS := -X 'github.com/VKCOM/statshouse/internal/vkgo/build.time=$(BUILD_TIME)' \
@@ -21,13 +21,13 @@ COMMON_BUILD_VARS := -X 'github.com/VKCOM/statshouse/internal/vkgo/build.time=$(
 COMMON_LDFLAGS = $(COMMON_BUILD_VARS) -extldflags '-O2'
 
 .PHONY: all build-go build-ui \
-	build-sh build-sh-api build-sh-api-noembed build-sh-metadata build-sh-grafana \
+	build-sh build-sh-api build-sh-api-noembed build-sh-metadata build-sh-grafana build-sh-balancer \
 	build-sh-ui build-grafana-ui
 
 all: build-ui build-go # order important
-build-go: build-sh build-sh-api build-sh-metadata build-sh-grafana build-igp build-agg
+build-go: build-sh build-sh-api build-sh-metadata build-sh-grafana build-sh-balancer build-igp build-agg
 build-ui: build-sh-ui build-grafana-ui
-build-main-daemons: build-sh build-sh-api build-sh-metadata build-igp build-agg
+build-main-daemons: build-sh build-sh-api build-sh-metadata build-sh-balancer build-igp build-agg
 
 # to build tools for running on adm512, disable cgo
 # CGO_ENABLED=0 go build ...
@@ -54,6 +54,9 @@ build-agg:
 build-sh-grafana:
 	go build -ldflags "$(COMMON_LDFLAGS)" -buildvcs=false -o target/statshouse-grafana-plugin ./cmd/statshouse-grafana-plugin
 
+build-sh-balancer:
+	CGO_ENABLED=0 go build -ldflags "$(COMMON_LDFLAGS)" -buildvcs=false -o target/statshouse-balancer ./cmd/statshouse-balancer
+
 build-sh-ui:
 	cd statshouse-ui && npm clean-install && NODE_ENV=production REACT_APP_BUILD_VERSION=$(REACT_APP_BUILD_VERSION) npm run build
 
@@ -71,7 +74,7 @@ gen-tl: ./internal/data_model/api.tl ./internal/data_model/common.tl ./internal/
 		--generateRPCCode=true \
 		--pkgPath=github.com/VKCOM/statshouse/internal/data_model/gen2/tl \
 		--basicPkgPath=github.com/VKCOM/statshouse/internal/vkgo/basictl \
-		--basicRPCPath=github.com/VKCOM/statshouse/internal/vkgo/rpc \
+		--basicRPCPath=github.com/VKCOM/tl/pkg/rpc \
 		--generateRandomCode \
 		--generateByteVersions=$(TL_BYTE_VERSIONS) \
 		--rawHandlerWhiteList=statshouse.,metadata. \
@@ -98,7 +101,7 @@ gen-tl2:
 		--generateRPCCode=true \
 		--pkgPath=github.com/VKCOM/statshouse/internal/data_model/gen2/tl \
 		--basicPkgPath=github.com/VKCOM/statshouse/internal/vkgo/basictl \
-		--basicRPCPath=github.com/VKCOM/statshouse/internal/vkgo/rpc \
+		--basicRPCPath=github.com/VKCOM/tl/pkg/rpc \
 		--generateRandomCode \
 		--generateByteVersions=$(TL_BYTE_VERSIONS) \
 		--rawHandlerWhiteList=statshouse.,metadata. \
@@ -120,7 +123,7 @@ gen-tl2:
 #		--generateRPCCode=true \
 #		--pkgPath=github.com/VKCOM/statshouse/internal/sqlitev2/checkpoint/gen2/tl \
 #		--basicPkgPath=github.com/VKCOM/statshouse/internal/vkgo/basictl \
-#		--basicRPCPath=github.com/VKCOM/statshouse/internal/vkgo/rpc \
+#		--basicRPCPath=github.com/VKCOM/tl/pkg/rpc \
 #		--generateByteVersions=sqlite. \
 #		--copyrightPath=./copyright \
 #		./internal/data_model/common.tl \

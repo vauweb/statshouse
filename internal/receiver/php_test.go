@@ -21,7 +21,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tl"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
@@ -109,6 +108,9 @@ func ts(name string, tags []tag) string {
 	b.WriteString(name)
 	b.WriteRune('{')
 	for _, tag := range tags {
+		if tag.K == "_h" {
+			continue
+		}
 		b.WriteString(tag.K)
 		b.WriteRune('=')
 		b.WriteString(tag.V)
@@ -319,8 +321,8 @@ func (p *phpMachine) Run(t *rapid.T) {
 	go func() {
 		timer := time.AfterFunc(recvTimeout, func() { _ = recv.Close() })
 		defer timer.Stop()
-		serveErr <- recv.Serve(receiver.CallbackHandler{
-			Metrics: func(m *tlstatshouse.MetricBytes) (h data_model.MappedMetricHeader) {
+		serveErr <- recv.Serve(nil, receiver.CallbackHandler{
+			Metrics: func(m *tlstatshouse.MetricBytes) {
 				sumTimestamp.count(ts(string(m.Name), receivedSlice(m.Tags, nil)), int64(m.Ts))
 				switch {
 				case len(m.Value) > 0:
@@ -336,7 +338,6 @@ func (p *phpMachine) Run(t *rapid.T) {
 				if recvErr != nil || counterMetrics.size()+valueMetrics.size()+uniqueMetrics.size()+stopMetrics.size() >= total {
 					_ = recv.Close()
 				}
-				return h
 			},
 			ParseError: func(pkt []byte, err error) {
 				if recvErr == nil {
@@ -372,7 +373,7 @@ func (p *phpMachine) Run(t *rapid.T) {
 
 func (p *phpMachine) Check(*rapid.T) {}
 
-func receivedSlice(m []tl.DictionaryFieldStringBytes, skey []byte) []tag {
+func receivedSlice(m []tl.DictFieldStringStringBytes, skey []byte) []tag {
 	res := make([]tag, 0, len(m))
 	for i := range m {
 		res = append(res, tag{K: string(m[i].Key), V: string(m[i].Value)})

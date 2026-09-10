@@ -28,6 +28,8 @@ import (
 
 	"github.com/mailru/easyjson"
 
+	"github.com/VKCOM/tl/pkg/rpc"
+
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tl"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
@@ -37,7 +39,6 @@ import (
 	"github.com/VKCOM/statshouse/internal/metajournal"
 	"github.com/VKCOM/statshouse/internal/receiver"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 func mainBenchmarks() int {
@@ -48,13 +49,16 @@ func mainBenchmarks() int {
 type packetPrinter struct {
 }
 
-func (w *packetPrinter) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader) {
+func (w *packetPrinter) HandleMetrics(args data_model.HandlerArgs) {
 	log.Printf("Parsed metric: %s\n", args.MetricBytes.String())
-	return h
 }
 
 func (w *packetPrinter) HandleParseError(pkt []byte, err error) {
 	log.Printf("Error parsing packet: %v\n", err)
+}
+
+func (w *packetPrinter) HandleMetricsBatchRaw([]byte) error {
+	return receiver.ErrNotImplemented
 }
 
 func mainTestParser() int {
@@ -73,7 +77,7 @@ func mainTestParser() int {
 
 	w := &packetPrinter{}
 
-	if err = u.Serve(w); err != nil {
+	if err = u.Serve(nil, w); err != nil {
 		logErr.Printf("Serve: %v", err)
 		return 1
 	}
@@ -248,7 +252,7 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 			Metrics: []tlstatshouse.MetricBytes{{
 				FieldsMask: 0,
 				Name:       []byte("metric1"),
-				Tags: []tl.DictionaryFieldStringBytes{{Key: []byte("1"), Value: []byte(keyPrefix + "1")},
+				Tags: []tl.DictFieldStringStringBytes{{Key: []byte("1"), Value: []byte(keyPrefix + "1")},
 					{Key: []byte("2"), Value: []byte(keyPrefix + "2")},
 					{Key: []byte("3"), Value: []byte(keyPrefix + "3")},
 					{Key: []byte("4"), Value: []byte("404")},
@@ -260,15 +264,15 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 		args.Metrics[0].SetValue([]float64{1, 2, 3, 4, 5})
 		var w []byte
 		for len(w) < 60000 {
-			w = args.WriteBoxed(w)
+			w = args.WriteTL1Boxed(w)
 		}
-		// _ = args.WriteBoxed(&w)
+		// _ = args.WriteTL1Boxed(&w)
 		for {
 			if !testFastPath {
 				w = w[:0]
 				args.Metrics[0].Tags[0].Value = append(args.Metrics[0].Tags[0].Value[:0], keyPrefix...)
 				args.Metrics[0].Tags[0].Value = strconv.AppendInt(args.Metrics[0].Tags[0].Value, int64(rand.New().Int31()), 10)
-				w = args.WriteBoxed(w)
+				w = args.WriteTL1Boxed(w)
 			}
 			sentMetric.Inc()
 			if _, err := uconn.Write(w); err != nil {
@@ -285,13 +289,12 @@ func FakeBenchmarkMetricsPerSecond(listenAddr string) {
 	// go writeFunc()
 	// go writeFunc()
 	serveFunc := func(u *receiver.UDP, rm *atomic.Int64) error {
-		return u.Serve(receiver.CallbackHandler{
-			Metrics: func(m *tlstatshouse.MetricBytes) (h data_model.MappedMetricHeader) {
+		return u.Serve(nil, receiver.CallbackHandler{
+			Metrics: func(m *tlstatshouse.MetricBytes) {
 				r := rm.Inc()
 				if almostReceiveOnly && r%1024 != 0 {
-					return h
+					return
 				}
-				return h
 			},
 			ParseError: func(pkt []byte, err error) {
 				parseErrors.Inc()
@@ -358,7 +361,7 @@ func mainModules() int {
 // 2025/12/23 16:39:18 {"intValue":0,"stringValue":"boot3879"}
 // statshouse$ echo '{"fields_mask":24, "access_token":"","intValue":1}' | target/statshouse tlclient.api --api-addr=127.0.0.1:10889 --tl2
 // statshouseApi.getMapping failed - statshouseApi.getMapping request to tcp4://0@127.0.0.1:10889 failed: context deadline exceeded
-func mainTLClientAPI(preferTL2 bool) int {
+func mainTLClientAPI(tlVersion int) int {
 	client, _ := argvCreateClient()
 
 	tlapiclient := tlstatshouseApi.Client{
@@ -377,7 +380,7 @@ func mainTLClientAPI(preferTL2 bool) int {
 		return 1
 	}
 	var ret tlstatshouseApi.GetMappingResponse
-	extra := rpc.InvokeReqExtra{FailIfNoConnection: true, PreferTL2: preferTL2}
+	extra := rpc.InvokeReqExtra{FailIfNoConnection: true, PreferTLVersion: tlVersion}
 	ctx, cancel := context.WithTimeout(context.Background(), argv.tlclientTimeout)
 	defer cancel()
 	if err := tlapiclient.GetMapping(ctx, batch, &extra, &ret); err != nil {
@@ -393,7 +396,7 @@ func mainTLClientAPI(preferTL2 bool) int {
 	return 0
 }
 
-func mainTLClientAPIStub(preferTL2 bool) int {
+func mainTLClientAPIStub(tlVersion int) int {
 	client, _ := argvCreateClient()
 
 	tlapiclient := tlstatshouseApi.Client{
@@ -437,8 +440,8 @@ func mainTLClientAPIStub(preferTL2 bool) int {
 
 	ctx := context.Background()
 	for _, request := range requests {
-		extra := rpc.InvokeReqExtra{FailIfNoConnection: true, PreferTL2: preferTL2}
-		var ret tlstatshouseApi.GetQueryResponse
+		extra := rpc.InvokeReqExtra{FailIfNoConnection: true, PreferTLVersion: tlVersion}
+		var ret tlstatshouseApi.QueryResponse
 		if err := tlapiclient.GetQuery(ctx, request, &extra, &ret); err != nil {
 			log.Fatalf("tlapiclient.GetQuery failed - %v", err)
 		}
@@ -447,7 +450,7 @@ func mainTLClientAPIStub(preferTL2 bool) int {
 		log.Printf("points: %v\n\n", len(ret.Series.Time))
 
 		for _, cid := range ret.ChunkIds {
-			var rc tlstatshouseApi.GetChunkResponse
+			var rc tlstatshouseApi.ChunkResponse
 			if err := tlapiclient.GetChunk(ctx, tlstatshouseApi.GetChunk{ResponseId: ret.ResponseId, ChunkId: cid}, nil, &rc); err != nil {
 				log.Fatalf("tlapiclient.GetChunk failed - %v", err)
 			}
@@ -475,7 +478,7 @@ func mainTagMapping() int {
 				// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 				rpc.ClientWithLogf(log.Printf),
 				rpc.ClientWithCryptoKey(aesPwd),
-				rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
+				rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))))),
 			Network: argv.metadataNet,
 			Address: argv.metadataAddr,
 			ActorID: argv.metadataActorID,
@@ -498,7 +501,6 @@ func mainTagMapping() int {
 		} else {
 			fmt.Printf("%q NOT FOUND\n", tag)
 		}
-		fmt.Println()
 	}
 	if argv.budget != 0 {
 		var ( // Set mapping budget
@@ -535,7 +537,7 @@ func mainPutTagBootstrap() int {
 			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 			rpc.ClientWithLogf(log.Printf),
 			rpc.ClientWithCryptoKey(aesPwd),
-			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
+			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))))),
 		Network: argv.metadataNet,
 		Address: argv.metadataAddr,
 		ActorID: argv.metadataActorID,
@@ -564,7 +566,7 @@ func mainPublishTagDrafts() int {
 		Client: rpc.NewClient(
 			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 			rpc.ClientWithCryptoKey(readAESPwd()),
-			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
+			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))))),
 		Network: argv.metadataNet,
 		Address: argv.metadataAddr,
 		ActorID: argv.metadataActorID,
@@ -704,7 +706,7 @@ func mainPublishTagDrafts() int {
 //		Client: rpc.NewClient(
 //			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 //			rpc.ClientWithCryptoKey(readAESPwd()),
-//			rpc.ClientWithTrustedSubnetGroups(build.TrustedSubnetGroups())),
+//			rpc.ClientWithTrustedSubnetGroups(rpc.SplitSubnetsString(build.TrustedSubnetGroups("")))),
 //		Network: argv.metadataNet,
 //		Address: argv.metadataAddr,
 //		ActorID: argv.metadataActorID,
@@ -742,7 +744,7 @@ func massUpdateMetadata() int {
 		Client: rpc.NewClient(
 			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 			rpc.ClientWithCryptoKey(readAESPwd()),
-			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
+			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))))),
 		Network: argv.metadataNet,
 		Address: argv.metadataAddr,
 		ActorID: argv.metadataActorID,
@@ -984,5 +986,45 @@ func massUpdateMetadata() int {
 	}
 	_, _ = fmt.Fprintf(os.Stderr, "Finished list of %d metrics, %d found of %d --max-updates\n", len(list), found, argv.maxUpdates)
 	// journal.Compare(journalCompact)
+	return 0
+}
+
+func clearMappingDeletionCandidates() int {
+	client := tlmetadata.Client{
+		Client: rpc.NewClient(
+			// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
+			rpc.ClientWithCryptoKey(readAESPwd()),
+			rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))))),
+		Network: argv.metadataNet,
+		Address: argv.metadataAddr,
+		ActorID: argv.metadataActorID,
+	}
+
+	offset := int32(argv.deleteMappingsOffset)
+	totalLimit := int32(argv.deleteMappingsLimit)
+	batchSize := int32(argv.deleteMappingsBatchSize)
+	lastDeletionIndex := offset + totalLimit // NOTE: exclusive
+
+	log.Printf("starting deletion of up to %d mappings in batches of %d, starting from index %d", totalLimit, batchSize, offset)
+
+	for start := offset; start < lastDeletionIndex; start += batchSize {
+		args := tlmetadata.DeleteMappingCandidates{
+			Offset: start,
+			Limit:  batchSize,
+		}
+		ctx := context.Background()
+		resp := tlmetadata.DeleteMappingCandidatesResponse{}
+		log.Printf("deleting mappings from index %d/%d", start, lastDeletionIndex)
+		err := client.DeleteMappingCandidates(ctx, args, nil, &resp)
+
+		if err != nil {
+			log.Fatal(err)
+			return 1
+		}
+		log.Printf("deleted %d present mappings from values %v to %v", resp.CountBeforeDeletion, resp.From, resp.To)
+	}
+
+	log.Printf("Done.")
+
 	return 0
 }

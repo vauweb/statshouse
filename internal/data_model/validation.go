@@ -10,34 +10,35 @@ import (
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tl"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
-	"go4.org/mem"
 )
 
-func ValidateMetricData(metricBytes *tlstatshouse.MetricBytes) (ingestionStatus int32) {
+func ValidateMetricData(metricBytes *tlstatshouse.MetricBytes) (ingestionError int32) {
 	if len(metricBytes.Value)+len(metricBytes.Histogram) != 0 && len(metricBytes.Unique) != 0 {
-		ingestionStatus = format.TagValueIDSrcIngestionStatusErrValueUniqueBothSet
+		return format.TagValueIDSrcIngestionStatusErrValueUniqueBothSet
+	}
+	if len(metricBytes.Value)+len(metricBytes.Histogram) == 0 && len(metricBytes.Unique) == 0 && metricBytes.Counter == 0 {
+		return format.TagValueIDSrcIngestionStatusErrZeroCounter
+	}
+	if ingestionError = format.ValidateCounter(metricBytes.Counter); ingestionError != 0 {
 		return
 	}
-	if metricBytes.Counter, ingestionStatus = format.ClampCounter(metricBytes.Counter); ingestionStatus != 0 {
-		return
-	}
-	for i, v := range metricBytes.Value {
-		if metricBytes.Value[i], ingestionStatus = format.ClampValue(v); ingestionStatus != 0 {
+	for _, v := range metricBytes.Value {
+		if ingestionError = format.ValidateValue(v); ingestionError != 0 {
 			return
 		}
 	}
-	for i, v := range metricBytes.Histogram {
-		if metricBytes.Histogram[i][0], ingestionStatus = format.ClampValue(v[0]); ingestionStatus != 0 {
+	for _, v := range metricBytes.Histogram {
+		if ingestionError = format.ValidateValue(v[0]); ingestionError != 0 {
 			return
 		}
-		if metricBytes.Histogram[i][1], ingestionStatus = format.ClampCounter(v[1]); ingestionStatus != 0 {
+		if ingestionError = format.ValidateCounter(v[1]); ingestionError != 0 {
 			return
 		}
 	}
 	return
 }
 
-func MapValidateTag(v *tl.DictionaryFieldStringBytes, metricBytes *tlstatshouse.MetricBytes, h *MappedMetricHeader, autoCreate *AutoCreate) (tagMeta *format.MetricMetaTag, tagIDKey int32, validEvent bool) {
+func MapValidateTag(v *tl.DictFieldStringStringBytes, metricBytes *tlstatshouse.MetricBytes, h *MappedMetricHeader, autoCreate *AutoCreate) (tagMeta *format.MetricMetaTag, tagIDKey int32, validEvent bool) {
 	tagMeta, legacyName := h.MetricMeta.Name2TagAgentFastBytes(v.Key)
 	validEvent = true
 	if tagMeta == nil || tagMeta.Index >= format.MaxTags {
@@ -55,7 +56,7 @@ func MapValidateTag(v *tl.DictionaryFieldStringBytes, metricBytes *tlstatshouse.
 		} else {
 			h.NotFoundTagName = v.Key
 		}
-		if autoCreate != nil && format.ValidTagName(mem.B(v.Key)) {
+		if autoCreate != nil && format.ValidTagNameBytes(v.Key) {
 			_ = autoCreate.AutoCreateTag(metricBytes, v.Key, h.ReceiveTime)
 		}
 		// metric without meta gives validEvent=true, but tagMeta will be empty
@@ -65,14 +66,21 @@ func MapValidateTag(v *tl.DictionaryFieldStringBytes, metricBytes *tlstatshouse.
 	if legacyName {
 		h.LegacyCanonicalTagKey = tagIDKey
 	}
+	// TODO - remove after balancer is fixed. This really slows conveyor down.
+	corrupted := format.ContainsCorruptedBalancerValue(v.Value)
 
 	validValue, err := format.AppendValidStringValue(v.Value[:0], v.Value)
-	if err != nil {
+	if err != nil { // if invalid utf, we do not care if it is corrupted
 		validEvent = false
 		v.Value = format.AppendHexStringValue(v.Value[:0], v.Value)
 		h.SetInvalidString(format.TagValueIDSrcIngestionStatusErrMapTagValueEncoding, tagIDKey, v.Value)
 		return
 	}
 	v.Value = validValue
+	if corrupted {
+		validEvent = false
+		h.SetInvalidString(format.TagValueIDSrcIngestionStatusErrMapTagValueCorrupted, tagIDKey, v.Value)
+		return
+	}
 	return
 }

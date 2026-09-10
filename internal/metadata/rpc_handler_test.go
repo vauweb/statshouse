@@ -23,16 +23,15 @@ import (
 
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
-	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/tl/pkg/rpc"
 )
 
 func initServer(t *testing.T, now func() time.Time) (net.Listener, *rpc.Server, *tlmetadata.Client, *Handler) {
 	path := t.TempDir()
 	db, _ := initD1b(t, path, "db", true, nil)
 	db.now = now
-	handler := NewHandler(db, "abc", log.Printf)
+	handler := NewHandler(db, "abc", "", log.Printf)
 	proxy := ProxyHandler{}
 	h := tlmetadata.Handler{
 		RawGetMapping:          proxy.HandleProxy("", handler.RawGetMappingByValue),
@@ -41,7 +40,6 @@ func initServer(t *testing.T, now func() time.Time) (net.Listener, *rpc.Server, 
 		RawGetEntity:           proxy.HandleProxy("", handler.RawGetEntity),
 		RawGetHistoryShortInfo: proxy.HandleProxy("", handler.RawGetHistory),
 
-		PutTagMappingBootstrap: HandleProxyGen(&proxy, "", handler.PutTagMappingBootstrap),
 		GetTagMappingBootstrap: HandleProxyGen(&proxy, "", handler.GetTagMappingBootstrap),
 	}
 	sh := tlmetadata.Handler{
@@ -270,22 +268,6 @@ func putMetric(t *testing.T, rpcClient *tlmetadata.Client, name, json string, id
 	req.SetCreate(version == 0)
 	err := rpcClient.EditEntitynew(context.Background(), req, nil, &resp)
 	return resp, err
-}
-
-func putBootstrap(t *testing.T, rpcClient *tlmetadata.Client, mappings []tlstatshouse.Mapping) (int32, error) {
-	res := &tlstatshouse.PutTagMappingBootstrapResult{}
-	err := rpcClient.PutTagMappingBootstrap(context.Background(), tlmetadata.PutTagMappingBootstrap{
-		Mappings: mappings,
-	}, nil, res)
-	require.NoError(t, err)
-	return res.CountInserted, nil
-}
-
-func getBootstrap(t *testing.T, rpcClient *tlmetadata.Client) ([]tlstatshouse.Mapping, error) {
-	res := &tlstatshouse.GetTagMappingBootstrapResult{}
-	err := rpcClient.GetTagMappingBootstrap(context.Background(), tlmetadata.GetTagMappingBootstrap{}, nil, res)
-	require.NoError(t, err)
-	return res.Mappings, nil
 }
 
 func getHistory(t *testing.T, rpcClient *tlmetadata.Client, id int64) (tlmetadata.HistoryShortResponse, error) {
@@ -775,40 +757,82 @@ func TestRPCServerBroadcastMapping(t *testing.T) {
 	require.Len(t, h.getMappingClients.clients, 1)
 }
 
-func TestBootstrap(t *testing.T) {
-	_, server, rpcClient, h := initServer(t, time.Now)
-	defer server.Close()
-	a := tlstatshouse.Mapping{
-		Str:   "a",
-		Value: 1,
+func callDeleteMappingCandidates(t *testing.T, h *Handler, offset, limit int32) (tlmetadata.DeleteMappingCandidatesResponse, error) {
+	args := tlmetadata.DeleteMappingCandidates{Offset: offset, Limit: limit}
+	hctx := &rpc.HandlerContext{Request: args.WriteTL1(nil)}
+	_, err := h.RawDeleteMappingCandidates(context.Background(), hctx)
+	if err != nil {
+		return tlmetadata.DeleteMappingCandidatesResponse{}, err
 	}
-	b := tlstatshouse.Mapping{
-		Str:   "b",
-		Value: 2,
+	var resp tlmetadata.DeleteMappingCandidatesResponse
+	_, derr := args.ReadResultTL1(hctx.Response, &resp)
+	require.NoError(t, derr)
+	return resp, nil
+}
+
+func TestRawDeleteMappingCandidates(t *testing.T) {
+	ctx := context.Background()
+
+	presentMappings := []int32{5, 10, 15, 20, 25, 30, 35, 40, 45, 50}
+	cands := []int32{10, 20, 30, 40, 50}
+
+	setup := func(t *testing.T) *Handler {
+		_, server, _, h := initServer(t, time.Now)
+		t.Cleanup(func() { server.Close() })
+		keys := make([]string, len(presentMappings))
+		for i, id := range presentMappings {
+			keys[i] = "key" + fmt.Sprint(id)
+		}
+		require.NoError(t, h.db.PutMapping(ctx, keys, presentMappings))
+		h.deletionCandidateMappings = cands
+		return h
 	}
-	c := tlstatshouse.Mapping{
-		Str:   "c",
-		Value: 3,
-	}
-	t.Run("insert to empty db", func(t *testing.T) {
-		c, err := putBootstrap(t, rpcClient, []tlstatshouse.Mapping{a, b})
+
+	exists := func(t *testing.T, h *Handler, id int32) bool {
+		_, ok, err := h.db.GetMappingByID(ctx, id)
 		require.NoError(t, err)
-		require.Equal(t, int32(0), c)
-		m, err := getBootstrap(t, rpcClient)
+		return ok
+	}
+
+	t.Run("deletes at most limit candidates from offset", func(t *testing.T) {
+		h := setup(t)
+		resp, err := callDeleteMappingCandidates(t, h, 0, 2)
 		require.NoError(t, err)
-		require.Len(t, m, 0)
+		require.Equal(t, int32(2), resp.CountBeforeDeletion)
+		require.Equal(t, int32(10), resp.From)
+		require.Equal(t, int32(20), resp.To)
+		require.False(t, exists(t, h, 10))
+		require.False(t, exists(t, h, 20))
+		require.True(t, exists(t, h, 30))
 	})
 
-	t.Run("insert to non empty db", func(t *testing.T) {
-		require.NoError(t, h.db.PutMapping(context.Background(), []string{a.Str, c.Str}, []int32{a.Value, c.Value}))
-		count, err := putBootstrap(t, rpcClient, []tlstatshouse.Mapping{a, b, c})
+	t.Run("full range deletes every candidate", func(t *testing.T) {
+		h := setup(t)
+		resp, err := callDeleteMappingCandidates(t, h, 0, int32(len(cands)))
 		require.NoError(t, err)
-		require.Equal(t, int32(2), count)
+		require.Equal(t, int32(len(cands)), resp.CountBeforeDeletion)
+		for _, id := range cands {
+			require.Falsef(t, exists(t, h, id), "id %d should be deleted", id)
+		}
+	})
 
-		m, err := getBootstrap(t, rpcClient)
-		require.NoError(t, err)
-		require.Len(t, m, 2)
-		require.Contains(t, m, a)
-		require.Contains(t, m, c)
+	t.Run("offset equal or bigger than len cands doesn't delete anything", func(t *testing.T) {
+		h := setup(t)
+		require.NotPanics(t, func() {
+			resp, err := callDeleteMappingCandidates(t, h, int32(len(cands)), 1)
+			require.NoError(t, err)
+			require.Equal(t, int32(0), resp.CountBeforeDeletion)
+		})
+		for _, id := range cands {
+			require.True(t, exists(t, h, id))
+		}
+	})
+
+	t.Run("window ending exactly at len does not panic", func(t *testing.T) {
+		h := setup(t)
+		require.NotPanics(t, func() {
+			_, err := callDeleteMappingCandidates(t, h, 1, int32(len(cands)))
+			require.NoError(t, err)
+		})
 	})
 }

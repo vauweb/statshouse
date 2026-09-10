@@ -487,7 +487,7 @@ func (m *MetricMetaValue) AppendTagNames(res []string) []string {
 
 // updates error if name collision happens
 func (m *MetricMetaValue) setName2Tag(name string, newTag *MetricMetaTag, canonical bool, err *error) {
-	if !canonical && !ValidTagName(mem.S(name)) {
+	if !canonical && !ValidTagName(name) {
 		if err != nil {
 			*err = fmt.Errorf("invalid tag name %q", name)
 		}
@@ -522,7 +522,7 @@ func (m *MetricMetaValue) BeforeSavingCheck() error {
 // Always restores maximum info, if error is returned, metric is non-canonical and should not be saved
 func (m *MetricMetaValue) RestoreCachedInfo() error {
 	var err error
-	if !ValidMetricName(mem.S(m.Name)) && m.Name != "404_page" && m.Name != "404_page_top_urls" { // TODO - ask monolith team to update names in code before removing exceptions
+	if !ValidMetricName(m.Name) && m.Name != "404_page" && m.Name != "404_page_top_urls" { // TODO - ask monolith team to update names in code before removing exceptions
 		err = multierr.Append(err, fmt.Errorf("invalid metric name: %q", m.Name))
 	}
 	if !IsValidMetricType(m.MetricType) {
@@ -571,7 +571,7 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 		if tag.Name == tagID { // remove redundancy
 			tag.Name = ""
 		}
-		if tag.Name != "" && !ValidTagName(mem.S(tag.Name)) {
+		if tag.Name != "" && !ValidTagName(tag.Name) {
 			err = multierr.Append(err, fmt.Errorf("invalid tag name %q of tag %d", tag.Name, i))
 		}
 		if m.PreKeyFrom != 0 { // restore prekey index
@@ -690,10 +690,6 @@ func (m *MetricMetaValue) RestoreCachedInfo() error {
 				m.FairKeyIndex = append(m.FairKeyIndex, int(tag.Index))
 			}
 		}
-	}
-
-	if slowHostMetricID[m.MetricID] {
-		m.IsHardwareSlowMetric = true
 	}
 
 	return err
@@ -817,7 +813,14 @@ func (m *NamespaceMeta) RestoreCachedInfo(builtin bool) error {
 }
 
 // '@' is reserved by api access.Do not use it here
-func ValidMetricName(s mem.RO) bool {
+func ValidMetricName(s string) bool {
+	return validMetricName(mem.S(s))
+}
+func ValidMetricNameBytes(s []byte) bool {
+	return validMetricName(mem.B(s))
+}
+
+func validMetricName(s mem.RO) bool {
 	if s.Len() == 0 || s.Len() > MaxStringLen || !isAsciiLetter(s.At(0)) {
 		return false
 	}
@@ -848,7 +851,7 @@ func ValidMetricPrefix(s string) bool {
 }
 
 func ValidGroupName(s string) bool {
-	return ValidMetricName(mem.S(s))
+	return ValidMetricName(s)
 }
 
 var validDashboardSymbols = map[uint8]bool{
@@ -876,8 +879,12 @@ func ValidDashboardName(s string) bool {
 	return true
 }
 
-func ValidTagName(s mem.RO) bool {
-	return validIdent(s)
+func ValidTagName(s string) bool {
+	return validIdent(mem.S(s))
+}
+
+func ValidTagNameBytes(s []byte) bool {
+	return validIdent(mem.B(s))
 }
 
 func ValidMetricKind(kind string) bool {
@@ -986,38 +993,31 @@ func validIdent(s mem.RO) bool {
 	return true
 }
 
-func ValidFloatValue(f float64) bool {
-	return !math.IsNaN(f) && !math.IsInf(f, 0)
-}
-
-func ClampFloatValue(f float64) float64 {
-	if f > math.MaxFloat32 {
-		return math.MaxFloat32
+func ValidateCounter(f float64) (errorTag int32) {
+	if math.IsNaN(f) {
+		return TagValueIDSrcIngestionStatusErrNanInfCounter
 	}
-	if f < -math.MaxFloat32 {
-		return -math.MaxFloat32
-	}
-	return f
-}
-
-func ClampCounter(f float64) (_ float64, errorTag int32) {
-	if !ValidFloatValue(f) {
-		return f, TagValueIDSrcIngestionStatusErrNanInfCounter
-	}
+	// counter == 0 is allowed, if Values, Histogram or Unique set
 	if f < 0 {
-		return f, TagValueIDSrcIngestionStatusErrNegativeCounter
+		return TagValueIDSrcIngestionStatusErrNegativeCounter
 	}
-	if f > math.MaxFloat32 {
-		return math.MaxFloat32, 0
+	if f > math.MaxFloat32 { // we noticed, those are always errors in clients, so forbidden
+		return TagValueIDSrcIngestionStatusErrTooBigCounter
 	}
-	return f, 0
+	return 0
 }
 
-func ClampValue(f float64) (_ float64, errorTag int32) {
-	if !ValidFloatValue(f) {
-		return f, TagValueIDSrcIngestionStatusErrNanInfValue
+func ValidateValue(f float64) (errorTag int32) {
+	if math.IsNaN(f) {
+		return TagValueIDSrcIngestionStatusErrNanInfValue
 	}
-	return ClampFloatValue(f), 0
+	if f > math.MaxFloat32 { // we noticed, those are always errors in clients, so forbidden
+		return TagValueIDSrcIngestionStatusErrTooBigValue
+	}
+	if f < -math.MaxFloat32 { // we noticed, those are always errors in clients, so forbidden
+		return TagValueIDSrcIngestionStatusErrTooBigValue
+	}
+	return 0
 }
 
 // Legacy rules replaced non-printables including whitespaces (except ASCII space) into roadsigns
@@ -1037,13 +1037,17 @@ func ValidStringValueLegacy(s mem.RO) bool {
 // We help people by replacing slightly invalid tag values with valid tag values.
 // 1. trim unicode whitespaces to the left and right
 // 2. replace all consecutive unicode whitespaces inside with single ASCII space
-// 3. trim to MaxStringLen (if las utf symbol fits only partly, we remove it completely)
+// 3. trim to MaxStringLen (if last utf symbol fits only partly, we remove it completely)
 // 4. non-printable characters are replaced by roadsign (invalid rune)
 // but invalid UTF-8 is still error
 //
 // TODO - replace invalid UTF-8 with roadsigns as well to simplify rules
-func ValidStringValue(s mem.RO) bool {
-	return validStringValue(s, MaxStringLen)
+func ValidStringValue(s string) bool {
+	return validStringValue(mem.S(s), MaxStringLen)
+}
+
+func ValidStringValueBytes(s []byte) bool {
+	return validStringValue(mem.B(s), MaxStringLen)
 }
 
 func validStringValueLegacy(s mem.RO, maxLen int) bool {
@@ -1063,34 +1067,38 @@ func validStringValueLegacy(s mem.RO, maxLen int) bool {
 	return true
 }
 
-// TODO - this can likely be speed up with ASCII fast-path
 func validStringValue(s mem.RO, maxLen int) bool {
 	if s.Len() > maxLen {
 		return false
 	}
-	if mem.TrimSpace(s).Len() != s.Len() {
-		return false
+	if s.Len() == 0 {
+		return true
 	}
-	previousSpace := false
+	previousSpace := true // fail on first space
 	for r := 0; r < s.Len(); {
+		if c := s.At(r); bytePrint(c) {
+			isSpace := c == ' '
+			if isSpace && previousSpace {
+				return false
+			}
+			previousSpace = isSpace
+			r++
+			continue
+		}
 		c, nr := mem.DecodeRune(s.SliceFrom(r))
 		if c == utf8.RuneError && nr <= 1 {
 			return false
 		}
 		switch {
 		case unicode.IsSpace(c):
-			if previousSpace {
-				return false
-			}
-			previousSpace = true
+			return false // only ascii spaces are allowed
 		case !unicode.IsPrint(c):
 			return false
-		default:
-			previousSpace = false
 		}
+		previousSpace = false
 		r += nr
 	}
-	return true
+	return !previousSpace // fail on last space
 }
 
 // We have a lot of 1251 encoding still, also we have java people saving strings in default UTF-16 encoding,
@@ -1101,72 +1109,114 @@ func AppendValidStringValue(dst []byte, src []byte) ([]byte, error) {
 	return appendValidStringValue(dst, src, MaxStringLen, false)
 }
 
+// During balance set up, we noticed unexplainable garbage coming into tags,
+// and decided to filter it our before we fix. TODO - remove after fix
+func ContainsCorruptedBalancerValue(s []byte) bool {
+	return bytes.Contains(s, []byte{0x39, 0x02, 0x58, 0x56})
+}
+
+// inlined version, 25% faster, this is too little to use
+func ContainsCorruptedBalancerValueFastPath(s []byte) bool {
+	const c0 = 0x39
+	const c1 = 0x02
+	const c2 = 0x58
+	const c3 = 0x56
+	i := 0
+	t := len(s) - 4 + 1
+	for i < t {
+		if s[i] != c0 {
+			o := bytes.IndexByte(s[i+1:t], c0)
+			if o < 0 {
+				return false
+			}
+			i += o + 1
+		}
+		if s[i+1] == c1 && s[i+2] == c2 && s[i+3] == c3 {
+			return true
+		}
+		i++
+	}
+	return false
+}
+
 // We use this function only to validate host names and args for now.
-func ForceValidStringValue(src string) []byte {
-	dst, _ := appendValidStringValue(nil, []byte(src), MaxStringLen, true)
+func ForceValidStringValue(src string) string {
+	if ValidStringValue(src) { // optimize 2 allocations if string is valid
+		return src
+	}
+	dst := []byte(src)
+	dst, _ = appendValidStringValue(dst[:0], dst, MaxStringLen, true)
+	return string(dst)
+}
+
+// ForceValidStringValueBytes is like ForceValidStringValue, reuses the backing array.
+func ForceValidStringValueBytes(b []byte) []byte {
+	dst, _ := appendValidStringValue(b[:0], b, MaxStringLen, true)
 	return dst
 }
 
 func appendValidStringValue(dst []byte, src []byte, maxLen int, force bool) ([]byte, error) {
-	// trim
-	src = bytes.TrimSpace(src) // packet is limited, so this will not be too slow
+	if len(src) == 0 {
+		return dst, nil
+	}
 	// fast path
 	if len(src) <= maxLen { // calculating dst size slows us down when dealing with double spaces
 		fastPath := true
-		previousSpace := false
+		previousSpace := true // fail on first space
 		for _, c := range src {
 			if !bytePrint(c) {
 				fastPath = false
 				break
 			}
-			doubleSpace := c == ' ' && previousSpace
-			previousSpace = c == ' '
-			if doubleSpace {
+			isSpace := c == ' '
+			if isSpace && previousSpace {
 				fastPath = false // they are rare, and we do not want to slow fast path down dealing with them
 				break
 			}
+			previousSpace = isSpace
 		}
-		if fastPath {
+		if fastPath && !previousSpace { // fail on last space
 			return append(dst, src...), nil
 		}
 	}
 	// slow path
 	var buf [MaxStringLen + utf8.UTFMax]byte
 	w := 0
-	previousSpace := false
+	previousSpace := true
 	for r := 0; r < len(src); {
 		c, nr := utf8.DecodeRune(src[r:])
 		if c == utf8.RuneError && nr <= 1 && !force {
 			return dst, errBadEncoding
 		}
+		isSpace := unicode.IsSpace(c)
 		switch {
-		case unicode.IsSpace(c):
+		case isSpace:
 			if previousSpace {
 				r += nr
 				continue
 			}
 			c = ' '
-			previousSpace = true
 		case !unicode.IsPrint(c):
 			c = utf8.RuneError
-			previousSpace = false
-		default:
-			previousSpace = false
 		}
 		nw := utf8.EncodeRune(buf[w:], c)
 		if w+nw > maxLen {
 			break
 		}
+		previousSpace = isSpace
 		r += nr
 		w += nw
 	}
-	dst = append(dst, buf[:w]...)
-	return bytes.TrimRightFunc(dst, unicode.IsSpace), nil
+	if previousSpace && w != 0 {
+		w--
+	}
+	return append(dst, buf[:w]...), nil
 }
 
+// we use these functions to write some invalid strings into statshouse.
+// we trim only ascii spaces to the left to increase the chance problem character fits
 func AppendHexStringValue(dst []byte, src []byte) []byte {
-	src = bytes.TrimSpace(src) // packet is limited, so this will not be too slow
-	src = bytes.TrimRightFunc(src, unicode.IsSpace)
+	src = bytes.TrimLeft(src, " \t\n\v\f\r") // packet is limited, so this will not be too slow
 	if len(src) > MaxStringLen/2 {
 		src = src[:MaxStringLen/2]
 	}
@@ -1177,6 +1227,19 @@ func AppendHexStringValue(dst []byte, src []byte) []byte {
 		buf[i*2+1] = hextable[c&0x0f]
 	}
 	return append(dst, buf[:len(src)*2]...)
+}
+func HexStringValue(src []byte) string {
+	src = bytes.TrimLeft(src, " \t\n\v\f\r") // packet is limited, so this will not be too slow
+	if len(src) > MaxStringLen/2 {
+		src = src[:MaxStringLen/2]
+	}
+	const hextable = "0123456789abcdef"
+	var buf [MaxStringLen]byte
+	for i, c := range src {
+		buf[i*2] = hextable[c>>4]
+		buf[i*2+1] = hextable[c&0x0f]
+	}
+	return string(buf[:len(src)*2])
 }
 
 // fast-path inlineable version of unicode.IsPrint for single-byte UTF-8 runes
@@ -1206,7 +1269,7 @@ func ParseCodeTagValue(s string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return int64(i), nil
+	return i, nil
 }
 
 func ValidTagValueForAPI(s string) bool {
@@ -1218,12 +1281,16 @@ func ValidTagValueForAPI(s string) bool {
 }
 
 // We allow both signed and unsigned 32-bit values, however values outside both ranges are prohibited
-func ContainsRawTagValue(s mem.RO) (int32, bool) {
-	i, err := mem.ParseInt(s, 10, 64) // TODO - remove allocation in case of error
+func ContainsRawTagValueBytes(s []byte) (int32, bool) {
+	i, err := mem.ParseInt(mem.B(s), 10, 64) // TODO - remove allocation in case of error
 	return int32(i), err == nil && i >= math.MinInt32 && i <= math.MaxUint32
 }
 
-func ContainsRawTagValue64(s mem.RO) (lo int32, hi int32, ok bool) {
+// We allow both signed and unsigned 64-bit values, however values outside both ranges are prohibited
+func ContainsRawTagValue64Bytes(s []byte) (lo int32, hi int32, ok bool) {
+	return containsRawTagValue64(mem.B(s))
+}
+func containsRawTagValue64(s mem.RO) (lo int32, hi int32, ok bool) {
 	if s.Len() == 0 { // never happens, but seems rather cheap check
 		return 0, 0, false
 	}
@@ -1439,3 +1506,19 @@ func MakeCompactMetric(value *MetricMetaValue) {
 	value.PreKeyOnly = false
 	value.MetricType = ""
 }
+
+//before and after optimization
+//cpu: 13th Gen Intel(R) Core(TM) i7-1360P
+//BenchmarkAppendValidStringValueFastPath-16                  	68605896	        15.15 ns/op
+//BenchmarkAppendValidStringValueCollapseSpacesFastPath-16    	84717020	        14.16 ns/op
+//BenchmarkValidStringValueFastPath-16                        	13199634	        90.80 ns/op
+//BenchmarkAppendValidStringValueSlowPath-16                  	 6493360	       184.1 ns/op
+//BenchmarkAppendValidStringValueCollapseSpacesSlowPath-16    	 6928969	       185.4 ns/op
+//BenchmarkValidStringValueSlowPath-16                        	 8657493	       133.1 ns/op
+//
+//BenchmarkAppendValidStringValueFastPath-16                  	108185221	        11.27 ns/op
+//BenchmarkAppendValidStringValueCollapseSpacesFastPath-16    	127750215	         9.538 ns/op
+//BenchmarkValidStringValueFastPath-16                        	75128864	        16.35 ns/op
+//BenchmarkAppendValidStringValueSlowPath-16                  	 7875194	       159.0 ns/op
+//BenchmarkAppendValidStringValueCollapseSpacesSlowPath-16    	 7608700	       155.9 ns/op
+//BenchmarkValidStringValueSlowPath-16                        	23976314	        51.20 ns/op

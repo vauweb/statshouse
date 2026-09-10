@@ -210,7 +210,7 @@ func newScraper(h Handler, t scrapeTarget) *scraper {
 	req.Header.Add("Accept", "application/openmetrics-text;version=1.0.0,application/openmetrics-text;version=0.0.1;q=0.75,text/plain;version=0.0.4;q=0.5,*/*;q=0.1")
 	req.Header.Set("User-Agent", "statshouse")
 	// build instance tag value
-	instance := srvfunc.HostnameForStatshouse()
+	instance := srvfunc.Hostname()
 	if port := req.URL.Port(); port != "" {
 		instance += ":" + port
 	} else {
@@ -634,7 +634,7 @@ func (s *scraper) resetMetric(b *tlstatshouse.MetricBytes, job string, tagsCap i
 	b.Reset()
 	tagsCap += 2 // job, instance
 	if cap(b.Tags) < tagsCap {
-		b.Tags = make([]tl.DictionaryFieldStringBytes, 0, tagsCap)
+		b.Tags = make([]tl.DictFieldStringStringBytes, 0, tagsCap)
 	}
 	b.Tags = b.Tags[:2]
 	setTagAt(b.Tags, 0, "job", job)
@@ -703,10 +703,10 @@ func setMetricValue(b *tlstatshouse.MetricBytes, v float64) {
 	b.FieldsMask |= 1 << 1
 }
 
-func appendTag(s []tl.DictionaryFieldStringBytes, name, value string) []tl.DictionaryFieldStringBytes {
+func appendTag(s []tl.DictFieldStringStringBytes, name, value string) []tl.DictFieldStringStringBytes {
 	n := len(s)
 	if cap(s) < n+1 {
-		t := make([]tl.DictionaryFieldStringBytes, n+1)
+		t := make([]tl.DictFieldStringStringBytes, n+1)
 		copy(t, s)
 		s = t
 	} else {
@@ -716,7 +716,7 @@ func appendTag(s []tl.DictionaryFieldStringBytes, name, value string) []tl.Dicti
 	return s
 }
 
-func setTagAt(s []tl.DictionaryFieldStringBytes, i int, k, v string) {
+func setTagAt(s []tl.DictFieldStringStringBytes, i int, k, v string) {
 	s[i].Key = appendString(s[i].Key, k)
 	s[i].Value = appendString(s[i].Value, v)
 }

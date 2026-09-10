@@ -8,6 +8,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -35,8 +36,8 @@ const (
 	widthLODRes  = 1
 )
 
-func httpErr(code int, err error) httpError {
-	return httpError{
+func httpErr(code int, err error) *httpError {
+	return &httpError{
 		code: code,
 		err:  err,
 	}
@@ -47,11 +48,11 @@ type httpError struct {
 	err  error
 }
 
-func (e httpError) Error() string {
+func (e *httpError) Error() string {
 	return e.err.Error()
 }
 
-func (e httpError) Unwrap() error {
+func (e *httpError) Unwrap() error {
 	return e.err
 }
 
@@ -64,7 +65,7 @@ type Response struct {
 func httpCode(err error) int {
 	code := http.StatusOK
 	if err != nil {
-		var httpErr httpError
+		var httpErr *httpError
 		var promErr promql.Error
 		switch {
 		case errors.Is(err, data_model.ErrEntityNotExists):
@@ -166,7 +167,7 @@ func respondJSON(h *httpRequestHandler, resp interface{}, cache time.Duration, c
 		r.Data = resp
 	}
 	if h.announcement != "" {
-		w.Header().Set("X-Statshouse-Announcment", h.announcement)
+		w.Header().Set("X-Statshouse-Announcement", base64.StdEncoding.EncodeToString([]byte(h.announcement)))
 	}
 	start := time.Now()
 	var jw jwriter.Writer

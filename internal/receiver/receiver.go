@@ -7,6 +7,7 @@
 package receiver
 
 import (
+	"errors"
 	"strings"
 
 	"go.uber.org/atomic"
@@ -29,21 +30,24 @@ const (
 	// protobuf (13337): 0x99, 0x68 (next one will be 0x9a, 0x9b, etc.)
 )
 
+var ErrNotImplemented = errors.New("not implemented")
+
+type RawHandler func([]byte) error
+
 type Handler interface {
-	HandleMetrics(data_model.HandlerArgs) data_model.MappedMetricHeader
+	HandleMetrics(args data_model.HandlerArgs) // fills first error into args
 	HandleParseError([]byte, error)
 }
 
 type CallbackHandler struct {
-	Metrics    func(*tlstatshouse.MetricBytes) (h data_model.MappedMetricHeader)
+	Metrics    func(*tlstatshouse.MetricBytes)
 	ParseError func([]byte, error)
 }
 
-func (c CallbackHandler) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader) {
+func (c CallbackHandler) HandleMetrics(args data_model.HandlerArgs) {
 	if c.Metrics != nil {
-		return c.Metrics(args.MetricBytes)
+		c.Metrics(args.MetricBytes)
 	}
-	return h
 }
 
 func (c CallbackHandler) HandleParseError(pkt []byte, err error) {
@@ -167,7 +171,7 @@ func (u *parser) StatBatchesTotalOK() uint64  { return u.statBatchesTotalOK.Load
 func (u *parser) StatBatchesTotalErr() uint64 { return u.statBatchesTotalErr.Load() }
 func (u *parser) StatBytesTotal() uint64      { return u.statBytesTotal.Load() }
 
-func (u *parser) parse(h Handler, ingestionError *error, pkt []byte, batch *tlstatshouse.AddMetricsBatchBytes, scratch *[]byte) error {
+func (u *parser) parse(h Handler, ingestionError *error, pkt []byte, batch *tlstatshouse.AddMetricsBatchBytes, scratch *[]byte, connHost string) error {
 	pktLen := len(pkt)
 	if u.logPacket != nil { // formatting is slow
 		u.logPacket("Incoming packet %x", pkt)
@@ -181,18 +185,19 @@ func (u *parser) parse(h Handler, ingestionError *error, pkt []byte, batch *tlst
 		for len(pkt) > 0 {
 			var err error
 			was := pkt
-			pkt, err = batch.ReadBoxed(pkt)
-			if !u.handleMetricsBatch(h, ingestionError, batch, was, err, scratch) {
+			pkt, err = batch.ReadTL1Boxed(pkt)
+			size := len(was) - len(pkt)
+			if !u.handleMetricsBatch(h, ingestionError, batch, was, err, scratch, connHost) {
 				setValueSize(u.batchSizeTLErr, len(was))
 				setValueSize(u.packetSizeTLErr, pktLen)
 				return err
 			}
-			setValueSize(u.batchSizeTLOK, len(was)-len(pkt))
+			setValueSize(u.batchSizeTLOK, size)
 		}
 		setValueSize(u.packetSizeTLOK, pktLen)
 	case len(pkt) >= len(jsonPacketPrefix) && string(pkt[0:len(jsonPacketPrefix)]) == jsonPacketPrefix:
 		err := batch.UnmarshalJSON(pkt)
-		if !u.handleMetricsBatch(h, ingestionError, batch, pkt, err, scratch) {
+		if !u.handleMetricsBatch(h, ingestionError, batch, pkt, err, scratch, connHost) {
 			setValueSize(u.batchSizeJSONErr, pktLen)
 			setValueSize(u.packetSizeJSONErr, pktLen)
 			return err
@@ -206,12 +211,13 @@ func (u *parser) parse(h Handler, ingestionError *error, pkt []byte, batch *tlst
 			var err error
 			was := pkt
 			pkt, err = msgpackUnmarshalStatshouseAddMetricBatch(batch, pkt)
-			if !u.handleMetricsBatch(h, ingestionError, batch, was, err, scratch) {
+			size := len(was) - len(pkt)
+			if !u.handleMetricsBatch(h, ingestionError, batch, was, err, scratch, connHost) {
 				setValueSize(u.batchSizeMsgPackErr, len(was))
 				setValueSize(u.packetSizeMsgPackErr, pktLen)
 				return err
 			}
-			setValueSize(u.batchSizeMsgPackOK, len(was)-len(pkt))
+			setValueSize(u.batchSizeMsgPackOK, size)
 		}
 		setValueSize(u.packetSizeMsgPackOK, pktLen)
 	default: // assume Protobuf, it is too flexible, many wrong packets will be accounted for here
@@ -219,19 +225,20 @@ func (u *parser) parse(h Handler, ingestionError *error, pkt []byte, batch *tlst
 			var err error
 			was := pkt
 			pkt, err = protobufUnmarshalStatshouseAddMetricBatch(batch, pkt)
-			if !u.handleMetricsBatch(h, ingestionError, batch, pkt, err, scratch) {
+			size := len(was) - len(pkt)
+			if !u.handleMetricsBatch(h, ingestionError, batch, pkt, err, scratch, connHost) {
 				setValueSize(u.batchSizeProtobufErr, len(was))
 				setValueSize(u.packetSizeProtobufErr, pktLen)
 				return err
 			}
-			setValueSize(u.batchSizeProtobufOK, len(was)-len(pkt))
+			setValueSize(u.batchSizeProtobufOK, size)
 		}
 		setValueSize(u.packetSizeProtobufOK, pktLen)
 	}
 	return nil
 }
 
-func (u *parser) handleMetricsBatch(handler Handler, ingestionError *error, b *tlstatshouse.AddMetricsBatchBytes, pkt []byte, parseErr error, scratch *[]byte) bool {
+func (u *parser) handleMetricsBatch(handler Handler, ingestionError *error, b *tlstatshouse.AddMetricsBatchBytes, pkt []byte, parseErr error, scratch *[]byte, connHost string) bool {
 	if parseErr != nil {
 		u.statBatchesTotalErr.Inc()
 		if len(pkt) != 0 {
@@ -241,19 +248,12 @@ func (u *parser) handleMetricsBatch(handler Handler, ingestionError *error, b *t
 	}
 	u.statBatchesTotalOK.Inc()
 	for i := range b.Metrics {
-		h := handler.HandleMetrics(data_model.HandlerArgs{
+		handler.HandleMetrics(data_model.HandlerArgs{
 			MetricBytes: &b.Metrics[i],
 			Scratch:     scratch,
-		}) // might move out metric, if needs to
-		if ingestionError != nil && *ingestionError == nil && h.IngestionStatus != 0 {
-			*ingestionError = h.MapErrorFromHeader(b.Metrics[i])
-		}
+			Host:        connHost,
+			FirstError:  ingestionError,
+		})
 	}
 	return true
-}
-
-func (u *parser) handleAndWaitMetrics(handler Handler, args *tlstatshouse.AddMetricsBatchBytes, scratch *[]byte) error {
-	var firstError error
-	_ = u.handleMetricsBatch(handler, &firstError, args, nil, nil, scratch)
-	return firstError
 }

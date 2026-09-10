@@ -21,7 +21,7 @@ import (
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/tl/pkg/rpc"
 	"pgregory.net/rand"
 )
 
@@ -189,7 +189,7 @@ func (s *Agent) clientGetAndSaveConfig(ctxParent context.Context, client *tlstat
 	if s.componentTag == format.TagValueIDComponentIngressProxy {
 		args.SetNewIngressVersion(true)
 	}
-	data_model.SetProxyHeaderStagingLevel(&args.Header, &args.FieldsMask, s.stagingLevel)
+	setProxyHeaderStagingLevel(&args.Header, &args.FieldsMask, s.stagingLevel)
 	var ret tlstatshouse.GetConfigResult3
 	ctx, cancel := context.WithTimeout(ctxParent, data_model.AutoConfigTimeout)
 	defer cancel()
@@ -217,7 +217,7 @@ func clientSaveConfigToCache(cluster string, cacheDir string, dst tlstatshouse.G
 	defer fp.Close()
 	storage := data_model.NewChunkedStorage2File(fp)
 	chunk := storage.StartWriteChunk(data_model.ChunkedMagicConfig, 0)
-	chunk = dst.WriteBoxed(chunk)
+	chunk = dst.WriteTL1Boxed(chunk)
 	return storage.FinishWriteChunk(chunk)
 }
 
@@ -236,7 +236,7 @@ func clientGetConfigFromCache(cluster string, cacheDir string) (tlstatshouse.Get
 	if err != nil {
 		return res, fmt.Errorf("failed to read config cache: %w", err)
 	}
-	_, err = res.ReadBoxed(chunk)
+	_, err = res.ReadTL1Boxed(chunk)
 	if !validConfigResult(res) {
 		return res, fmt.Errorf("loaded invalid config from cache: %s", filterUnusedConfigFields(res.String()))
 	}
@@ -297,7 +297,7 @@ func clientGetConfig(network string, rpcClient rpc.Client, shardReplicaNum int, 
 		args.SetNewIngressVersion(true)
 	}
 	args.SetTs(true)
-	data_model.SetProxyHeaderStagingLevel(&args.Header, &args.FieldsMask, stagingLevel)
+	setProxyHeaderStagingLevel(&args.Header, &args.FieldsMask, stagingLevel)
 	var ret tlstatshouse.GetConfigResult
 	ctx, cancel := context.WithTimeout(context.Background(), data_model.AutoConfigTimeout)
 	defer cancel()

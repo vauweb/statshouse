@@ -13,18 +13,18 @@ import (
 	"fmt"
 	"time"
 
-	"go4.org/mem"
 	"pgregory.net/rand"
 
 	"github.com/VKCOM/statshouse/internal/agent"
 
 	"github.com/VKCOM/statshouse/internal/compress"
 
+	"github.com/VKCOM/tl/pkg/rpc"
+
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
 	"github.com/VKCOM/statshouse/internal/vkgo/basictl"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 func bool2int(b bool) int { // freaking golang clowns
@@ -93,14 +93,15 @@ func (a *Aggregator) aggKey(t uint32, m int32, k [format.MaxTags]int32) *data_mo
 
 func (a *Aggregator) handleGetConfig3(_ context.Context, hctx *rpc.HandlerContext) error {
 	var args tlstatshouse.GetConfig3
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize statshouse.getConfig3 request: %w", err)
 	}
 
 	now := time.Now()
 	nowUnix := uint32(now.Unix())
-	hostTag := a.getTagUnion(nowUnix, args.Header.HostName)
+	args.Header.HostName = format.ForceValidStringValue(args.Header.HostName)
+	hostTag := a.getTagUnion(args.Header.HostName)
 	aera := data_model.AgentEnvRouteArch{
 		AgentEnv:  a.getAgentEnv(args.Header.IsSetAgentEnvStaging0(args.FieldsMask), args.Header.IsSetAgentEnvStaging1(args.FieldsMask)),
 		Route:     format.TagValueIDRouteDirect,
@@ -137,13 +138,13 @@ func (a *Aggregator) handleGetConfig3(_ context.Context, hctx *rpc.HandlerContex
 		1, hostTag, aera)
 	cc.AgentIp = agent.ConfigAddrIPs(hctx.RemoteAddr())
 	cc.ConnectedTo = a.sh2.HostName()
-	hctx.Response, err = args.WriteResult(hctx.Response, cc)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, cc)
 	return err
 }
 
 func (a *Aggregator) handleGetMetrics3(_ context.Context, hctx *rpc.HandlerContext) error {
 	var args tlstatshouse.GetMetrics3
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize statshouse.getMetrics3 request: %w", err)
 	}
@@ -163,9 +164,9 @@ func (a *Aggregator) handleSendSourceBucket3(_ context.Context, hctx *rpc.Handle
 			Warning: []byte(warning),
 		}
 		resp.SetDiscard(discard)
-		hctx.Response, _ = args.WriteResult(hctx.Response, resp)
+		hctx.Response, _ = args.WriteResultTL1(hctx.Response, resp)
 	}
-	if _, err := args.Read(hctx.Request); err != nil {
+	if _, err := args.ReadTL1(hctx.Request); err != nil {
 		writeResponse(fmt.Sprintf("failed to deserialize statshouse.sendSourceBucket3 request: %v", err), true)
 		return nil
 	}
@@ -175,7 +176,7 @@ func (a *Aggregator) handleSendSourceBucket3(_ context.Context, hctx *rpc.Handle
 		return nil
 	}
 	var bucket tlstatshouse.SourceBucket3Bytes
-	if _, err := bucket.ReadBoxed(bucketBytes); err != nil {
+	if _, err := bucket.ReadTL1Boxed(bucketBytes); err != nil {
 		writeResponse(fmt.Sprintf("failed to deserialize statshouse.sourceBucket3: %v", err), true)
 		return nil
 	}
@@ -200,8 +201,10 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 	nowUnix := uint32(now.Unix())
 	receiveDelay := now.Sub(time.Unix(int64(args.Time), 0)).Seconds()
 	// All hosts must be valid and non-empty
-	hostTag := a.getTagUnionBytes(nowUnix, args.Header.HostName)
-	ownerTag := a.getTagUnionBytes(nowUnix, args.Header.Owner)
+	args.Header.HostName = format.ForceValidStringValueBytes(args.Header.HostName)
+	hostTag := a.getTagUnionBytes(args.Header.HostName)
+	args.Header.Owner = format.ForceValidStringValueBytes(args.Header.Owner)
+	ownerTag := a.getTagUnionBytes(args.Header.Owner)
 	aera := data_model.AgentEnvRouteArch{
 		AgentEnv:  a.getAgentEnv(args.Header.IsSetAgentEnvStaging0(args.FieldsMask), args.Header.IsSetAgentEnvStaging1(args.FieldsMask)),
 		Route:     format.TagValueIDRouteDirect,
@@ -213,7 +216,7 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 	}
 	var bcStr string
 	bcTag := int32(0)
-	if format.ValidStringValue(mem.B(args.BuildCommit)) {
+	if format.ValidStringValueBytes(args.BuildCommit) {
 		bcStr = string(args.BuildCommit)
 		bcStrRaw, _ := hex.DecodeString(bcStr)
 		if len(bcStrRaw) >= 4 {
@@ -287,13 +290,7 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 		if roundedToOurTime < oldestTime {
 			aggBucket = a.historicBuckets[args.Time]
 			if aggBucket == nil {
-				aggBucket = &aggregatorBucket{
-					time:                        args.Time,
-					contributors:                map[rpc.LongpollHandle]struct{}{},
-					contributors3:               map[rpc.LongpollHandle]tlstatshouse.SendSourceBucket3Response{},
-					contributorsSimulatedErrors: map[rpc.LongpollHandle]struct{}{},
-					historicHosts:               [2][2]map[data_model.TagUnion]int64{{map[data_model.TagUnion]int64{}, map[data_model.TagUnion]int64{}}, {map[data_model.TagUnion]int64{}, map[data_model.TagUnion]int64{}}},
-				}
+				aggBucket = newAggregatorBucket(args.Time)
 				a.historicBuckets[args.Time] = aggBucket
 			}
 		} else {
@@ -355,7 +352,7 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 	measurementStringTops := 0
 	measurementIntTops := 0
 	measurementOutdatedRows := 0
-	unknownTags := map[string]data_model.CreateMappingExtra{}
+	unknownTags := map[string]createMappingExtra{}
 	sendMappings := map[string]int32{} // we want deduplication to efficiently use network
 	mappingHits := 0
 	mappingMisses := 0
@@ -372,20 +369,35 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 	}
 
 	type clampedKey struct {
-		env        int32
-		metricID   int32
-		clampedTag int32
+		env             int32
+		metricID        int32
+		ingestionStatus int32
+		tagID           int32
+		stringValue     string
 	}
-	clampedTimestampsMetrics := map[clampedKey]float32{}
+	aggIngestionStatuses := map[clampedKey]float32{} // cannot be written into agent, aggregated directly into bucket
 	oldMetricBuckets := map[int32][3]int{}
 
+	validateStringTag := func(i int, str []byte, metricID int32, clientEnv int32) bool {
+		if len(str) == 0 {
+			return true
+		}
+		if format.ValidStringValueBytes(str) {
+			return true
+		}
+		// hopefully we do not have too many
+		tagId := int32(i + format.TagIDShift)
+		stringValue := format.HexStringValue(str)
+		aggIngestionStatuses[clampedKey{clientEnv, metricID, format.TagValueIDSrcIngestionStatusErrMapTagValueCorrupted, tagId, stringValue}]++
+		return false
+	}
 	// If agents send lots of strings, this loop is non-trivial amount of work.
 	// May be, if mappingHits + mappingMisses > some limit, we should simply copy strings to STags
 	mapStringTag := func(i int, str []byte, metricID int32, clientEnv int32) int32 {
 		if len(str) == 0 {
 			return 0
 		}
-		if mapped, ok := a.getTagValueBytes(aggBucket.time, str); ok {
+		if mapped, ok := a.getTagValueBytes(str); ok {
 			mappingHits++
 			if len(sendMappings) < configR.MaxSendTagsToAgent {
 				sendMappings[string(str)] = mapped
@@ -393,11 +405,14 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 			return mapped
 		}
 		mappingMisses++
-		if len(unknownTags) < configR.MaxUnknownTagsInBucket {
+		// Benefits of creating mappings for historic data depends on circumstances.
+		// We decided to save CPU by not creating them.
+		if !args.IsSetHistoric() {
 			tagId := int32(i + format.TagIDShift)
+			// len(unknownTags) is limited to aggregation map by key (multiplied by 48 in the worst case)
+			// and is proportional to agent budget
 			if _, ok := unknownTags[string(str)]; !ok {
-				unknownTags[string(str)] = data_model.CreateMappingExtra{
-					Create:    true, // passed as is to meta loader
+				unknownTags[string(str)] = createMappingExtra{
 					MetricID:  metricID,
 					TagIDKey:  tagId,
 					ClientEnv: clientEnv,
@@ -417,6 +432,7 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 	// we will allocate if key won't fit into this buffer, but it is quite unlikely
 	var stackBuf [1024]byte
 	keyBytes := stackBuf[:0]
+outer:
 	for _, item := range bucket.Metrics {
 		if item.T != 0 && item.T < roundedToOurTime {
 			measurementOutdatedRows++
@@ -445,14 +461,17 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 				measurementStringTops++
 			}
 		}
-		k, clampedTag := data_model.KeyFromStatshouseMultiItem(&item, args.Time)
-		if clampedTag != 0 {
-			clampedTimestampsMetrics[clampedKey{k.Tags[0], k.Metric, clampedTag}]++
+		k, ingestionWarningStatus := data_model.KeyFromStatshouseMultiItem(&item, args.Time)
+		if ingestionWarningStatus != 0 {
+			aggIngestionStatuses[clampedKey{k.Tags[0], k.Metric, ingestionWarningStatus, 0, ""}]++
 		}
 		for i, str := range item.Skeys {
-			// in case agents sends more then 16 tags
+			// in case agents sends more tags
 			if i >= format.MaxTags {
 				break
+			}
+			if !validateStringTag(i, str, k.Metric, k.Tags[0]) {
+				continue outer
 			}
 			if m := mapStringTag(i, str, k.Metric, k.Tags[0]); m > 0 {
 				k.Tags[i] = m
@@ -514,43 +533,67 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 			}
 		}
 		if item.Tail.IsSetMaxHostStag(item.FieldsMask) {
+			if !validateStringTag(format.HostTagIndex, item.Tail.MaxHostStag, k.Metric, k.Tags[0]) {
+				continue outer
+			}
 			if m := mapStringTag(format.HostTagIndex, item.Tail.MaxHostStag, k.Metric, k.Tags[0]); m > 0 {
 				item.Tail.SetMaxHostTag(m, &item.FieldsMask)
 				item.Tail.ClearMaxHostStag(&item.FieldsMask)
 			}
 		}
 		if item.Tail.IsSetMaxCounterHostStag(item.FieldsMask) {
+			if !validateStringTag(format.HostTagIndex, item.Tail.MaxCounterHostStag, k.Metric, k.Tags[0]) {
+				continue outer
+			}
 			if m := mapStringTag(format.HostTagIndex, item.Tail.MaxCounterHostStag, k.Metric, k.Tags[0]); m > 0 {
 				item.Tail.SetMaxCounterHostTag(m, &item.FieldsMask)
 				item.Tail.ClearMaxCounterHostStag(&item.FieldsMask)
 			}
 		}
 		if item.Tail.IsSetMinHostStag(item.FieldsMask) {
+			if !validateStringTag(format.HostTagIndex, item.Tail.MinHostStag, k.Metric, k.Tags[0]) {
+				continue outer
+			}
 			if m := mapStringTag(format.HostTagIndex, item.Tail.MinHostStag, k.Metric, k.Tags[0]); m > 0 {
 				item.Tail.SetMinHostTag(m, &item.FieldsMask)
 				item.Tail.ClearMinHostStag(&item.FieldsMask)
 			}
 		}
-		for i, tb := range item.Top {
-			if m := mapStringTag(i, tb.Stag, k.Metric, k.Tags[0]); m > 0 {
-				item.Top[i].Tag = m
+
+		for i := range item.Top {
+			ptb := &item.Top[i]
+			if !validateStringTag(format.StringTopTagIndexV3, ptb.Stag, k.Metric, k.Tags[0]) {
+				continue outer
 			}
-			if tb.Value.IsSetMaxHostStag(tb.FieldsMask) {
-				if m := mapStringTag(format.HostTagIndex, tb.Value.MaxHostStag, k.Metric, k.Tags[0]); m > 0 {
-					tb.Value.SetMaxHostTag(m, &item.FieldsMask)
-					tb.Value.ClearMaxHostStag(&item.FieldsMask)
+			if m := mapStringTag(format.StringTopTagIndexV3, ptb.Stag, k.Metric, k.Tags[0]); m > 0 {
+				ptb.Tag = m
+				ptb.Stag = ptb.Stag[:0]
+			}
+			if ptb.Value.IsSetMaxHostStag(ptb.FieldsMask) {
+				if !validateStringTag(format.HostTagIndex, ptb.Value.MaxHostStag, k.Metric, k.Tags[0]) {
+					continue outer
+				}
+				if m := mapStringTag(format.HostTagIndex, ptb.Value.MaxHostStag, k.Metric, k.Tags[0]); m > 0 {
+					ptb.Value.SetMaxHostTag(m, &ptb.FieldsMask)
+					ptb.Value.ClearMaxHostStag(&ptb.FieldsMask)
 				}
 			}
-			if tb.Value.IsSetMaxCounterHostStag(tb.FieldsMask) {
-				if m := mapStringTag(format.HostTagIndex, tb.Value.MaxCounterHostStag, k.Metric, k.Tags[0]); m > 0 {
-					tb.Value.SetMaxCounterHostTag(m, &item.FieldsMask)
-					tb.Value.ClearMaxCounterHostStag(&item.FieldsMask)
+			if ptb.Value.IsSetMaxCounterHostStag(ptb.FieldsMask) {
+				if !validateStringTag(format.HostTagIndex, ptb.Value.MaxCounterHostStag, k.Metric, k.Tags[0]) {
+					continue outer
+				}
+				if m := mapStringTag(format.HostTagIndex, ptb.Value.MaxCounterHostStag, k.Metric, k.Tags[0]); m > 0 {
+					ptb.Value.SetMaxCounterHostTag(m, &ptb.FieldsMask)
+					ptb.Value.ClearMaxCounterHostStag(&ptb.FieldsMask)
 				}
 			}
-			if tb.Value.IsSetMinHostStag(tb.FieldsMask) {
-				if m := mapStringTag(format.HostTagIndex, tb.Value.MinHostStag, k.Metric, k.Tags[0]); m > 0 {
-					tb.Value.SetMinHostTag(m, &item.FieldsMask)
-					tb.Value.ClearMinHostStag(&item.FieldsMask)
+			if ptb.Value.IsSetMinHostStag(ptb.FieldsMask) {
+				if !validateStringTag(format.HostTagIndex, ptb.Value.MinHostStag, k.Metric, k.Tags[0]) {
+					continue outer
+				}
+				if m := mapStringTag(format.HostTagIndex, ptb.Value.MinHostStag, k.Metric, k.Tags[0]); m > 0 {
+					ptb.Value.SetMinHostTag(m, &ptb.FieldsMask)
+					ptb.Value.ClearMinHostStag(&ptb.FieldsMask)
 				}
 			}
 		}
@@ -559,7 +602,9 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 		sID := int(hash % data_model.AggregationShardsPerSecond)
 		s := aggBucket.lockShard(&lockedShard, sID, &measurementLocks)
 		mi, created := s.GetOrCreateMultiItem(&k, nil, keyBytes)
-		mi.MergeWithTLMultiItem(rng, data_model.AggregatorStringTopCapacity, &item, hostTag)
+		if is := mi.MergeWithTLMultiItem(rng, data_model.AggregatorStringTopCapacity, &item, hostTag); is != 0 {
+			aggIngestionStatuses[clampedKey{k.Tags[0], k.Metric, is, 0, ""}]++
+		}
 		// we unlock shard to calculate hash and do other heavy operations not under lock
 		aggBucket.lockShard(&lockedShard, -1, &measurementLocks)
 		if created {
@@ -577,30 +622,35 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 		resp.Mappings = append(resp.Mappings, tlstatshouse.Mapping{Str: k, Value: v})
 	}
 
-	var avgRemovedHits float64
-	var unknownMapRemove, unknownMapAdd, unknownListAdd, createMapAdd int
-	if !configR.EnableMappingStorage {
-		unknownMapRemove, unknownMapAdd, unknownListAdd, createMapAdd, avgRemovedHits = a.tagsMapper2.AddUnknownTags(unknownTags, aggBucket.time)
-	} else {
-		unknownMapRemove, unknownMapAdd, createMapAdd, avgRemovedHits = a.tagsMapper3.AddUnknownTags(unknownTags, aggBucket.time)
-	}
-
 	aggBucket.mu.Lock()
 
-	if aggBucket.usedMetrics == nil {
-		aggBucket.usedMetrics = map[int32]struct{}{}
-	}
 	for m := range usedMetrics {
 		aggBucket.usedMetrics[m] = struct{}{}
+	}
+	for k, v := range unknownTags {
+		aggBucket.unknownTags[k] = v
 	}
 	if args.IsSetHistoric() {
 		aggBucket.historicHosts[bool2int(args.IsSetSpare())][bool2int(isRouteProxy)][hostTag]++
 	}
 	lh, errHijack := hctx.StartLongpoll(aggBucket) // must be under bucket lock
 	if errHijack == nil {                          // must be always, because we wait for all inserts finish before calling server.Shutdown()
-		aggBucket.contributors3[lh] = resp // must be under bucket lock
+		aggBucket.contributors3[lh] = contributor{ // must be under bucket lock
+			host: hostTag,
+			resp: resp,
+		}
 	}
 	compressedSize := len(hctx.Request)
+	if !configR.DisableReceiveSampleBudget && bucket.IsSetHaveOriginalSize() && args.Header.ComponentTag == format.TagValueIDComponentAgent && !args.IsSetHistoric() && !args.IsSetSpare() {
+		for _, v := range bucket.SampleFactors {
+			byHost, ok := aggBucket.originalMetricSize[v.Metric]
+			if !ok {
+				byHost = map[data_model.TagUnion]uint32{}
+				aggBucket.originalMetricSize[v.Metric] = byHost
+			}
+			byHost[hostTag] += v.OriginalSize
+		}
+	}
 
 	aggBucket.mu.Unlock()
 
@@ -622,6 +672,8 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 		[]int32{0, 0, 0, 0, conveyor, spare, format.TagValueIDAggBucketInfoMappingHits}, float64(mappingHits), 1, hostTag, aera)
 	a.sh2.AddValueCounterHostAERA(args.Time, format.BuiltinMetricMetaAggBucketInfo,
 		[]int32{0, 0, 0, 0, conveyor, spare, format.TagValueIDAggBucketInfoMappingMisses}, float64(mappingMisses), 1, hostTag, aera)
+	a.sh2.AddValueCounterHostAERA(args.Time, format.BuiltinMetricMetaAggBucketInfo,
+		[]int32{0, 0, 0, 0, conveyor, spare, format.TagValueIDAggBucketInfoMappingSent}, float64(len(sendMappings)), 1, hostTag, aera)
 	a.sh2.AddValueCounterHostAERA(args.Time, format.BuiltinMetricMetaAggBucketInfo,
 		[]int32{0, 0, 0, 0, conveyor, spare, format.TagValueIDAggBucketInfoMappingUnknownKeys}, float64(len(unknownTags)), 1, hostTag, aera)
 	a.sh2.AddValueCounterHostAERA(args.Time, format.BuiltinMetricMetaAggBucketInfo,
@@ -645,24 +697,6 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 	a.sh2.AddCounterHostAERA(args.Time, format.BuiltinMetricMetaMappingCacheEvent,
 		[]int32{0, format.TagValueIDComponentAggregator, format.TagValueIDMappingCacheEventMiss},
 		float64(mappingMisses), hostTag, aera)
-
-	a.sh2.AddCounterHostAERA(args.Time, format.BuiltinMetricMetaMappingQueueEvent,
-		[]int32{0, 0, format.TagValueIDMappingQueueEventUnknownMapRemove},
-		float64(unknownMapRemove), hostTag, aera)
-	a.sh2.AddCounterHostAERA(args.Time, format.BuiltinMetricMetaMappingQueueEvent,
-		[]int32{0, 0, format.TagValueIDMappingQueueEventUnknownMapAdd},
-		float64(unknownMapAdd), hostTag, aera)
-	a.sh2.AddCounterHostAERA(args.Time, format.BuiltinMetricMetaMappingQueueEvent,
-		[]int32{0, 0, format.TagValueIDMappingQueueEventUnknownListAdd},
-		float64(unknownListAdd), hostTag, aera)
-	a.sh2.AddCounterHostAERA(args.Time, format.BuiltinMetricMetaMappingQueueEvent,
-		[]int32{0, 0, format.TagValueIDMappingQueueEventCreateMapAdd},
-		float64(createMapAdd), hostTag, aera)
-	if avgRemovedHits != 0 {
-		a.sh2.AddCounterHostAERA(args.Time, format.BuiltinMetricMetaMappingQueueRemovedHitsAvg,
-			[]int32{},
-			avgRemovedHits, hostTag, aera)
-	}
 
 	a.sh2.AddValueCounterHostAERA(args.Time, format.BuiltinMetricMetaAggSizeCompressed,
 		[]int32{0, 0, 0, 0, conveyor, spare},
@@ -716,6 +750,9 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 	// They all simply go to merge shard 0 independent of their tags.
 	s := aggBucket.lockShard(&lockedShard, 0, &measurementLocks)
 	for _, v := range bucket.SampleFactors {
+		if v.Value < 1 {
+			continue
+		}
 		// We probably wish to stop splitting by aggregator, because this metric is taking already too much space - about 2% of all data
 		// Counter will be +1 for each agent who sent bucket for this second, so millions.
 		a.sh2.GetMultiItemAERA(&s.MultiItemMap, args.Time, format.BuiltinMetricMetaAgentSamplingFactor,
@@ -723,28 +760,45 @@ func (a *Aggregator) handleSendSourceBucket(hctx *rpc.HandlerContext, args tlsta
 			Tail.AddValueCounterHost(rng, float64(v.Value), 1, hostTag)
 	}
 
-	ingestionStatus := func(env int32, metricID int32, status int32, value float32) {
-		a.sh2.GetMultiItemAERA(&s.MultiItemMap, args.Time, format.BuiltinMetricMetaIngestionStatus,
-			[]int32{env, metricID, status}, aera).
-			Tail.AddCounterHost(rng, float64(value), hostTag)
+	ingestionStatus := func(env int32, metricID int32, status int32, tagID int32, component int32, strValue string, value float32) {
+		mi := a.sh2.GetMultiItemAERA(&s.MultiItemMap, args.Time, format.BuiltinMetricMetaIngestionStatus,
+			[]int32{env, metricID, status, tagID, component}, aera)
+		// we will not attempt mapping strValue, we do not expect them
+		mv := mi.MapStringTop(rng, data_model.AggregatorStringTopCapacity, data_model.TagUnion{S: strValue}, 1)
+		mv.AddCounterHost(rng, float64(value), hostTag)
 	}
 	for _, v := range bucket.IngestionStatusOk2 {
 		// We do not split by aggregator, because this metric is taking already too much space - about 1% of all data
 		if v.Value > 0 {
-			ingestionStatus(v.Env, v.Metric, format.TagValueIDSrcIngestionStatusOKCached, v.Value)
+			ingestionStatus(v.Env, v.Metric, format.TagValueIDSrcIngestionStatusOKCached, 0, format.TagValueIDComponentAgent, "", v.Value)
 		}
 	}
-	for k, v := range clampedTimestampsMetrics {
+	for k, v := range aggIngestionStatuses {
 		// We do not split by aggregator, because this metric is taking already too much space - about 1% of all data
-		ingestionStatus(k.env, k.metricID, k.clampedTag, v)
+		ingestionStatus(k.env, k.metricID, k.ingestionStatus, k.tagID, format.TagValueIDComponentAggregator, k.stringValue, v)
 	}
 	aggBucket.lockShard(&lockedShard, -1, &measurementLocks)
 	return "", errHijack, false
 }
 
+func (a *Aggregator) addUnknownTags(unknownTags map[string]createMappingExtra, time uint32, rng *rand.Rand, hostTag data_model.TagUnion, aera data_model.AgentEnvRouteArch) {
+	createMapAdd := a.tagsMapper3.AddUnknownTags(unknownTags, time, rng)
+
+	if len(unknownTags) != 0 {
+		a.sh2.AddValueCounterHostAERA(time, format.BuiltinMetricMetaMappingQueueEvent,
+			[]int32{0, 0, format.TagValueIDMappingQueueEventUnknownMapAdd},
+			float64(len(unknownTags)), 1, hostTag, aera)
+	}
+	if createMapAdd != 0 {
+		a.sh2.AddValueCounterHostAERA(time, format.BuiltinMetricMetaMappingQueueEvent,
+			[]int32{0, 0, format.TagValueIDMappingQueueEventCreateMapAdd},
+			float64(createMapAdd), 1, hostTag, aera)
+	}
+}
+
 func (a *Aggregator) handleSendKeepAlive2(_ context.Context, hctx *rpc.HandlerContext) error {
 	var args tlstatshouse.SendKeepAlive2Bytes
-	if _, err := args.Read(hctx.Request); err != nil {
+	if _, err := args.ReadTL1(hctx.Request); err != nil {
 		return fmt.Errorf("failed to deserialize statshouse.sendKeepAlive2 request: %w", err)
 	}
 	return a.handleSendKeepAliveAny(hctx, tlstatshouse.SendKeepAlive3Bytes(args), false)
@@ -752,7 +806,7 @@ func (a *Aggregator) handleSendKeepAlive2(_ context.Context, hctx *rpc.HandlerCo
 
 func (a *Aggregator) handleSendKeepAlive3(_ context.Context, hctx *rpc.HandlerContext) error {
 	var args tlstatshouse.SendKeepAlive3Bytes
-	if _, err := args.Read(hctx.Request); err != nil {
+	if _, err := args.ReadTL1(hctx.Request); err != nil {
 		return fmt.Errorf("failed to deserialize statshouse.sendKeepAlive3 request: %w", err)
 	}
 	return a.handleSendKeepAliveAny(hctx, args, true)
@@ -765,7 +819,8 @@ func (a *Aggregator) handleSendKeepAliveAny(hctx *rpc.HandlerContext, args tlsta
 
 	now := time.Now()
 	nowUnix := uint32(now.Unix())
-	hostTag := a.getTagUnionBytes(nowUnix, args.Header.HostName)
+	args.Header.HostName = format.ForceValidStringValueBytes(args.Header.HostName)
+	hostTag := a.getTagUnionBytes(args.Header.HostName)
 	aera := data_model.AgentEnvRouteArch{
 		AgentEnv:  a.getAgentEnv(args.Header.IsSetAgentEnvStaging0(args.FieldsMask), args.Header.IsSetAgentEnvStaging1(args.FieldsMask)),
 		Route:     format.TagValueIDRouteDirect,
@@ -802,7 +857,7 @@ func (a *Aggregator) handleSendKeepAliveAny(hctx *rpc.HandlerContext, args tlsta
 		return err
 	}
 	if version3 {
-		aggBucket.contributors3[lh] = tlstatshouse.SendSourceBucket3Response{} // must be under bucket lock
+		aggBucket.contributors3[lh] = contributor{} // must be under bucket lock
 	} else {
 		aggBucket.contributors[lh] = struct{}{} // must be under bucket lock
 	}

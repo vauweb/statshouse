@@ -9,6 +9,7 @@ package metadata
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/VKCOM/statshouse/internal/data_model"
@@ -284,7 +285,7 @@ func (db *DBV2) JournalEvents(ctx context.Context, sinceVersion int64, page int6
 	return result, err
 }
 
-func (db *DBV2) GetNewMappings(ctx context.Context, fromID int32, page int32) ([]tlstatshouse.Mapping, int32, error) {
+func (db *DBV2) GetNewMappings(ctx context.Context, fromID int32, page int32, deletionCandidates []int32) ([]tlstatshouse.Mapping, int32, error) {
 	limit := mappingCountReadLimit
 	if int64(page) < limit {
 		limit = int64(page)
@@ -293,9 +294,8 @@ func (db *DBV2) GetNewMappings(ctx context.Context, fromID int32, page int32) ([
 	result := make([]tlstatshouse.Mapping, 0)
 	var bytesRead = int64(4) // maxID
 	err := db.eng.Do(ctx, "get_new_mapping", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
-		rows := conn.Query("select_mapping", "SELECT id, name FROM mappings WHERE id > $id ORDER BY id asc LIMIT $limit;",
-			sqlite.Int64("$id", int64(fromID)),
-			sqlite.Int64("$limit", limit))
+		rows := conn.Query("select_mapping", "SELECT id, name FROM mappings WHERE id > $id ORDER BY id asc;",
+			sqlite.Int64("$id", int64(fromID)))
 		if rows.Error() != nil {
 			return cache, fmt.Errorf("failed to select_mapping: %w", rows.Error())
 		}
@@ -305,13 +305,16 @@ func (db *DBV2) GetNewMappings(ctx context.Context, fromID int32, page int32) ([
 			if err != nil {
 				return cache, err
 			}
+			if IsDeletionCandidate(int32(id), deletionCandidates) {
+				continue
+			}
 
 			result = append(result, tlstatshouse.Mapping{
 				Value: int32(id),
 				Str:   name,
 			})
 			bytesRead += int64(len(name)) + 4
-			if bytesRead > metricBytesReadLimit {
+			if bytesRead > metricBytesReadLimit || int64(len(result)) >= limit {
 				break
 			}
 		}
@@ -329,11 +332,10 @@ func (db *DBV2) GetNewMappings(ctx context.Context, fromID int32, page int32) ([
 	return result, maxID, err
 }
 
-func (db *DBV2) GetLastNMappings(ctx context.Context, n int) ([]tlstatshouse.Mapping, error) {
+func (db *DBV2) GetLastNMappings(ctx context.Context, n int, deletionCandidates []int32) ([]tlstatshouse.Mapping, error) {
 	result := make([]tlstatshouse.Mapping, 0, n)
 	err := db.eng.Do(ctx, "get_last_n_mappings", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
-		rows := conn.Query("select_mappings", "SELECT * FROM (SELECT id, name FROM mappings ORDER BY id desc LIMIT $limit) ORDER BY id asc;",
-			sqlite.Int64("$limit", int64(n)))
+		rows := conn.Query("select_mappings", "SELECT id, name FROM mappings ORDER BY id desc;")
 		if rows.Error() != nil {
 			return cache, fmt.Errorf("failed to select_mappings: %w", rows.Error())
 		}
@@ -343,12 +345,19 @@ func (db *DBV2) GetLastNMappings(ctx context.Context, n int) ([]tlstatshouse.Map
 			if err != nil {
 				return cache, err
 			}
+			if IsDeletionCandidate(int32(id), deletionCandidates) {
+				continue
+			}
 
 			result = append(result, tlstatshouse.Mapping{
 				Value: int32(id),
 				Str:   name,
 			})
+			if len(result) >= n {
+				break
+			}
 		}
+		slices.Reverse(result)
 		return cache, nil
 	})
 	return result, err
@@ -488,13 +497,13 @@ func (db *DBV2) SaveEntity(ctx context.Context, name string, id int64, oldVersio
 			metadataCreatMetricEvent := tlmetadata.CreateEntityEvent{
 				Metric: result,
 			}
-			cache = metadataCreatMetricEvent.WriteBoxed(cache)
+			cache = metadataCreatMetricEvent.WriteTL1Boxed(cache)
 		} else {
 			metadataEditMetricEvent := tlmetadata.EditEntityEvent{
 				Metric:     result,
 				OldVersion: oldVersion,
 			}
-			cache = metadataEditMetricEvent.WriteBoxed(cache)
+			cache = metadataEditMetricEvent.WriteTL1Boxed(cache)
 		}
 		if err != nil {
 			return cache, fmt.Errorf("can't encode binlog event: %w", err)
@@ -633,6 +642,65 @@ func (db *DBV2) GetOrCreateMapping(ctx context.Context, metricName, key string) 
 	return resp, err
 }
 
+func (db *DBV2) deleteMappingsByIdBatched(ctx context.Context, ids []int32) (countBeforeDeletion int32, err error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	if len(ids) > maxDeletionSizeLimit {
+		return 0, fmt.Errorf("can't delete more than %d ids at once; tried to delete %d", maxDeletionSizeLimit, len(ids))
+	}
+
+	idsInt64 := make([]int64, len(ids))
+	for i, v := range ids {
+		idsInt64[i] = int64(v)
+	}
+
+	err = db.eng.Do(ctx, "delete_mappings_batched", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
+		presentIdsInt64 := make([]int64, 0, len(idsInt64))
+
+		rows := conn.Query("get_present_mappings_count", "SELECT id FROM mappings where id in ($ids$)",
+			sqlite.Int64Slice("$ids$", idsInt64))
+
+		if rows.Error() != nil {
+			return cache, rows.Error()
+		}
+
+		for rows.Next() {
+			id, err := rows.ColumnInt64(0)
+			if err != nil {
+				return cache, err
+			}
+			presentIdsInt64 = append(presentIdsInt64, id)
+		}
+
+		countBeforeDeletion = int32(len(presentIdsInt64))
+		if len(presentIdsInt64) == 0 {
+			// if ids don't exist, we don't fire the delete query and don't write the binlog event
+			return cache, nil
+		}
+
+		// delete query only fires for the subset of ids that are present
+		_, err := conn.Exec("delete_mappings", "DELETE FROM mappings WHERE id in ($ids$)",
+			sqlite.Int64Slice("$ids$", presentIdsInt64))
+		if err != nil {
+			return cache, err
+		}
+
+		presentIds := make([]int32, len(presentIdsInt64))
+		for i, v := range presentIdsInt64 {
+			presentIds[i] = int32(v)
+		}
+
+		event := tlmetadata.DeleteMappingsEvent{
+			Ids: presentIds,
+		}
+		eventBytes := event.WriteTL1Boxed(cache)
+		return eventBytes, nil
+	})
+	return countBeforeDeletion, err
+}
+
 func (db *DBV2) PutMapping(ctx context.Context, ks []string, vs []int32) error {
 	if len(ks) != len(vs) {
 		return fmt.Errorf("can't match keys size and values size")
@@ -655,7 +723,7 @@ func (db *DBV2) GetBootstrap(ctx context.Context) (tlstatshouse.GetTagMappingBoo
 			if err != nil {
 				return cache, err
 			}
-			_, err = res.Read(resBytes)
+			_, err = res.ReadTL1(resBytes)
 			if err != nil {
 				return cache, err
 			}
@@ -663,16 +731,6 @@ func (db *DBV2) GetBootstrap(ctx context.Context) (tlstatshouse.GetTagMappingBoo
 		return cache, nil
 	})
 	return res, err
-}
-
-func (db *DBV2) PutBootstrap(ctx context.Context, mappings []tlstatshouse.Mapping) (int32, error) {
-	var count int32
-	err := db.eng.Do(ctx, "put_bootstrap", func(conn sqlite.Conn, cache []byte) ([]byte, error) {
-		var err error
-		count, cache, err = applyPutBootstrap(conn, cache, mappings)
-		return cache, err
-	})
-	return count, err
 }
 
 func calcBudget(oldBudget, expense int64, lastTimeUpdate, now uint32, max, bonusToStep int64, stepSec uint32) int64 {
@@ -789,13 +847,13 @@ func (db *DBV2) SaveEntityold(ctx context.Context, name string, id int64, oldVer
 			metadataCreatMetricEvent := tlmetadata.CreateEntityEvent{
 				Metric: result,
 			}
-			cache = metadataCreatMetricEvent.WriteBoxed(cache)
+			cache = metadataCreatMetricEvent.WriteTL1Boxed(cache)
 		} else {
 			metadataEditMetricEvent := tlmetadata.EditEntityEvent{
 				Metric:     result,
 				OldVersion: oldVersion,
 			}
-			cache = metadataEditMetricEvent.WriteBoxed(cache)
+			cache = metadataEditMetricEvent.WriteTL1Boxed(cache)
 		}
 		return cache, nil
 	})

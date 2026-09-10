@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/VKCOM/statshouse-go"
 	"github.com/gogo/protobuf/sortkeys"
@@ -50,7 +51,6 @@ type Query struct {
 }
 
 type Options struct {
-	Version6Start    int64 // timestamp of schema version 5 start, zero means v6 feature is disabled
 	Namespace        string
 	AvoidCache       bool
 	TimeNow          int64
@@ -200,6 +200,9 @@ func (ev *evaluator) QueryMetric() *format.MetricMetaValue {
 }
 
 func (ng Engine) NewEvaluator(ctx context.Context, h Handler, qry Query) (evaluator, error) {
+	if !utf8.ValidString(qry.Expr) {
+		return evaluator{}, Error{what: fmt.Errorf("query must be valid utf-8 string")}
+	}
 	timeStart := time.Now()
 	if qry.Options.TimeNow == 0 {
 		// fix the time "now"
@@ -266,17 +269,16 @@ func (ng Engine) NewEvaluator(ctx context.Context, h Handler, qry Query) (evalua
 	}
 	// init timescale
 	ev.t, err = data_model.GetTimescale(data_model.GetTimescaleArgs{
-		QueryStat:     ev.QueryStat,
-		Version6Start: qry.Options.Version6Start,
-		Start:         qry.Start,
-		End:           qry.End,
-		Step:          qry.Step,
-		TimeNow:       qry.Options.TimeNow,
-		ScreenWidth:   qry.Options.ScreenWidth,
-		Mode:          qry.Options.Mode,
-		Extend:        qry.Options.Extend,
-		Location:      ng.location,
-		UTCOffset:     ng.utcOffset,
+		QueryStat:   ev.QueryStat,
+		Start:       qry.Start,
+		End:         qry.End,
+		Step:        qry.Step,
+		TimeNow:     qry.Options.TimeNow,
+		ScreenWidth: qry.Options.ScreenWidth,
+		Mode:        qry.Options.Mode,
+		Extend:      qry.Options.Extend,
+		Location:    ng.location,
+		UTCOffset:   ng.utcOffset,
 	})
 	if err != nil {
 		return evaluator{}, Error{what: err}
@@ -1406,7 +1408,7 @@ func (ev *evaluator) newWindow(v []float64, s bool) window {
 
 func (ev *evaluator) reportStat(timeEnd time.Time) {
 	tags := statshouse.Tags{
-		1: srvfunc.HostnameForStatshouse(),
+		1: srvfunc.Hostname(),
 	}
 	r := ev.t.End - ev.t.Start
 	x := 2

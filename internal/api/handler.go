@@ -34,19 +34,6 @@ import (
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/proto"
 	"github.com/VKCOM/statshouse-go"
-	"github.com/VKCOM/statshouse/internal/aggregator"
-	"github.com/VKCOM/statshouse/internal/chutil"
-	"github.com/VKCOM/statshouse/internal/config"
-	"github.com/VKCOM/statshouse/internal/data_model"
-	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
-	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/metajournal"
-	"github.com/VKCOM/statshouse/internal/metarqlite"
-	"github.com/VKCOM/statshouse/internal/promql"
-	"github.com/VKCOM/statshouse/internal/promql/parser"
-	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
-	"github.com/VKCOM/statshouse/internal/vkgo/vkuth"
 	"github.com/mailru/easyjson"
 	_ "github.com/mailru/easyjson/gen" // https://github.com/mailru/easyjson/issues/293
 	"github.com/prometheus/prometheus/model/labels"
@@ -54,6 +41,21 @@ import (
 	"golang.org/x/sync/semaphore"
 	"golang.org/x/sync/singleflight"
 	"pgregory.net/rand"
+
+	"github.com/VKCOM/statshouse/internal/aggregator"
+	"github.com/VKCOM/statshouse/internal/chutil"
+	"github.com/VKCOM/statshouse/internal/config"
+	"github.com/VKCOM/statshouse/internal/data_model"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
+	"github.com/VKCOM/statshouse/internal/format"
+	"github.com/VKCOM/statshouse/internal/mappings_tracker"
+	"github.com/VKCOM/statshouse/internal/metajournal"
+	"github.com/VKCOM/statshouse/internal/metarqlite"
+	"github.com/VKCOM/statshouse/internal/promql"
+	"github.com/VKCOM/statshouse/internal/promql/parser"
+	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/statshouse/internal/vkgo/vkuth"
 )
 
 //go:generate easyjson -no_std_marshalers httputil.go handler.go
@@ -111,7 +113,6 @@ const (
 	paramYL, paramYH  = "yl", "yh" // Y scale range
 	paramFull         = "full"
 
-	Version3       = "3" // new tables format with stags
 	Version6       = "6" // new tables format with 1 partition
 	dataFormatPNG  = "png"
 	dataFormatSVG  = "svg"
@@ -176,7 +177,6 @@ type (
 	}
 
 	Handler struct {
-		Version6Start         atomic.Int64
 		hardwareMetricRes     atomic.Int64
 		hardwareSlowMetricRes atomic.Int64
 		ConfigMu              sync.RWMutex
@@ -206,6 +206,7 @@ type (
 		cacheInvalidateStop   chan chan struct{}
 		metadataLoader        *metarqlite.RQLiteLoader
 		mappingsStorage       *metajournal.MappingsStorage
+		mappingsTracker       *mappings_tracker.Tracker
 		jwtHelper             *vkuth.JWTHelper
 		plotRenderSem         *semaphore.Weighted
 		plotTemplate          *ttemplate.Template
@@ -585,7 +586,7 @@ type (
 
 var errTooManyRows = fmt.Errorf("can't fetch more than %v rows", maxSeriesRows)
 
-func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2 *chutil.ClickHouse, metadataClient *tlmetadata.Client, journalFile *os.File, cacheDir string, cluster string, mappingsStorage *metajournal.MappingsStorage, jwtHelper *vkuth.JWTHelper, opt HandlerOptions, cfg *Config) (*Handler, error) {
+func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2 *chutil.ClickHouse, metadataClient *tlmetadata.Client, journalFile *os.File, cacheDir string, cluster string, mappingsStorage *metajournal.MappingsStorage, mappingsTracker *mappings_tracker.Tracker, jwtHelper *vkuth.JWTHelper, opt HandlerOptions, cfg *Config) (*Handler, error) {
 	legacyMetaLoader := metajournal.NewMetricMetaLoader(metadataClient, metajournal.DefaultMetaTimeout)
 	metadataLoader := metarqlite.NewRQliteLoader(cfg.RQLiteAddrs, metarqlite.DefaultMetaTimeout, legacyMetaLoader)
 
@@ -599,6 +600,9 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2
 	}
 	cl := config.NewConfigListener(format.StatshouseAPIRemoteConfig, cfg)
 	metricStorage := metajournal.MakeMetricsStorage(nil)
+	if mappingsTracker == nil {
+		mappingsTracker = mappings_tracker.New()
+	}
 	h := &Handler{
 		HandlerOptions:        opt,
 		showInvisible:         showInvisible,
@@ -607,6 +611,7 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2
 		indexSettings:         string(settings),
 		metadataLoader:        metadataLoader,
 		mappingsStorage:       mappingsStorage,
+		mappingsTracker:       mappingsTracker,
 		ch:                    chV2,
 		metricsStorage:        metricStorage,
 		selectSettings:        cfg.BuildSelectSettings(),
@@ -619,11 +624,11 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2
 		configListener:        cl,
 		plotRenderSem:         semaphore.NewWeighted(maxConcurrentPlots),
 		plotTemplate:          ttemplate.Must(ttemplate.New("").Parse(gnuplotTemplate)),
-		bufferBytesAlloc:      statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesAlloc.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse(), 2: "2"}),
-		bufferBytesFree:       statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesFree.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse(), 2: "2"}),
-		bufferPoolBytesAlloc:  statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesAlloc.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse(), 2: "1"}),
-		bufferPoolBytesFree:   statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesFree.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse(), 2: "1"}),
-		bufferPoolBytesTotal:  statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesTotal.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse()}),
+		bufferBytesAlloc:      statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesAlloc.Name, statshouse.Tags{1: srvfunc.Hostname(), 2: "2"}),
+		bufferBytesFree:       statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesFree.Name, statshouse.Tags{1: srvfunc.Hostname(), 2: "2"}),
+		bufferPoolBytesAlloc:  statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesAlloc.Name, statshouse.Tags{1: srvfunc.Hostname(), 2: "1"}),
+		bufferPoolBytesFree:   statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesFree.Name, statshouse.Tags{1: srvfunc.Hostname(), 2: "1"}),
+		bufferPoolBytesTotal:  statshouse.GetMetricRef(format.BuiltinMetricMetaAPIBufferBytesTotal.Name, statshouse.Tags{1: srvfunc.Hostname()}),
 	}
 	h.cache2 = newCache2(h, cfg.CacheChunkSize, loadPoints)
 	h.pointsCache = newPointsCache(cfg.ApproxCacheMaxSize, h.utcOffset, loadPoint, time.Now)
@@ -635,7 +640,6 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2
 			maxSize:     cfg.MaxCacheSize,
 			maxSizeSoft: cfg.MaxCacheSizeSoft,
 		})
-		h.Version6Start.Store(cfg.Version6Start)
 		h.hardwareMetricRes.Store(int64(cfg.HardwareMetricResolution))
 		h.hardwareSlowMetricRes.Store(int64(cfg.HardwareSlowMetricResolution))
 		_ = chV2.SetLimits(cfg.UserLimits, cfg.CHMaxShardConnsRatio, cfg.RateLimitConfig, cfg.ReplicaThrottleCfg)
@@ -683,16 +687,16 @@ func NewHandler(staticDir fs.FS, jsSettings JSSettings, showInvisible bool, chV2
 			vmSize = float64(st.Size)
 			vmRSS = float64(st.Res)
 		}
-		client.Value(format.BuiltinMetricMetaApiVmSize.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse()}, vmSize)
-		client.Value(format.BuiltinMetricMetaApiVmRSS.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse()}, vmRSS)
+		client.Value(format.BuiltinMetricMetaApiVmSize.Name, statshouse.Tags{1: srvfunc.Hostname()}, vmSize)
+		client.Value(format.BuiltinMetricMetaApiVmRSS.Name, statshouse.Tags{1: srvfunc.Hostname()}, vmRSS)
 		client.Value(format.BuiltinMetricMetaUsageMemory.Name, statshouse.Tags{1: strconv.Itoa(format.TagValueIDComponentAPI)}, vmRSS)
 
 		var memStats runtime.MemStats
 		runtime.ReadMemStats(&memStats)
-		client.Value(format.BuiltinMetricMetaApiHeapAlloc.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse()}, float64(memStats.HeapAlloc))
-		client.Value(format.BuiltinMetricMetaApiHeapSys.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse()}, float64(memStats.HeapSys))
-		client.Value(format.BuiltinMetricMetaApiHeapIdle.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse()}, float64(memStats.HeapIdle))
-		client.Value(format.BuiltinMetricMetaApiHeapInuse.Name, statshouse.Tags{1: srvfunc.HostnameForStatshouse()}, float64(memStats.HeapInuse))
+		client.Value(format.BuiltinMetricMetaApiHeapAlloc.Name, statshouse.Tags{1: srvfunc.Hostname()}, float64(memStats.HeapAlloc))
+		client.Value(format.BuiltinMetricMetaApiHeapSys.Name, statshouse.Tags{1: srvfunc.Hostname()}, float64(memStats.HeapSys))
+		client.Value(format.BuiltinMetricMetaApiHeapIdle.Name, statshouse.Tags{1: srvfunc.Hostname()}, float64(memStats.HeapIdle))
+		client.Value(format.BuiltinMetricMetaApiHeapInuse.Name, statshouse.Tags{1: srvfunc.Hostname()}, float64(memStats.HeapInuse))
 
 		writeActiveQuieries := func(ch *chutil.ClickHouse, versionTag string) {
 			if ch != nil {
@@ -827,7 +831,7 @@ func (h *Handler) invalidateCache(ctx context.Context, from int64, seen map[cach
 				if _, ok := seen[r]; ok {
 					continue
 				}
-				for lodLevel := range data_model.LODTables[Version3] {
+				for lodLevel := range data_model.LODTables[Version6] {
 					t := r.At
 					w := todo[lodLevel]
 					if len(w) == 0 || w[len(w)-1] != t {
@@ -883,7 +887,10 @@ func (h *requestHandler) doSelect(ctx context.Context, meta chutil.QueryMetaInto
 	ChSelectProfileEvents(meta.IsFast, meta.IsLight, meta.IsHardware, meta.Metric, meta.User, meta.Table, "", info.OSCPUVirtualTimeMicroseconds, info.ErrorCode, err)
 	ChRequestsMetric(info.Shard, info.Host, meta.Table, info.ErrorCode, err == nil)
 
-	return err
+	if err != nil {
+		return fmt.Errorf("%w (error_code=%s (%d))", err, chutil.ErrorCodeName(info.ErrorCode), info.ErrorCode)
+	}
+	return nil
 }
 
 func (h *Handler) getMetricNameWithNamespace(metricID int32) (string, error) {
@@ -915,19 +922,19 @@ func (h *Handler) metricWithResolution(m *format.MetricMetaValue) *format.Metric
 	if m == nil || !format.HardwareMetric(m.MetricID) {
 		return m
 	}
-	res := int(h.hardwareMetricRes.Load())
+	res := 0
 	if m.IsHardwareSlowMetric {
 		res = int(h.hardwareSlowMetricRes.Load())
+	} else {
+		res = int(h.hardwareMetricRes.Load())
 	}
-	if res == 0 {
-		return m
-	}
-	if m.Resolution == res && m.EffectiveResolution == format.AllowedResolution(res) {
+	eres := format.AllowedResolution(res)
+	if m.Resolution == res && m.EffectiveResolution == eres {
 		return m
 	}
 	c := *m
 	c.Resolution = res
-	c.EffectiveResolution = format.AllowedResolution(res)
+	c.EffectiveResolution = eres
 	return &c
 }
 
@@ -973,6 +980,7 @@ func (h *Handler) getMetricIDForStat(metricName string) int32 {
 
 func (h *Handler) getTagValue(tagValueID int32) (string, error) {
 	str, ok := h.mappingsStorage.GetString(tagValueID)
+	h.mappingsTracker.Check(tagValueID)
 	if !ok {
 		return "", httpErr(http.StatusNotFound, fmt.Errorf("tag value for %v not found", tagValueID))
 	}
@@ -1027,6 +1035,7 @@ func (h *Handler) getRichTagValue(metricMeta *format.MetricMetaValue, tagID stri
 
 func (h *Handler) getTagValueID(tagValue string) (int32, error) {
 	valueID, ok := h.mappingsStorage.GetValue(tagValue)
+	h.mappingsTracker.Check(valueID)
 	if !ok {
 		return 0, httpErr(http.StatusNotFound, fmt.Errorf("tag value ID for %q not found", tagValue))
 	}
@@ -1067,6 +1076,7 @@ func (h *requestHandler) getRichTagValueID(tag *format.MetricMetaTag, tagValue s
 			return id, err
 		}
 		// We could return error, but this will stop rendering, so we try conventional mapping also, even for raw tags
+		return 0, httpErr(http.StatusNotFound, fmt.Errorf("comment value %q not found for a raw tag", tagValue))
 	}
 	v, err := h.getTagValueID(tagValue)
 	return int64(v), err
@@ -1967,14 +1977,13 @@ func (h *requestHandler) handleGetMetricTagValues(ctx context.Context, req getMe
 	}
 
 	lods, err := data_model.GetLODs(data_model.GetTimescaleArgs{
-		Start:         from.Unix(),
-		End:           to.Unix(),
-		ScreenWidth:   100, // really dumb
-		TimeNow:       time.Now().Unix(),
-		Metric:        metricMeta,
-		Location:      h.location,
-		UTCOffset:     h.utcOffset,
-		Version6Start: h.Version6Start.Load(),
+		Start:       from.Unix(),
+		End:         to.Unix(),
+		ScreenWidth: 100, // really dumb
+		TimeNow:     time.Now().Unix(),
+		Metric:      metricMeta,
+		Location:    h.location,
+		UTCOffset:   h.utcOffset,
 	})
 	if err != nil {
 		return nil, false, err
@@ -2123,7 +2132,6 @@ func HandleBadgesQuery(r *httpRequestHandler) {
 		Step:  req.step,
 		Expr:  req.promQL,
 		Options: promql.Options{
-			Version6Start:    r.Version6Start.Load(),
 			AvoidCache:       req.avoidCache,
 			Extend:           req.excessPoints,
 			ExplicitGrouping: true,
@@ -2180,8 +2188,6 @@ func HandleBadgesQuery(r *httpRequestHandler) {
 						res.ReceiveErrors = sumSeries(d.Values, 0)
 					case what == promql.DigestCountRaw && badgeType == format.TagValueIDBadgeIngestionWarnings:
 						res.ReceiveWarnings = sumSeries(d.Values, 0)
-					case what == promql.DigestCountRaw && badgeType == format.TagValueIDBadgeAggMappingErrors:
-						res.MappingErrors = sumSeries(d.Values, 0)
 					}
 				}
 			}
@@ -2256,7 +2262,6 @@ func (h *requestHandler) queryBadges(ctx context.Context, req seriesRequest, met
 			Step:  req.step,
 			Expr:  fmt.Sprintf(`%s{@what="countraw,avg",@by="1,2",2=" 0",2=" %d"}`, format.BuiltinMetricMetaBadges.Name, meta.MetricID),
 			Options: promql.Options{
-				Version6Start:    h.Version6Start.Load(),
 				ExplicitGrouping: true,
 				QuerySequential:  h.querySequential,
 				ScreenWidth:      req.screenWidth,
@@ -2359,7 +2364,13 @@ func HandleGetEntity[T any](r *httpRequestHandler, handle func(ctx context.Conte
 }
 
 func HandleGetDashboard(h *httpRequestHandler) {
-	HandleGetEntity(h, h.handleGetDashboard)
+	HandleGetEntity(h, func(ctx context.Context, ai accessInfo, id int32, version int64) (*DashboardInfo, time.Duration, error) {
+		resp, cache, err := h.handleGetDashboard(ctx, ai, id, version)
+		if resp != nil {
+			h.endpointStat.setDashboard(resp.Dashboard.Name, resp.Dashboard.DashboardID)
+		}
+		return resp, cache, err
+	})
 }
 
 func HandleGetGroup(h *httpRequestHandler) {
@@ -2399,6 +2410,7 @@ func HandlePutPostDashboard(h *httpRequestHandler) {
 		if err != nil {
 			return nil, 0, err
 		}
+		h.endpointStat.setDashboard(response.Dashboard.Name, response.Dashboard.DashboardID)
 		return response, response.Dashboard.Version, nil
 	})
 }
@@ -2412,6 +2424,12 @@ func (h *httpRequestHandler) handleGetRender(ctx context.Context, ai accessInfo,
 	format_, err := parseRenderFormat(req.renderFormat)
 	if err != nil {
 		return nil, false, err
+	}
+	// gonum as a pure-Go renderer produces PNG only (gnuplot's svg/text terminals are gone).
+	// reject other formats explicitly.
+	if format_ != dataFormatPNG {
+		return nil, false, httpErr(http.StatusBadRequest,
+			fmt.Errorf("render format %q is no longer supported, only %q is available", format_, dataFormatPNG))
 	}
 
 	var (
@@ -2459,7 +2477,8 @@ func (h *httpRequestHandler) handleGetRender(ctx context.Context, ai accessInfo,
 	defer h.plotRenderSem.Release(1)
 
 	start := time.Now()
-	png, err := plot(ctx, format_, true, s, h.utcOffset, req.seriesRequest, width, h.plotTemplate)
+	// NOTE: used to be plot() that used gnuplot, but was removed due to a security vulnerability
+	png, err := renderPreviewGonumPNG(s, h.utcOffset, req.seriesRequest, width)
 	es.timings.Report("plot", time.Since(start))
 	if err != nil {
 		return nil, false, err
@@ -2488,15 +2507,14 @@ func (h *requestHandler) handleGetTable(ctx context.Context, req seriesRequest) 
 		return nil, false, err
 	}
 	lods, err := data_model.GetLODs(data_model.GetTimescaleArgs{
-		Version6Start: h.Version6Start.Load(),
-		Start:         req.from.Unix(),
-		End:           req.to.Unix(),
-		Step:          req.step,
-		ScreenWidth:   req.screenWidth,
-		TimeNow:       time.Now().Unix(),
-		Metric:        metricMeta,
-		Location:      h.location,
-		UTCOffset:     h.utcOffset,
+		Start:       req.from.Unix(),
+		End:         req.to.Unix(),
+		Step:        req.step,
+		ScreenWidth: req.screenWidth,
+		TimeNow:     time.Now().Unix(),
+		Metric:      metricMeta,
+		Location:    h.location,
+		UTCOffset:   h.utcOffset,
 	})
 	if err != nil {
 		return nil, false, err
@@ -2623,7 +2641,6 @@ func (h *requestHandler) handleSeriesRequest(ctx context.Context, req seriesRequ
 		Step:  req.step,
 		Expr:  req.promQL,
 		Options: promql.Options{
-			Version6Start:    h.Version6Start.Load(),
 			Mode:             opt.mode,
 			AvoidCache:       req.avoidCache,
 			TimeNow:          opt.timeNow.Unix(),
@@ -2733,8 +2750,6 @@ func (h *requestHandler) buildSeriesResponse(s ...seriesResponse) *SeriesRespons
 						res.ReceiveErrors = sumSeries(d.Values, 0)
 					case what == promql.DigestCountRaw && badgeType == format.TagValueIDBadgeIngestionWarnings:
 						res.ReceiveWarnings = sumSeries(d.Values, 0)
-					case what == promql.DigestCountRaw && badgeType == format.TagValueIDBadgeAggMappingErrors:
-						res.MappingErrors = sumSeries(d.Values, 0)
 					}
 				}
 			}
@@ -3057,6 +3072,17 @@ func loadPoints(ctx context.Context, h *requestHandler, pq *queryBuilder, lod da
 	if err != nil {
 		return 0, err
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cc := cache2FromInflightCtx(ctx)
+	var reqID uint32
+	if cc != nil {
+		reqID = cc.NewInflightReq(cancel)
+		cc.updateInflightApprox(reqID, 0)
+		defer func() {
+			cc.afterInflightLoadFinished(reqID)
+		}()
+	}
 	rows := 0
 	isFast := lod.IsFast()
 	isLight := query.isLight()
@@ -3077,6 +3103,17 @@ func loadPoints(ctx context.Context, h *requestHandler, pq *queryBuilder, lod da
 		Body:   query.body,
 		Result: query.res,
 		OnResult: func(_ context.Context, block proto.Block) error {
+			select {
+			case <-ctx.Done():
+				return nil // no client. Clickhouse still process query. Just ignore it
+			default:
+			}
+			if cc != nil && block.Rows > 0 {
+				r0 := query.rowAt(0)
+				dRows := block.Rows
+				dBytes := sizeofCache2Row(&r0) * dRows
+				cc.updateInflightApprox(reqID, int64(dBytes))
+			}
 			for i := 0; i < block.Rows; i++ {
 				row := query.rowAt(i)
 				ix, err := lod.IndexOf(row.time)

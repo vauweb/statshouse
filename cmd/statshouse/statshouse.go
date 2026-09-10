@@ -7,7 +7,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -36,9 +35,9 @@ import (
 	"github.com/VKCOM/statshouse/internal/trustedsubnets"
 	"github.com/VKCOM/statshouse/internal/util"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 	"github.com/VKCOM/statshouse/internal/vkgo/vkd/platform"
+	"github.com/VKCOM/tl/pkg/rpc"
 )
 
 const defaultPathToPwd = `/etc/engine/pass`
@@ -82,6 +81,11 @@ var argv struct {
 	metadataNet     string
 	metadataAddr    string
 	metadataActorID int64
+
+	// delete mappings
+	deleteMappingsOffset    int64
+	deleteMappingsBatchSize int64
+	deleteMappingsLimit     int64
 
 	// publish_tag_drafts mode
 	maxUpdates int
@@ -177,12 +181,6 @@ func run() int {
 		}
 		defer fpmc.Close()
 	}
-	mappingsCacheEmpty := true
-	if fpmc != nil {
-		if s, err := fpmc.Stat(); err == nil {
-			mappingsCacheEmpty = s.Size() == 0
-		}
-	}
 	mappingsCache, _ := pcache.LoadMappingsCacheFile(fpmc, argv.MappingCacheSize, argv.MappingCacheTTL) // we ignore error because cache can be damaged
 	mappingsCache.StartPeriodicSaving()
 
@@ -226,7 +224,7 @@ func run() int {
 	main.agent, err = agent.MakeAgent("tcp",
 		argv.cacheDir,
 		aesPwd,
-		argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()),
+		argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))),
 		argv.Config,
 		argv.customHostName,
 		format.TagValueIDComponentAgent,
@@ -306,23 +304,6 @@ func run() int {
 	//	}
 	//}()
 
-	if !mappingsCacheEmpty {
-		logOk.Printf("Tag Value cache not empty")
-	} else {
-		logOk.Printf("Tag Value cache empty, loading boostrap...")
-		// TODO - remove? There is no more long stall on agent side if agent knows no mappings.
-		// the only problem is larger sampling factor for the first 5-10 seconds, when
-		// more strings are sent instead of integers.
-		mappings, _, err := main.agent.GetTagMappingBootstrap(context.Background())
-		if err != nil {
-			logErr.Printf("failed to load boostrap mappings: %v", err)
-		} else {
-			now := time.Now()
-			mappingsCache.AddValues(uint32(now.Unix()), mappings)
-			logOk.Printf("Loaded and set %d boostrap mappings", len(mappings))
-		}
-	}
-
 	for i, u := range main.receiversUDP {
 		main.receiversWG.Add(1)
 		go main.serve(u, i)
@@ -359,7 +340,7 @@ func run() int {
 		rpc.ServerWithLogf(logErr.Printf),
 		rpc.ServerWithVersion(build.Info()),
 		rpc.ServerWithCryptoKeys([]string{aesPwd}),
-		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())),
+		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups("")))),
 		rpc.ServerWithSyncHandler(handlerRPC.Handle),
 		rpc.ServerWithStatsHandler(statsHandler{receiversUDP: main.receiversUDP, receiverRPC: receiverRPC, sh2: main.agent, journal: journalFast}.handleStats),
 		metrics.ServerWithMetrics,
@@ -478,7 +459,7 @@ func (main *mainAgent) listenUDP(network string, addr string) error {
 
 func (main *mainAgent) serve(u *receiver.UDP, num int) {
 	defer main.receiversWG.Done()
-	err := u.Serve(main.worker)
+	err := u.Serve(nil, main.worker)
 	if err != nil {
 		logErr.Fatalf("Serve: %v", err)
 	}
@@ -486,13 +467,13 @@ func (main *mainAgent) serve(u *receiver.UDP, num int) {
 }
 
 func (main *mainAgent) serveHTTP() {
-	if err := main.receiverHTTP.Serve(main.worker, main.hijackHTTP); err != nil {
+	if err := main.receiverHTTP.Serve(nil, main.worker, main.hijackHTTP); err != nil {
 		logErr.Printf("error serving HTTP: %v", err)
 	}
 }
 
 func (main *mainAgent) serveTCP() {
-	if err := main.receiverTCP.Serve(main.worker, main.hijackTCP); err != nil {
+	if err := main.receiverTCP.Serve(nil, main.worker, main.hijackTCP); err != nil {
 		logErr.Printf("error serving TCP: %v", err)
 	}
 }
@@ -569,7 +550,7 @@ func argvCreateClient() (rpc.Client, string) {
 		rpc.ClientWithProtocolVersion(1),
 		rpc.ClientWithLogf(logErr.Printf),
 		rpc.ClientWithCryptoKey(cryptoKey),
-		rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))), cryptoKey
+		rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))))), cryptoKey
 }
 
 func parseCommandLine() (int, error) {
@@ -661,7 +642,7 @@ func parseCommandLine() (int, error) {
 			argv.maxCores = 1 + argv.coresUDP*3/2
 		}
 		if argv.customHostName == "" {
-			argv.customHostName = srvfunc.HostnameForStatshouse()
+			argv.customHostName = srvfunc.Hostname()
 			logOk.Printf("detected statshouse hostname as %q from OS hostname %q\n", argv.customHostName, srvfunc.Hostname())
 		}
 		if argv.pprofHTTP {
@@ -713,15 +694,15 @@ func parseCommandLine() (int, error) {
 		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
 		flag.StringVar(&argv.statshouseAddr, "api-addr", "127.0.0.1:2400", "statshouse API address for tlclient")
 		flag.StringVar(&argv.statshouseNet, "api-net", "tcp4", "statshouse API network for tlclient")
-		preferTL2 := false
-		flag.BoolVar(&preferTL2, "tl2", false, "prefer TL2")
+		tlVersion := 0
+		flag.IntVar(&tlVersion, "tl-version", 0, "TL version to use")
 		flag.DurationVar(&argv.tlclientTimeout, "timeout", 2*time.Second, "timeout of RPC call to statshouse API")
 		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
 		if verb == "tlclient.api.stub" {
-			return mainTLClientAPIStub(preferTL2), nil
+			return mainTLClientAPIStub(tlVersion), nil
 		}
-		return mainTLClientAPI(preferTL2), nil
+		return mainTLClientAPI(tlVersion), nil
 	case "tag_mapping":
 		flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "")
 		flag.IntVar(&argv.budget, "budget", 0, "mapping budget to set")
@@ -760,6 +741,16 @@ func parseCommandLine() (int, error) {
 		argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)
 		build.FlagParseShowVersionHelp()
 		return massUpdateMetadata(), nil
+	case "clear_mapping_deletion_candidates":
+		flag.Int64Var(&argv.metadataActorID, "metadata-actor-id", 0, "")
+		flag.StringVar(&argv.aesPwdFile, "aes-pwd-file", "", "path to AES password file, will try to read "+defaultPathToPwd+" if not set")
+		flag.StringVar(&argv.metadataAddr, "metadata-addr", "127.0.0.1:2442", "")
+		flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "")
+		flag.Int64Var(&argv.deleteMappingsOffset, "delete-mappings-offset", 0, "")
+		flag.Int64Var(&argv.deleteMappingsBatchSize, "delete-mappings-batch-size", 500, "")
+		flag.Int64Var(&argv.deleteMappingsLimit, "delete-mappings-limit", 500, "")
+		build.FlagParseShowVersionHelp()
+		return clearMappingDeletionCandidates(), nil
 	case "simple_fsync":
 		return mainSimpleFSyncTest(), nil
 	case "benchmark":

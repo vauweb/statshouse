@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -424,7 +423,7 @@ func TestDB_GetNewMappings(t *testing.T) {
 
 	t.Run("empty database", func(t *testing.T) {
 		db := newDB(t)
-		mappings, maxID, err := db.GetNewMappings(ctx, 0, 10)
+		mappings, maxID, err := db.GetNewMappings(ctx, 0, 10, []int32{})
 		require.NoError(t, err)
 		require.Empty(t, mappings)
 		require.Equal(t, int32(0), maxID)
@@ -434,7 +433,7 @@ func TestDB_GetNewMappings(t *testing.T) {
 		db := newDB(t)
 		require.NoError(t, db.PutMapping(ctx, []string{"tag1", "tag2", "tag3"}, []int32{1, 3, 5}))
 
-		mappings, maxID, err := db.GetNewMappings(ctx, 1, 10)
+		mappings, maxID, err := db.GetNewMappings(ctx, 1, 10, []int32{})
 		require.NoError(t, err)
 		require.Equal(t, int32(5), maxID)
 		require.Equal(t, []tlstatshouse.Mapping{
@@ -442,14 +441,14 @@ func TestDB_GetNewMappings(t *testing.T) {
 			{Value: 5, Str: "tag3"},
 		}, mappings)
 
-		pageLimited, maxIDLimited, err := db.GetNewMappings(ctx, 0, 1)
+		pageLimited, maxIDLimited, err := db.GetNewMappings(ctx, 0, 1, []int32{})
 		require.NoError(t, err)
 		require.Equal(t, int32(5), maxIDLimited)
 		require.Equal(t, []tlstatshouse.Mapping{
 			{Value: 1, Str: "tag1"},
 		}, pageLimited)
 
-		emptyResp, maxIDSame, err := db.GetNewMappings(ctx, 5, 10)
+		emptyResp, maxIDSame, err := db.GetNewMappings(ctx, 5, 10, []int32{})
 		require.NoError(t, err)
 		require.Empty(t, emptyResp)
 		require.Equal(t, int32(5), maxIDSame)
@@ -539,45 +538,6 @@ func TestDB_GetKeyMapping(t *testing.T) {
 		_, isExists, err := db.GetMappingByID(context.Background(), mapping+7)
 		require.NoError(t, err)
 		require.False(t, isExists)
-	})
-}
-
-func TestDB_Bootstrap(t *testing.T) {
-	path := t.TempDir()
-	db, _ := initD1b(t, path, "db", true, nil)
-	a := tlstatshouse.Mapping{
-		Str:   "a",
-		Value: 1,
-	}
-	b := tlstatshouse.Mapping{
-		Str:   "b",
-		Value: 2,
-	}
-	c := tlstatshouse.Mapping{
-		Str:   "c",
-		Value: 3,
-	}
-	t.Run("insert to empty db", func(t *testing.T) {
-		c, err := db.PutBootstrap(context.Background(), []tlstatshouse.Mapping{a, b})
-		require.NoError(t, err)
-		require.Equal(t, int32(0), c)
-
-		m, err := db.GetBootstrap(context.Background())
-		require.NoError(t, err)
-		require.Len(t, m.Mappings, 0)
-	})
-
-	t.Run("insert to non empty db", func(t *testing.T) {
-		require.NoError(t, db.PutMapping(context.Background(), []string{a.Str, c.Str}, []int32{a.Value, c.Value}))
-		count, err := db.PutBootstrap(context.Background(), []tlstatshouse.Mapping{a, b, c})
-		require.NoError(t, err)
-		require.Equal(t, int32(2), count)
-
-		m, err := db.GetBootstrap(context.Background())
-		require.NoError(t, err)
-		require.Len(t, m.Mappings, 2)
-		require.Contains(t, m.Mappings, a)
-		require.Contains(t, m.Mappings, c)
 	})
 }
 
@@ -723,6 +683,121 @@ func Test_Reread_Binlog_CreateMapping(t *testing.T) {
 	})
 }
 
+func TestDB_deleteMappingsByIdBatched(t *testing.T) {
+	ctx := context.Background()
+	newDB := func(t *testing.T) *DBV2 {
+		path := t.TempDir()
+		db, _ := initD1b(t, path, "db", true, nil)
+		t.Cleanup(func() { require.NoError(t, db.Close()) })
+		return db
+	}
+
+	populateMappings := func(t *testing.T, db *DBV2, ids ...int32) {
+		keys := make([]string, len(ids))
+		for i, id := range ids {
+			keys[i] = "k" + strconv.Itoa(int(id))
+		}
+		require.NoError(t, db.PutMapping(ctx, keys, ids))
+	}
+
+	mappingExists := func(t *testing.T, db *DBV2, id int32) bool {
+		_, ok, err := db.GetMappingByID(ctx, id)
+		require.NoError(t, err)
+		return ok
+	}
+
+	t.Run("correct empty input", func(t *testing.T) {
+		db := newDB(t)
+		populateMappings(t, db, 1, 2, 3)
+		cnt, err := db.deleteMappingsByIdBatched(ctx, nil)
+		require.NoError(t, err)
+		require.Equal(t, int32(0), cnt)
+		require.True(t, mappingExists(t, db, 1))
+	})
+
+	t.Run("deletes exactly the requested present ids", func(t *testing.T) {
+		db := newDB(t)
+		populateMappings(t, db, 1, 2, 3, 4, 5)
+		cnt, err := db.deleteMappingsByIdBatched(ctx, []int32{2, 4})
+		require.NoError(t, err)
+		require.Equal(t, int32(2), cnt)
+		require.True(t, mappingExists(t, db, 1))
+		require.False(t, mappingExists(t, db, 2))
+		require.True(t, mappingExists(t, db, 3))
+		require.False(t, mappingExists(t, db, 4))
+		require.True(t, mappingExists(t, db, 5))
+	})
+
+	t.Run("countBeforeDeletion counts only present ids", func(t *testing.T) {
+		db := newDB(t)
+		populateMappings(t, db, 1, 2, 3)
+		// 2 and 3 exist, 99 and 100 do not
+		cnt, err := db.deleteMappingsByIdBatched(ctx, []int32{2, 3, 99, 100})
+		require.NoError(t, err)
+		require.Equal(t, int32(2), cnt)
+		require.True(t, mappingExists(t, db, 1))
+		require.False(t, mappingExists(t, db, 2))
+		require.False(t, mappingExists(t, db, 3))
+	})
+
+	t.Run("rejects oversized batch", func(t *testing.T) {
+		db := newDB(t)
+		ids := make([]int32, maxDeletionSizeLimit+1)
+		for i := range ids {
+			ids[i] = int32(i + 1)
+		}
+		_, err := db.deleteMappingsByIdBatched(ctx, ids)
+		require.Error(t, err)
+	})
+}
+
+func Test_Reread_Binlog_DeleteMappings(t *testing.T) {
+	ctx := context.Background()
+	test := func(t *testing.T, newDb bool) {
+		path := t.TempDir()
+		newFileName := "db"
+		if newDb {
+			newFileName = "db1"
+		}
+
+		db, _ := initD1b(t, path, "db", true, nil)
+
+		presentMappings := []int32{1, 2, 3, 4, 5, 6, 7}
+		deletionMappings := []int32{2, 4, 6}
+		expectedRemainingMappings := []int32{1, 3, 5, 7}
+
+		keys := make([]string, len(presentMappings))
+		for i, id := range presentMappings {
+			keys[i] = "key" + strconv.Itoa(int(id))
+		}
+		require.NoError(t, db.PutMapping(ctx, keys, presentMappings))
+
+		cnt, err := db.deleteMappingsByIdBatched(ctx, deletionMappings)
+		require.NoError(t, err)
+		require.Equal(t, int32(len(deletionMappings)), cnt)
+
+		require.NoError(t, db.Close())
+
+		db, _ = initD1b(t, path, newFileName, false, nil)
+		defer func() { require.NoError(t, db.Close()) }()
+
+		for _, id := range deletionMappings {
+			_, ok, err := db.GetMappingByID(ctx, id)
+			require.NoError(t, err)
+			require.Falsef(t, ok, "mapping id %d shouldn't be present after binlog reread", id)
+		}
+		for _, id := range expectedRemainingMappings {
+			name, ok, err := db.GetMappingByID(ctx, id)
+			require.NoError(t, err)
+			require.Truef(t, ok, "mapping id %d should be present after binlog reread", id)
+			require.Equal(t, "key"+strconv.Itoa(int(id)), name)
+		}
+	}
+
+	t.Run("reread from empty db", func(t *testing.T) { test(t, true) })
+	t.Run("reread from old snapshot", func(t *testing.T) { test(t, false) })
+}
+
 func Test_Reread_Binlog_SaveMetric(t *testing.T) {
 	test := func(t *testing.T, newDb bool) {
 		path := t.TempDir()
@@ -823,61 +898,4 @@ func Test_Migration(t *testing.T) {
 			}
 
 		}, nil)
-}
-
-func Test_Reread_Binlog_PutBootstrap(t *testing.T) {
-	test := func(t *testing.T, newDb bool) {
-		path := t.TempDir()
-		mx := sync.Mutex{}
-		mappings := map[string]int32{}
-		dbFile2 := "db"
-		if newDb {
-			dbFile2 = "db1"
-		}
-		var mappingsList []tlstatshouse.Mapping
-		var index int32 = 1
-		testRereadBinlog(t, defaultOptions(), defaultOptions(), path, "db", dbFile2, 30,
-			func(t *testing.T, db *DBV2, gorNumb int) {
-				mx.Lock()
-				defer mx.Unlock()
-				i := index
-				index++
-				name := "tag" + strconv.FormatInt(int64(i), 10)
-				err := db.PutMapping(context.Background(), []string{name}, []int32{i})
-				require.NoError(t, err)
-				mappings[name] = i
-				var mappingsList1 []tlstatshouse.Mapping
-				for s, i := range mappings {
-					mappingsList1 = append(mappingsList1, tlstatshouse.Mapping{
-						Str:   s,
-						Value: i,
-					})
-					if len(mappingsList1) > len(mappings)/2 {
-						break
-					}
-				}
-				c, err := db.PutBootstrap(context.Background(), mappingsList1)
-				require.NoError(t, err)
-				require.Equal(t, len(mappingsList1), int(c))
-				mappingsList = mappingsList1
-			}, func(t *testing.T, db *DBV2) {
-				mx.Lock()
-				defer mx.Unlock()
-				bootstrap, err := db.GetBootstrap(context.Background())
-				require.NoError(t, err)
-				sort.Slice(bootstrap.Mappings, func(i, j int) bool {
-					return bootstrap.Mappings[i].Value < bootstrap.Mappings[j].Value
-				})
-				sort.Slice(mappingsList, func(i, j int) bool {
-					return mappingsList[i].Value < mappingsList[j].Value
-				})
-				require.Equal(t, mappingsList, bootstrap.Mappings)
-			}, nil)
-	}
-	t.Run("reread with new db", func(t *testing.T) {
-		test(t, true)
-	})
-	t.Run("reread with old db", func(t *testing.T) {
-		test(t, false)
-	})
 }

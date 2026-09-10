@@ -26,7 +26,7 @@ const (
 func getActualSize(t require.TestingT, key Key, defaultTimestamp uint32) int {
 	item := key.TLMultiItemFromKey(defaultTimestamp)
 	buf := make([]byte, 0, 1024) // Initial buffer
-	buf, err := item.WriteGeneral(buf)
+	buf, err := item.WriteTL1General(buf)
 	require.NoError(t, err)
 	return len(buf)
 }
@@ -256,7 +256,8 @@ func testValuePercentiles(t *testing.T, agentLegacy bool) {
 		// if we miss some centroid, we'll skew the distribution enough to trigger test failure
 		allValues := map[float32]float64{} // v->c
 		for i := 0; i < iter; i++ {
-			values := rapid.SliceOfN(rapid.Float64Range(-math.MaxFloat32, math.MaxFloat32), 0, 10).Draw(t, "values")
+			// values will be added to sum, so we do not choose max values
+			values := rapid.SliceOfN(rapid.Float64Range(-math.MaxFloat32/1024, math.MaxFloat32/1024), 0, 10).Draw(t, "values")
 			for _, v := range values {
 				allValues[float32(v)] += 1
 			}
@@ -279,12 +280,12 @@ func testValuePercentiles(t *testing.T, agentLegacy bool) {
 		tlSrc := tlstatshouse.MultiValue{}
 		var fm uint32
 		scratch := mv.MultiValueToTL(metricInfo, &tlSrc, 1, &fm, nil)
-		scratch = tlSrc.Write(scratch[:0], fm)
+		scratch = tlSrc.WriteTL1(scratch[:0], fm)
 		tlDst := tlstatshouse.MultiValueBytes{}
-		_, err := tlDst.Read(scratch, fm)
+		_, err := tlDst.ReadTL1(scratch, fm)
 		require.NoError(t, err)
 		mv2 := MultiValue{}
-		mv2.MergeWithTL2(nil, &tlDst, fm, TagUnion{}, testPercentileCompression)
+		_ = mv2.MergeWithTL2(nil, &tlDst, fm, TagUnion{}, testPercentileCompression)
 		// Verify key components
 		require.Equal(t, mv.Value, mv2.Value, "wrong value")
 		//if !hasPercentiles { - we decide we want separate test for that

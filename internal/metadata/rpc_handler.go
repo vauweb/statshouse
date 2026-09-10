@@ -8,23 +8,27 @@ package metadata
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"os"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/VKCOM/statshouse-go"
-
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlmetadata"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
+	"github.com/VKCOM/tl/pkg/rpc"
 )
 
 const MaxBoostrapResponseSize = 1024 * 1024 // TODO move somewhere
 const mappingCacheSize = 500
+const maxDeletionSizeLimit = 1000
 
 type GetMappingClients struct {
 	host    string
@@ -49,11 +53,13 @@ type Handler struct {
 	mappingHead    int                                    // by mappingCacheMx
 	mappingTail    int                                    // by mappingCacheMx
 
+	deletionCandidateMappings []int32
+
 	host string
 	log  func(s string, args ...interface{})
 }
 
-func NewHandler(db *DBV2, host string, log func(s string, args ...interface{})) *Handler {
+func NewHandler(db *DBV2, host string, deletionCandidateMappingsPath string, log func(s string, args ...interface{})) *Handler {
 	h := &Handler{
 		db: db,
 		getJournalClients: &GetJournalClients{
@@ -68,7 +74,16 @@ func NewHandler(db *DBV2, host string, log func(s string, args ...interface{})) 
 		log:          log,
 		host:         host,
 	}
+
 	h.mappingCacheMx.Lock()
+	if deletionCandidateMappingsPath != "" {
+		err := h.loadDeletionCandidatesFromBinFile(deletionCandidateMappingsPath)
+		if err != nil {
+			log("loading deletion candidates failed: %s", err)
+			return nil
+		}
+	}
+
 	defer h.mappingCacheMx.Unlock()
 	h.bootStrapMappingCacheUnlocked(context.Background())
 
@@ -116,7 +131,7 @@ func (h *GetJournalClients) WriteEmptyResponse(lh rpc.LongpollHandle, hctx *rpc.
 	delete(h.clients, lh)
 	resp := tlmetadata.GetJournalResponsenew{CurrentVersion: args.From}
 	var err error
-	hctx.Response, err = args.WriteResult(hctx.Response, resp)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 	return err
 }
 
@@ -131,7 +146,7 @@ func (h *GetMappingClients) WriteEmptyResponse(lh rpc.LongpollHandle, hctx *rpc.
 	delete(h.clients, lh)
 	resp := tlmetadata.GetNewMappingsResponse{CurrentVersion: args.From}
 	var err error
-	hctx.Response, err = args.WriteResult(hctx.Response, resp)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 	return err
 }
 
@@ -169,7 +184,7 @@ func (h *Handler) broadcastJournal() {
 		}
 		delete(h.getJournalClients.clients, lh)
 		if hctx, _ := lh.FinishLongpoll(); hctx != nil {
-			hctx.Response, err = args.WriteResult(hctx.Response, resp)
+			hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 			hctx.SendLongpollResponse(err)
 		}
 		clientGotResponseCount++
@@ -201,7 +216,7 @@ func (h *Handler) broadcastMapping() {
 	if !cacheEnabled || minCacheVersion > minVersion+1 {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		m, lastVersion, err = h.db.GetNewMappings(ctx, minVersion, 100)
+		m, lastVersion, err = h.db.GetNewMappings(ctx, minVersion, 100, h.deletionCandidateMappings) // NOTE: filtered inside GetNewMappings
 		if err != nil {
 			return
 		}
@@ -224,7 +239,7 @@ func (h *Handler) broadcastMapping() {
 		}
 		delete(h.getMappingClients.clients, lh)
 		if hctx, _ := lh.FinishLongpoll(); hctx != nil {
-			hctx.Response, err = args.WriteResult(hctx.Response, resp)
+			hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 			hctx.SendLongpollResponse(err)
 		}
 		clientGotResponseCount++
@@ -236,7 +251,7 @@ func (h *Handler) broadcastMapping() {
 
 func (h *Handler) RawGetJournal(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.GetJournalnew
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.getJournal request: %w", err)
 	}
@@ -250,11 +265,11 @@ func (h *Handler) RawGetJournal(ctx context.Context, hctx *rpc.HandlerContext) (
 			CurrentVersion: m[len(m)-1].Version,
 			Events:         m,
 		}
-		hctx.Response, err = args.WriteResult(hctx.Response, resp)
+		hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 		return "", err
 	}
 	if args.IsSetReturnIfEmpty() {
-		hctx.Response, err = args.WriteResult(hctx.Response, tlmetadata.GetJournalResponsenew{CurrentVersion: args.From})
+		hctx.Response, err = args.WriteResultTL1(hctx.Response, tlmetadata.GetJournalResponsenew{CurrentVersion: args.From})
 		return "", err
 	}
 	// but if we get 0, we must take lock and repeat getting events, to see if any appeared
@@ -270,7 +285,7 @@ func (h *Handler) RawGetJournal(ctx context.Context, hctx *rpc.HandlerContext) (
 			CurrentVersion: m[len(m)-1].Version,
 			Events:         m,
 		}
-		hctx.Response, err = args.WriteResult(hctx.Response, resp)
+		hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 		return "", err
 	}
 	lh, err := hctx.StartLongpoll(h.getJournalClients)
@@ -283,7 +298,7 @@ func (h *Handler) RawGetJournal(ctx context.Context, hctx *rpc.HandlerContext) (
 
 func (h *Handler) RawGetNewMappings(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.GetNewMappings
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.GetNewMappings request: %w", err)
 	}
@@ -303,7 +318,7 @@ func (h *Handler) RawGetNewMappings(ctx context.Context, hctx *rpc.HandlerContex
 			}
 			return nil
 		}
-		m, lastV, err = h.db.GetNewMappings(ctx, args.From, args.Limit)
+		m, lastV, err = h.db.GetNewMappings(ctx, args.From, args.Limit, h.deletionCandidateMappings) //NOTE: filtered inside GetNewMappings
 		return err
 	}
 	if err = getNew(); err != nil {
@@ -315,11 +330,11 @@ func (h *Handler) RawGetNewMappings(ctx context.Context, hctx *rpc.HandlerContex
 			LastVersion:    lastV,
 			Pairs:          m,
 		}
-		hctx.Response, err = args.WriteResult(hctx.Response, resp)
+		hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 		return "", err
 	}
 	if args.IsSetReturnIfEmpty() {
-		hctx.Response, err = args.WriteResult(hctx.Response, tlmetadata.GetNewMappingsResponse{CurrentVersion: args.From, LastVersion: lastV})
+		hctx.Response, err = args.WriteResultTL1(hctx.Response, tlmetadata.GetNewMappingsResponse{CurrentVersion: args.From, LastVersion: lastV})
 		return "", err
 	}
 	// but if we get 0, we must take lock and repeat getting events, to see if any appeared
@@ -335,7 +350,7 @@ func (h *Handler) RawGetNewMappings(ctx context.Context, hctx *rpc.HandlerContex
 			LastVersion:    lastV,
 			Pairs:          m,
 		}
-		hctx.Response, err = args.WriteResult(hctx.Response, resp)
+		hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 		return "", err
 	}
 	lh, err := hctx.StartLongpoll(h.getMappingClients)
@@ -348,7 +363,7 @@ func (h *Handler) RawGetNewMappings(ctx context.Context, hctx *rpc.HandlerContex
 
 func (h *Handler) RawGetHistory(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.GetHistoryShortInfo
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.GetHistoryShortInfo request: %w", err)
 	}
@@ -356,13 +371,13 @@ func (h *Handler) RawGetHistory(ctx context.Context, hctx *rpc.HandlerContext) (
 	if err != nil {
 		return "", err
 	}
-	hctx.Response, err = args.WriteResult(hctx.Response, resp)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 	return "", err
 }
 
 func (h *Handler) RawGetEntity(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.GetEntity
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.GetEntity request: %w", err)
 	}
@@ -370,7 +385,7 @@ func (h *Handler) RawGetEntity(ctx context.Context, hctx *rpc.HandlerContext) (s
 	if err != nil {
 		return "", err
 	}
-	hctx.Response, err = args.WriteResult(hctx.Response, e)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, e)
 	return "ok", err
 
 }
@@ -380,7 +395,7 @@ func (h *Handler) RawEditEntity(ctx context.Context, hctx *rpc.HandlerContext) (
 	if err := checkLimit(hctx.Request); err != nil {
 		return "request_limit", err
 	}
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.editMetricEvent request: %w", err)
 	}
@@ -394,14 +409,14 @@ func (h *Handler) RawEditEntity(ctx context.Context, hctx *rpc.HandlerContext) (
 	if err != nil {
 		return "", fmt.Errorf("failed to create event: %w", err)
 	}
-	hctx.Response, err = args.WriteResult(hctx.Response, event)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, event)
 	h.broadcastJournal()
 	return "", err
 }
 
 func (h *Handler) RawGetMappingByValue(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.GetMapping
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.getMapping request: %w", err)
 	}
@@ -413,6 +428,9 @@ func (h *Handler) RawGetMappingByValue(ctx context.Context, hctx *rpc.HandlerCon
 	} else {
 		var id int32
 		id, notExists, err = h.db.GetMappingByValue(ctx, args.Key)
+		if !notExists && h.IsDeletionCandidate(id) {
+			return "", fmt.Errorf("tried to retrieve a mapping marked for deletion")
+		}
 		mapping = tlmetadata.GetMappingResponse0{Id: id}.AsUnion()
 	}
 	if err != nil {
@@ -423,22 +441,77 @@ func (h *Handler) RawGetMappingByValue(ctx context.Context, hctx *rpc.HandlerCon
 	}
 	status := "load_mapping"
 	if m, ok := mapping.AsCreated(); ok {
+		if h.IsDeletionCandidate(m.Id) {
+			return "", fmt.Errorf("tried to create a mapping marked for deletion")
+		}
 		status = "create_mapping"
 		h.updateMappingCache(ctx, tlstatshouse.Mapping{Str: args.Key, Value: m.Id})
 		h.broadcastMapping()
 	}
-	hctx.Response, err = args.WriteResult(hctx.Response, mapping)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, mapping)
 	return status, err
+}
+
+func (h *Handler) RawDeleteMappingCandidates(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
+	args := tlmetadata.DeleteMappingCandidates{}
+	_, err := args.ReadTL1(hctx.Request)
+	if err != nil {
+		return "", fmt.Errorf("failed to deserialize metadata.DeleteMappingCandidates request: %w", err)
+	}
+
+	cands := h.deletionCandidateMappings
+
+	if args.Offset < 0 {
+		return "", fmt.Errorf("invalid argument offset %d for list of %d candidates", args.Offset, len(cands))
+	}
+
+	if args.Limit <= 0 || args.Limit > maxDeletionSizeLimit {
+		return "", fmt.Errorf("invalid argument limit %d %d for list of candidates", args.Limit, maxDeletionSizeLimit)
+	}
+
+	if args.Offset >= int32(len(cands)) {
+		hctx.Response, err = args.WriteResultTL1(hctx.Response, tlmetadata.DeleteMappingCandidatesResponse{
+			From:                -1,
+			To:                  -1,
+			CountBeforeDeletion: 0,
+		})
+		if err != nil {
+			return "", err
+		}
+		return "ok", nil
+	}
+
+	start := args.Offset
+	end := args.Offset + args.Limit
+	if end > int32(len(cands)) {
+		end = int32(len(cands))
+	}
+	countBeforeDeletion, err := h.db.deleteMappingsByIdBatched(ctx, cands[start:end])
+
+	if err != nil {
+		return "", err
+	}
+
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, tlmetadata.DeleteMappingCandidatesResponse{
+		From:                cands[start],
+		To:                  cands[end-1],
+		CountBeforeDeletion: countBeforeDeletion,
+	})
+	if err != nil {
+		return "", err
+	}
+	return "ok", nil
 }
 
 // RawPutMapping Agent cache, Aggregator cache and Aggregator mapping replica DB will not know about changes!
 func (h *Handler) RawPutMapping(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.PutMapping
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.putMappingEvent request: %w", err)
 	}
 	err = h.db.PutMapping(ctx, args.Keys, args.Value)
+	// NOTE: admin endpoint, not used by the system; deletion candidates filtering intentionally skipped
 	if err != nil {
 		return "", err
 	}
@@ -446,7 +519,7 @@ func (h *Handler) RawPutMapping(ctx context.Context, hctx *rpc.HandlerContext) (
 	// force bootstrap
 	h.updateMappingCache(ctx, tlstatshouse.Mapping{Value: math.MaxInt32})
 	h.broadcastMapping()
-	hctx.Response, err = args.WriteResult(hctx.Response, tlmetadata.PutMappingResponse{})
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, tlmetadata.PutMappingResponse{})
 	return "", err
 }
 
@@ -471,7 +544,7 @@ func (h *Handler) updateMappingCache(ctx context.Context, pair tlstatshouse.Mapp
 }
 
 func (h *Handler) bootStrapMappingCacheUnlocked(ctx context.Context) {
-	mappings, err := h.db.GetLastNMappings(ctx, mappingCacheSize)
+	mappings, err := h.db.GetLastNMappings(ctx, mappingCacheSize, h.deletionCandidateMappings) // NOTE: filtered inside GetLastNMappings
 	if err != nil || len(mappings) != mappingCacheSize {
 		h.mappingHead, h.mappingTail = 0, 0
 		if err != nil { // there could be < mappingCacheSize total mappings during testing or initial production, so do not trash logs
@@ -486,11 +559,18 @@ func (h *Handler) bootStrapMappingCacheUnlocked(ctx context.Context) {
 
 func (h *Handler) RawGetMappingByID(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.GetInvertMapping
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.getInvertMapping request: %w", err)
 	}
-	k, isExists, err := h.db.GetMappingByID(ctx, args.Id)
+	var k string
+	var isExists bool
+	if h.IsDeletionCandidate(args.Id) {
+		k = ""
+		isExists = false
+	} else {
+		k, isExists, err = h.db.GetMappingByID(ctx, args.Id)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -504,14 +584,14 @@ func (h *Handler) RawGetMappingByID(ctx context.Context, hctx *rpc.HandlerContex
 		resp = tlmetadata.GetInvertMappingResponse0{Key: k}.AsUnion()
 		status = "get"
 	}
-	hctx.Response, err = args.WriteResult(hctx.Response, resp)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 	return status, err
 }
 
 // resetFlood
 func (h *Handler) RawResetFlood(ctx context.Context, hctx *rpc.HandlerContext) (string, error) {
 	var args tlmetadata.ResetFlood
-	_, err := args.Read(hctx.Request)
+	_, err := args.ReadTL1(hctx.Request)
 	if err != nil {
 		return "", fmt.Errorf("failed to deserialize metadata.resetFlood request: %w", err)
 	}
@@ -522,7 +602,7 @@ func (h *Handler) RawResetFlood(ctx context.Context, hctx *rpc.HandlerContext) (
 		return "", err
 	}
 	resp := tlmetadata.ResetFloodResponse{}
-	hctx.Response, err = args.WriteResult(hctx.Response, resp)
+	hctx.Response, err = args.WriteResultTL1(hctx.Response, resp)
 	return "", err
 }
 
@@ -533,44 +613,7 @@ func (h *Handler) ResetFlood2(ctx context.Context, args tlmetadata.ResetFlood2) 
 
 func (h *Handler) GetTagMappingBootstrap(ctx context.Context, args tlmetadata.GetTagMappingBootstrap) (tlstatshouse.GetTagMappingBootstrapResult, string, error) {
 	var ret tlstatshouse.GetTagMappingBootstrapResult
-
-	totalSizeEstimate := 0
-	boostrapDifferences := 0
-	response, err := h.db.GetBootstrap(ctx)
-	if err != nil {
-		return tlstatshouse.GetTagMappingBootstrapResult{}, "", nil
-	}
-	for _, ma := range response.Mappings {
-		k, isExists, err := h.db.GetMappingByID(ctx, ma.Value)
-		if err != nil {
-			return ret, "", err
-		}
-		if !isExists { // skip, no problem
-			continue
-		}
-		if k != ma.Str { // skip, log some examples
-			boostrapDifferences++
-			if boostrapDifferences < 10 {
-				h.log("[info] tag value %q from bootstrap is different from value in DB %q for ID %d", ma.Value, k, ma.Value)
-			}
-			continue
-		}
-		totalSizeEstimate += len(k) + 3 + 4 // 3 is pessimistic padding
-		ret.Mappings = append(ret.Mappings, tlstatshouse.Mapping{
-			Str:   k,
-			Value: ma.Value,
-		})
-		if totalSizeEstimate > MaxBoostrapResponseSize {
-			break
-		}
-	}
-	h.log("[info] returning boostrap of %d mappings of ~size %d, %d differences found", len(ret.Mappings), totalSizeEstimate, boostrapDifferences)
 	return ret, "get_bootstrap", nil
-}
-
-func (h *Handler) PutTagMappingBootstrap(ctx context.Context, args tlmetadata.PutTagMappingBootstrap) (tlstatshouse.PutTagMappingBootstrapResult, string, error) {
-	count, err := h.db.PutBootstrap(ctx, args.Mappings)
-	return tlstatshouse.PutTagMappingBootstrapResult{CountInserted: count}, "put_bootstrap", err
 }
 
 func normalizeCircleIndex(ind, len int) int {
@@ -579,4 +622,55 @@ func normalizeCircleIndex(ind, len int) int {
 		return ind
 	}
 	return len + ind
+}
+
+func (h *Handler) loadDeletionCandidatesFromBinFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open mappings file %s: %w", path, err)
+	}
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat mappings file %s: %w", path, err)
+	}
+
+	size := st.Size()
+	if size%4 != 0 {
+		return fmt.Errorf("invalid mappings file size %d: not divisible by 4", size)
+	}
+
+	buf := make([]byte, int(size))
+
+	if _, err := io.ReadFull(f, buf); err != nil {
+		return fmt.Errorf("read mappings file %s: %w", path, err)
+	}
+
+	// safe []int32 parse + sort check
+	ids := make([]int32, int(size/4))
+	lastId := int32(-1)
+	for i := range ids {
+		id := int32(binary.LittleEndian.Uint32(buf[i*4:]))
+		if id <= lastId {
+			return fmt.Errorf("invalid mappings file (parsing error or not sorted in ascending order) i: %d, ids[i]: %d, ids[i-1]: %d", i, id, lastId)
+		}
+		ids[i] = id
+		lastId = id
+	}
+
+	h.deletionCandidateMappings = ids
+
+	h.log("loaded %d deletion candidates from %s", len(ids), path)
+
+	return nil
+}
+
+func (h *Handler) IsDeletionCandidate(id int32) bool {
+	return IsDeletionCandidate(id, h.deletionCandidateMappings)
+}
+
+func IsDeletionCandidate(id int32, ids []int32) bool {
+	i := sort.Search(len(ids), func(i int) bool { return ids[i] >= id })
+	return i < len(ids) && ids[i] == id
 }

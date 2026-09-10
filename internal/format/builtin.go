@@ -147,14 +147,12 @@ var (
 		-131:                                    BuiltinMetricMetaMappingCacheSize,
 		-132:                                    BuiltinMetricMetaMappingCacheAverageTTL,
 		-133:                                    BuiltinMetricMetaMappingCacheEvent,
-		-134:                                    BuiltinMetricMetaMappingQueueSize,
 		-135:                                    BuiltinMetricMetaMappingQueueEvent,
-		-136:                                    BuiltinMetricMetaMappingQueueRemovedHitsAvg,
 		-137:                                    BuiltinMetricMetaAgentTimings,
 		-138:                                    BuiltinMetricMetaAggInsertSize,
 		-139:                                    BuiltinMetricMetaAggOldMetrics,
 		-140:                                    BuiltinMetricMetaApiChRequests,
-		BuiltinMetricIDMigrationLog:             BuiltinMetricMetaMigrationLog,
+		-141:                                    BuiltinMetricMetaMigrationLog,
 		-142:                                    BuiltinMetricMetaAPISelectOSCPUVirtualTime,
 		-143:                                    BuiltinMetricMetaAPIRateLimit,
 		-144:                                    BuiltinMetricMetaMappingClientWaits,
@@ -164,6 +162,11 @@ var (
 		BuiltinMetricIDIngestionStatusNoShard:   BuiltinMetricMetaIngestionStatusNoShard,
 		BuiltinMetricIDHeartbeatVersionAgent:    BuiltinMetricMetaHeartbeatVersionAgent,
 		BuiltinMetricIDHeartbeatVersionIngress:  BuiltinMetricMetaHeartbeatVersionIngress,
+		-151:                                    BuiltinMetricMetaAggReceiveSrcOriginalSize,
+		-152:                                    BuiltinMetricMetaAggSendSrcBudget,
+		-153:                                    BuiltinMetricMetaMappingUsage,
+		-156:                                    BuiltinMetricMetaAggTagMapperInfo,
+		BuiltinMetricIDAPIDashboardUsage:        BuiltinMetricMetaAPIDashboardUsage,
 	}
 
 	// BuiltInGroupDefault can be overridden by journal, don't use directly
@@ -213,10 +216,10 @@ func init() {
 	}
 	for k, v := range hostMetrics {
 		v.Tags = append([]MetricMetaTag{{Name: "hostname"}}, v.Tags...)
-		if slowHostMetricID[k] {
-			v.Resolution = 15
+		if v.IsHardwareSlowMetric {
+			v.Resolution = HardwareSlowMetricResolution
 		} else {
-			v.Resolution = 15
+			v.Resolution = HardwareMetricResolution
 		}
 		v.GroupID = BuiltinGroupIDHost
 		BuiltinMetrics[k] = v
@@ -303,7 +306,7 @@ func init() {
 			if t.Description == "" && t.Name == "" {
 				t.Description = "-" // remove unused tags from UI
 			}
-			if i == 0 { // env is not raw
+			if i == 0 || i == 47 { // env & string top are not raw
 				continue
 			}
 			if t.Description == "tag_id" { // cannot set at init() because # of tags is dynamic

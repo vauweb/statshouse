@@ -31,8 +31,8 @@ import (
 	"github.com/VKCOM/statshouse/internal/util"
 	"github.com/VKCOM/statshouse/internal/vkgo/binlog/fsbinlog"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
+	"github.com/VKCOM/tl/pkg/rpc"
 )
 
 var argv struct {
@@ -62,6 +62,8 @@ var argv struct {
 	version    bool
 	help       bool
 	secureMode bool
+
+	deletionCandidateMappingsPath string
 }
 
 type Logger struct{}
@@ -102,6 +104,8 @@ func parseArgs() {
 	pflag.Int64Var(&argv.budgetBonus, "budget-bonus", metadata.BudgetBonus, "every step-sec seconds metric will receive budget-bonus mappings to budget")
 	pflag.Int64Var(&argv.budgetBonus, "global-budget", metadata.GlobalBudget, "create mapping budget. After spent this budget meta will use step system")
 	pflag.Var(&argv.trustedSubnetGroupsFlag, "trusted-subnet-groups", "trusted subnet groups; format: group1,group1b;group2 (CIDR list, groups split by ';')")
+
+	pflag.StringVar(&argv.deletionCandidateMappingsPath, "deletion-candidate-mappings-path", "", "path to file with deletion candidate mappings")
 
 	pflag.Parse()
 }
@@ -269,7 +273,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	host := srvfunc.HostnameForStatshouse()
+	host := srvfunc.Hostname()
 	log.Println("[debug] opening db and reread binlog")
 	db, err := metadata.OpenDB(argv.dbPath, metadata.Options{
 		Host:         host,
@@ -297,7 +301,7 @@ func run() error {
 		2:                       fmt.Sprint(format.TagValueIDHeartbeatEventStart),
 		4:                       fmt.Sprint(build.CommitTag()),
 		6:                       fmt.Sprint(build.CommitTimestamp()),
-		7:                       srvfunc.HostnameForStatshouse(),
+		7:                       srvfunc.Hostname(),
 		statshouse.StringTopTag: build.Commit(),
 	}
 	statshouse.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, 0)
@@ -309,17 +313,17 @@ func run() error {
 	}))
 
 	proxy := metadata.ProxyHandler{Host: host}
-	handler := metadata.NewHandler(db, host, log.Printf)
+	handler := metadata.NewHandler(db, host, argv.deletionCandidateMappingsPath, log.Printf)
 	h := &tlmetadata.Handler{
-		RawGetMapping:       proxy.HandleProxy("getMapping", handler.RawGetMappingByValue),
-		RawPutMapping:       proxy.HandleProxy("putMapping", handler.RawPutMapping),
-		RawGetInvertMapping: proxy.HandleProxy("getMappingByID", handler.RawGetMappingByID),
-		RawResetFlood:       proxy.HandleProxy("resetFlood", handler.RawResetFlood),
+		RawGetMapping:              proxy.HandleProxy("getMapping", handler.RawGetMappingByValue),
+		RawDeleteMappingCandidates: proxy.HandleProxy("deleteMappingCandidates", handler.RawDeleteMappingCandidates),
+		RawPutMapping:              proxy.HandleProxy("putMapping", handler.RawPutMapping),
+		RawGetInvertMapping:        proxy.HandleProxy("getMappingByID", handler.RawGetMappingByID),
+		RawResetFlood:              proxy.HandleProxy("resetFlood", handler.RawResetFlood),
 
 		RawEditEntitynew:       proxy.HandleProxy("editEntity", handler.RawEditEntity),
 		RawGetEntity:           proxy.HandleProxy("getEntity", handler.RawGetEntity),
 		RawGetHistoryShortInfo: proxy.HandleProxy("getHistory", handler.RawGetHistory),
-		PutTagMappingBootstrap: metadata.HandleProxyGen(&proxy, "put_bootstrap", handler.PutTagMappingBootstrap),
 		GetTagMappingBootstrap: metadata.HandleProxyGen(&proxy, "get_bootstrap", handler.GetTagMappingBootstrap),
 		ResetFlood2:            metadata.HandleProxyGen(&proxy, "resetFloo2", handler.ResetFlood2),
 	}
@@ -340,7 +344,7 @@ func run() error {
 		rpc.ServerWithLogf(log.Printf),
 		// meta is accessible via RPC proxy, so needs some timeout for long poll contexts clean up
 		rpc.ServerWithDefaultResponseTimeout(5*time.Minute),
-		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())),
+		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups("")))),
 		rpc.ServerWithCryptoKeys(rpcCryptoKeys),
 		metrics.ServerWithMetrics,
 	)

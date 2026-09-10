@@ -8,10 +8,11 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/VKCOM/tl/pkg/rpc"
+
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/receiver"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 type series map[tags]map[uint32]*value
@@ -28,9 +29,8 @@ type handler struct {
 	sink func(*tlstatshouse.MetricBytes)
 }
 
-func (h handler) HandleMetrics(args data_model.HandlerArgs) data_model.MappedMetricHeader {
+func (h handler) HandleMetrics(args data_model.HandlerArgs) {
 	h.sink(args.MetricBytes)
-	return data_model.MappedMetricHeader{}
 }
 
 func (handler) HandleParseError(pkt []byte, err error) {
@@ -50,7 +50,7 @@ func listen(args argv, ch chan series) (func(), error) {
 		cancel = listenerUDP.Close
 		log.Printf("listen UDP %s\n", addr)
 		serve = func(f func(*tlstatshouse.MetricBytes)) error {
-			return listenerUDP.Serve(handler{f})
+			return listenerUDP.Serve(nil, handler{f})
 		}
 	case "tcp":
 		listenerTCP, err := net.Listen("tcp", addr)
@@ -66,7 +66,7 @@ func listen(args argv, ch chan series) (func(), error) {
 		server := rpc.NewServer(rpc.ServerWithSocketHijackHandler(hijackH))
 		cancel = server.Close
 		serve = func(f func(*tlstatshouse.MetricBytes)) error {
-			go receiver.NewTCPReceiver(nil, nil).Serve(handler{f}, hijackL)
+			go receiver.NewTCPReceiver(nil, nil).Serve(nil, handler{f}, hijackL)
 			return server.Serve(listenerTCP)
 		}
 	default:
@@ -107,8 +107,12 @@ func listen(args argv, ch chan series) (func(), error) {
 func (s series) addMetricBytes(b *tlstatshouse.MetricBytes) {
 	tags := tags{{"", string(b.Name)}}
 	for i := 0; i < len(b.Tags); i++ {
+		key := string(b.Tags[i].Key)
+		if key == "_h" {
+			continue
+		}
 		if len(b.Tags[i].Value) != 0 {
-			tags[i+1] = tag{string(b.Tags[i].Key), string(b.Tags[i].Value)}
+			tags[i+1] = tag{key, string(b.Tags[i].Value)}
 		}
 	}
 	sort.Slice(tags[:], func(i, j int) bool {

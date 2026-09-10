@@ -11,22 +11,20 @@ import (
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tl"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/VKCOM/statshouse/internal/format"
-	"go4.org/mem"
 )
 
 func (s *Agent) Map(args data_model.HandlerArgs, h *data_model.MappedMetricHeader, autoCreate *data_model.AutoCreate) {
-	s.mapAllTags(h, args.MetricBytes, autoCreate)
+	s.mapAllTags(h, args.MetricBytes, autoCreate, args.Host)
 	if h.IngestionStatus != 0 {
 		return
 	}
 	// validate values only if metric is valid
 	h.IngestionStatus = data_model.ValidateMetricData(args.MetricBytes)
-	h.ValuesChecked = true // not used in v3, just to avoid confusion
 }
 
 // mapAllTags processes all tags in a single pass, including environment tag
 // unlike v2, it doesn't stop on the first invalid tag
-func (s *Agent) mapAllTags(h *data_model.MappedMetricHeader, metric *tlstatshouse.MetricBytes, autoCreate *data_model.AutoCreate) {
+func (s *Agent) mapAllTags(h *data_model.MappedMetricHeader, metric *tlstatshouse.MetricBytes, autoCreate *data_model.AutoCreate, host string) {
 	for i := 0; i < len(metric.Tags); i++ {
 		v := &metric.Tags[i]
 		tagMeta, tagIDKey, validEvent := data_model.MapValidateTag(v, metric, h, autoCreate)
@@ -40,7 +38,7 @@ func (s *Agent) mapAllTags(h *data_model.MappedMetricHeader, metric *tlstatshous
 		switch {
 		case len(v.Value) == 0: // this case is also valid for raw values
 		case tagMeta.Raw64():
-			lo, hi, ok := format.ContainsRawTagValue64(mem.B(v.Value)) // TODO - remove allocation in case of error
+			lo, hi, ok := format.ContainsRawTagValue64Bytes(v.Value)
 			if !ok {
 				h.InvalidRawValue = v.Value
 				h.InvalidRawTagKey = tagIDKey
@@ -51,7 +49,7 @@ func (s *Agent) mapAllTags(h *data_model.MappedMetricHeader, metric *tlstatshous
 
 			tagValue.I = lo
 		case tagMeta.Raw():
-			id, ok := format.ContainsRawTagValue(mem.B(v.Value))
+			id, ok := format.ContainsRawTagValueBytes(v.Value)
 			if !ok {
 				h.InvalidRawValue = v.Value
 				h.InvalidRawTagKey = tagIDKey
@@ -71,9 +69,19 @@ func (s *Agent) mapAllTags(h *data_model.MappedMetricHeader, metric *tlstatshous
 			h.OriginalTagValues[tagMeta.Index] = v.Value
 		}
 	}
+	if !h.IsHKeySet && len(host) != 0 {
+		var tagValue data_model.TagUnion
+		id, found := s.mappingsCache.GetValue(uint32(h.ReceiveTime.Unix()), host)
+		if found {
+			tagValue.I = id
+		} else {
+			tagValue.S = host
+		}
+		h.SetTag(format.HostTagIndex, tagValue, 0)
+	}
 }
 
-func (s *Agent) mapEnvironmentTag(h *data_model.MappedMetricHeader, v *tl.DictionaryFieldStringBytes) {
+func (s *Agent) mapEnvironmentTag(h *data_model.MappedMetricHeader, v *tl.DictFieldStringStringBytes) {
 	var err error
 	v.Value, err = format.AppendValidStringValue(v.Value[:0], v.Value)
 	if err != nil || len(v.Value) == 0 {

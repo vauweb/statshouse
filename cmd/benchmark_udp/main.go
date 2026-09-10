@@ -54,14 +54,13 @@ type packetPrinter struct {
 	haha   [20]byte
 }
 
-func (w *packetPrinter) HandleMetrics(args data_model.HandlerArgs) (h data_model.MappedMetricHeader) {
+func (w *packetPrinter) HandleMetrics(args data_model.HandlerArgs) {
 	// some random work
 	ha := sha1.Sum(args.MetricBytes.Name)
 	for i, b := range ha {
 		w.haha[i] ^= b
 	}
 	w.total.Inc()
-	return h
 }
 
 func (w *packetPrinter) HandleParseError(pkt []byte, err error) {
@@ -146,7 +145,7 @@ func receiveBenchmark() int {
 	if mode != 0 && mode != 1 {
 		for i := 0; i < coresUDP; i++ {
 			go func() {
-				err := receiversUDP[0].Serve(w)
+				err := receiversUDP[0].Serve(nil, w)
 				if err != nil {
 					log.Fatalf("Serve: %v", err)
 				}
@@ -155,7 +154,7 @@ func receiveBenchmark() int {
 	} else {
 		for _, u := range receiversUDP {
 			go func(u *receiver.UDP) {
-				err := u.Serve(w)
+				err := u.Serve(nil, w)
 				if err != nil {
 					log.Fatalf("Serve: %v", err)
 				}
@@ -197,7 +196,7 @@ func receiveBenchmark() int {
 	batch := tlstatshouse.AddMetricsBatch{
 		Metrics: []tlstatshouse.Metric{metric, metric, metric, metric, metric, metric, metric, metric, metric, metric},
 	}
-	metricBytes := batch.WriteBoxed(nil)
+	metricBytes := batch.WriteTL1Boxed(nil)
 	packet := metricBytes
 	for len(packet)+len(metricBytes) < packetSize {
 		packet = append(packet, metricBytes...)

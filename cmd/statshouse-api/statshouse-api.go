@@ -25,7 +25,11 @@ import (
 	"github.com/cloudflare/tableflip"
 	"github.com/gorilla/handlers"
 
+	"github.com/VKCOM/statshouse/internal/mappings_tracker"
+
 	statshouseui "github.com/VKCOM/statshouse/statshouse-ui"
+
+	"github.com/VKCOM/tl/pkg/rpc"
 
 	"github.com/VKCOM/statshouse/internal/api"
 	"github.com/VKCOM/statshouse/internal/chutil"
@@ -37,7 +41,6 @@ import (
 	"github.com/VKCOM/statshouse/internal/trustedsubnets"
 	"github.com/VKCOM/statshouse/internal/util"
 	"github.com/VKCOM/statshouse/internal/vkgo/build"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 	"github.com/VKCOM/statshouse/internal/vkgo/vkuth"
 )
@@ -102,6 +105,7 @@ var argv struct {
 	metadataNet              string
 	cluster                  string
 	mappingsFileCount        int
+	trackedMappingsFile      string
 
 	trustedSubnetGroupsFlag trustedsubnets.Flag
 
@@ -193,7 +197,7 @@ func run() int {
 	c := rpc.NewClient(
 		// rpc.ClientWithProtocolVersion(rpc.LatestProtocolVersion),
 		rpc.ClientWithLogf(log.Printf),
-		rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())))
+		rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups("")))))
 	defer func() { _ = c.Close() }()
 
 	var mappingFiles []*os.File
@@ -211,6 +215,16 @@ func run() int {
 	if err != nil {
 		// cache can be damaged
 		log.Printf("failed to load mappings storage from %v", err)
+	}
+
+	mappingsTracker := mappings_tracker.New()
+	if argv.trackedMappingsFile != "" {
+		trackedMappingsFilePath := filepath.Join(argv.cacheDir, argv.trackedMappingsFile)
+		if err := mappingsTracker.LoadFromBinFile(trackedMappingsFilePath); err != nil {
+			log.Printf("error loading mappings from file %s: %v", argv.trackedMappingsFile, err)
+			return 1
+		}
+		log.Printf("mappings-tracker: loaded %d ids from %q", mappingsTracker.Len(), argv.trackedMappingsFile)
 	}
 
 	// we do not want to confuse journal from different clusters, this would be a disaster
@@ -283,7 +297,7 @@ func run() int {
 		argv.showInvisible,
 		chV2,
 		&tlmetadata.Client{
-			Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(rpcCryptoKey), rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups()))),
+			Client:  rpc.NewClient(rpc.ClientWithLogf(log.Printf), rpc.ClientWithCryptoKey(rpcCryptoKey), rpc.ClientWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups(""))))),
 			Network: argv.metadataNet,
 			Address: argv.metadataAddr,
 			ActorID: argv.metadataActorID,
@@ -292,6 +306,7 @@ func run() int {
 		argv.cacheDir,
 		argv.cluster,
 		mappingsStorage,
+		mappingsTracker,
 		jwtHelper,
 		argv.HandlerOptions,
 		&argv.Config,
@@ -317,6 +332,8 @@ func run() int {
 	a.Path("/" + api.EndpointPoint).Methods("POST").HandlerFunc(api.HandlePointQuery)
 	a.Path("/" + api.EndpointTable).Methods("GET").HandlerFunc(api.HandleGetTable)
 	a.Path("/" + api.EndpointQuery).Methods("POST").HandlerFunc(api.HandleSeriesQuery)
+	// renders plot previews (og:image) with a pure-Go renderer (gonum/plot);
+	// the gnuplot-based version was removed due to https://github.com/advisories/GHSA-cfwc-xjfp-44jg
 	a.Path("/" + api.EndpointRender).Methods("GET").HandlerFunc(api.HandleGetRender)
 	a.Path("/" + api.EndpointDashboard).Methods("GET").HandlerFunc(api.HandleGetDashboard)
 	a.Path("/" + api.EndpointDashboardList).Methods("GET").HandlerFunc(api.HandleGetDashboardList)
@@ -405,7 +422,7 @@ func run() int {
 		2:                       fmt.Sprint(format.TagValueIDHeartbeatEventStart),
 		4:                       fmt.Sprint(build.CommitTag()),
 		6:                       fmt.Sprint(build.CommitTimestamp()),
-		7:                       srvfunc.HostnameForStatshouse(),
+		7:                       srvfunc.Hostname(),
 		statshouse.StringTopTag: build.Commit(),
 	}
 	statshouse.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, 0)
@@ -416,6 +433,19 @@ func run() int {
 		c.Value(format.BuiltinMetricMetaHeartbeatVersion.Name, heartbeatTags, uptime)
 	}))
 
+	defer statshouse.StopRegularMeasurement(statshouse.StartRegularMeasurement(func(c *statshouse.Client) {
+		for id, count := range mappingsTracker.DrainUsage() {
+			c.Count(
+				format.BuiltinMetricMetaMappingUsage.Name,
+				statshouse.Tags{
+					1: format.CodeTagValue(format.TagValueIDComponentAPI),
+					2: format.CodeTagValue(id),
+				},
+				float64(count),
+			)
+		}
+	}))
+
 	handlerRPC := api.NewRPCRouter(f, brs)
 	var hijackListener *rpc.HijackListener
 	metrics := util.NewRPCServerMetrics("statshouse_api")
@@ -424,7 +454,7 @@ func run() int {
 			hijackListener.AddConnection(conn)
 		}),
 		rpc.ServerWithLogf(log.Printf),
-		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(build.TrustedSubnetGroups())),
+		rpc.ServerWithTrustedSubnetGroups(argv.trustedSubnetGroupsFlag.GetOrDefault(rpc.SplitSubnetsString(build.TrustedSubnetGroups("")))),
 		rpc.ServerWithHandler(handlerRPC.Handle),
 		rpc.ServerWithCryptoKeys(rpcCryptoKeys),
 		metrics.ServerWithMetrics,
@@ -486,7 +516,7 @@ func parseCommandLine() (err error) {
 	flag.IntVar(&chMaxQueries, "clickhouse-max-queries", 32, "maximum number of concurrent ClickHouse queries")
 	config.StringSliceVar(flag.CommandLine, &argv.chV2Addrs, "clickhouse-v2-addrs", "", "comma-separated list of ClickHouse-v2 addresses")
 	flag.BoolVar(&argv.chV2Debug, "clickhouse-v2-debug", false, "ClickHouse-v2 debug mode")
-	flag.IntVar(&argv.chV2MaxLightFastConns, "clickhouse-v2-max-conns", 12, "maximum number of ClickHouse-v2 connections (light fast)")
+	flag.IntVar(&argv.chV2MaxLightFastConns, "clickhouse-v2-max-conns", 9, "maximum number of ClickHouse-v2 connections (light fast)")
 	flag.IntVar(&argv.chV2MaxLightSlowConns, "clickhouse-v2-max-light-slow-conns", 4, "maximum number of ClickHouse-v2 connections (light slow)")
 	flag.IntVar(&argv.chV2MaxHeavyFastConns, "clickhouse-v2-max-heavy-conns", 1, "maximum number of ClickHouse-v2 connections (heavy fast)")
 	flag.IntVar(&argv.chV2MaxHeavySlowConns, "clickhouse-v2-max-heavy-slow-conns", 1, "maximum number of ClickHouse-v2 connections (heavy slow)")
@@ -527,6 +557,7 @@ func parseCommandLine() (err error) {
 	flag.StringVar(&argv.metadataNet, "metadata-net", "tcp4", "metadata engine network")
 	flag.StringVar(&argv.cluster, "cluster", "statlogs2", "cluster name used for cache file names")
 	flag.IntVar(&argv.mappingsFileCount, "mappings-file-count", 16, "count of files for sharding metadata mappings")
+	flag.StringVar(&argv.trackedMappingsFile, "tracked-mappings-file", "", "path to a text file containing mapping IDs flagged as redundant; usage of these IDs is reported via __mapping_usage. Empty disables the feature. Same artifact deployed to metadata and aggregators.")
 	argv.HandlerOptions.Bind(flag.CommandLine)
 	argv.Config.Bind(flag.CommandLine, api.DefaultConfig())
 	argv.trustedSubnetGroupsFlag.Bind(flag.CommandLine)

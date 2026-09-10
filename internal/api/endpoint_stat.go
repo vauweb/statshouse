@@ -18,8 +18,9 @@ import (
 
 	"github.com/VKCOM/statshouse-go"
 
+	"github.com/VKCOM/tl/pkg/rpc"
+
 	"github.com/VKCOM/statshouse/internal/format"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 	"github.com/VKCOM/statshouse/internal/vkgo/srvfunc"
 )
 
@@ -62,6 +63,7 @@ type endpointStat struct {
 	lane        string
 	laneMutex   sync.Mutex // we access lane from main and badges query
 	metric      string
+	dashboard   string
 	tokenName   string
 	tokenSource string
 	user        string
@@ -77,6 +79,19 @@ func (es *endpointStat) reportServiceTime(code int, err error) {
 				1: strconv.FormatInt(int64(es.protocol), 10),
 				2: es.user,
 				3: es.metric,
+			}, 1)
+	}
+	if len(es.dashboard) != 0 {
+		statshouse.Count(
+			format.BuiltinMetricMetaAPIDashboardUsage.Name,
+			statshouse.Tags{
+				1: strconv.FormatInt(int64(es.protocol), 10),
+				2: es.method,
+				3: srvfunc.Hostname(),
+				4: es.tokenName,
+				5: es.user,
+				6: es.dashboard,
+				7: es.tokenSource,
 			}, 1)
 	}
 	if es.protocol == format.TagValueIDRPC && code == 0 {
@@ -103,6 +118,14 @@ func (es *endpointStat) setMetricMeta(metricMeta *format.MetricMetaValue) {
 	}
 }
 
+func (es *endpointStat) setDashboard(name string, id int32) {
+	if name != "" {
+		es.dashboard = name
+	} else if id != 0 {
+		es.dashboard = strconv.Itoa(int(id))
+	}
+}
+
 func (es *endpointStat) report(code int, metric string) {
 	v := time.Since(es.timestamp).Seconds()
 	es.laneMutex.Lock()
@@ -113,7 +136,7 @@ func (es *endpointStat) report(code int, metric string) {
 		3:  es.method,
 		4:  es.dataFormat,
 		5:  es.lane,
-		6:  srvfunc.HostnameForStatshouse(),
+		6:  srvfunc.Hostname(),
 		7:  es.tokenName,
 		8:  strconv.Itoa(code),
 		9:  es.metric,
@@ -147,7 +170,7 @@ func CurrentChunksCount(brs *BigResponseStorage) func(*statshouse.Client) {
 		c.Value(
 			format.BuiltinMetricMetaAPIBRS.Name,
 			statshouse.Tags{
-				1: srvfunc.HostnameForStatshouse(),
+				1: srvfunc.Hostname(),
 			},
 			float64(brs.Count()))
 	}
@@ -179,11 +202,11 @@ func ChSelectMetricDuration(duration time.Duration, metric *format.MetricMetaVal
 }
 
 func ChSelectActiveQueries(client *statshouse.Client, versionTag string, tagLane int, generalCount int64, shardCounts []int64) {
-	fastHardware := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(tagLane), 4: srvfunc.HostnameForStatshouse()})
+	fastHardware := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(tagLane), 4: srvfunc.Hostname()})
 	fastHardware.Value(float64(generalCount))
 
 	for i, count := range shardCounts {
-		shardMetric := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(tagLane), 4: srvfunc.HostnameForStatshouse(), 5: strconv.Itoa(i + 1)})
+		shardMetric := client.MetricRef(format.BuiltinMetricMetaAPIActiveQueries.Name, statshouse.Tags{2: versionTag, 3: strconv.Itoa(tagLane), 4: srvfunc.Hostname(), 5: strconv.Itoa(i + 1)})
 		shardMetric.Value(float64(count))
 	}
 }
@@ -196,7 +219,7 @@ func ChRateLimit(client *statshouse.Client, versionTag string, stats []chutil.Ra
 			4: strconv.FormatUint(stat.InflightWeight, 10),
 			5: strconv.Itoa(stat.ShardKey),
 			6: strconv.Itoa(stat.ReplicaKey),
-			7: srvfunc.HostnameForStatshouse()})
+			7: srvfunc.Hostname()})
 		metric.Value(float64(stat.InflightCnt))
 	}
 }
@@ -209,7 +232,7 @@ func ChRequestsMetric(shard int, aggHost string, table string, errCode int, ok b
 	statshouse.Count(
 		format.BuiltinMetricMetaApiChRequests.Name,
 		statshouse.Tags{
-			1: srvfunc.HostnameForStatshouse(),
+			1: srvfunc.Hostname(),
 			2: strconv.Itoa(shard),
 			3: aggHost,
 			4: table,

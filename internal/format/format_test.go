@@ -7,19 +7,22 @@
 package format
 
 import (
-	"fmt"
+	"bytes"
 	"strconv"
 	"strings"
 	"testing"
 	"unicode"
 	"unicode/utf8"
 
-	"go4.org/mem"
-	"pgregory.net/rapid"
-
+	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
 	"github.com/mailru/easyjson"
 	"github.com/stretchr/testify/require"
+	"go4.org/mem"
+	"pgregory.net/rand"
+	"pgregory.net/rapid"
 )
+
+var sideEffect int
 
 func TestValidIdent(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
@@ -38,16 +41,16 @@ func TestInvalidTagValuePrefix(t *testing.T) {
 func TestValidStringValue(t *testing.T) {
 	s := "what ever"
 	require.True(t, ValidStringValueLegacy(mem.S(s)))
-	require.True(t, ValidStringValue(mem.S(s)))
+	require.True(t, ValidStringValue(s))
 	s = " what ever"
 	require.False(t, ValidStringValueLegacy(mem.S(s)))
-	require.False(t, ValidStringValue(mem.S(s)))
+	require.False(t, ValidStringValue(s))
 	s = "what ever "
 	require.False(t, ValidStringValueLegacy(mem.S(s)))
-	require.False(t, ValidStringValue(mem.S(s)))
+	require.False(t, ValidStringValue(s))
 	s = "what  ever"
 	require.True(t, ValidStringValueLegacy(mem.S(s)))
-	require.False(t, ValidStringValue(mem.S(s)))
+	require.False(t, ValidStringValue(s))
 
 	dst, err := AppendValidStringValue(nil, []byte("what ever"))
 	require.NoError(t, err)
@@ -61,6 +64,17 @@ func TestValidStringValue(t *testing.T) {
 	dst, err = AppendValidStringValue(nil, []byte("what      \t ever"))
 	require.NoError(t, err)
 	require.Equal(t, string(dst), "what ever")
+}
+
+func TestForceValidStringValueBytes_TrimsInPlace(t *testing.T) {
+	buf := make([]byte, 0, 64)
+	buf = append(buf, "myhost"...)
+	buf = append(buf, ' ', ' ')
+	out := ForceValidStringValueBytes(buf)
+	require.Equal(t, "myhost", string(out))
+	require.Equal(t, 6, len(out))
+	require.GreaterOrEqual(t, cap(out), cap(buf))
+	require.Equal(t, cap(buf), cap(out))
 }
 
 func TestAppendValidStringValue_Bytes(t *testing.T) {
@@ -93,22 +107,23 @@ func TestAppendValidStringValue_Bytes(t *testing.T) {
 	})
 }
 
-/* TODO - do not add more than single space inside
 func TestAppendValidStringValue_String(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		n := rapid.IntRange(4, MaxStringLen).Draw(t, "n")
-		src := rapid.StringOfN(rapid.RuneFrom([]rune{' '}, unicode.PrintRanges...), 1, n, n).Draw(t, "src")
-		src = strings.TrimSpace(src)
-		if len(src) == 0 {
-			t.Skip()
+		src := rapid.StringOfN(rapid.RuneFrom([]rune{' ', '\u200B', '\uFEFF', '\u2000'}, unicode.PrintRanges...), 1, n, n).Draw(t, "src")
+		if len(src) != len(strings.TrimSpace(src)) {
+			require.False(t, validStringValue(mem.S(src), n))
+			return
 		}
-		require.True(t, validStringValue(mem.S(src), n))
 		dst, err := appendValidStringValue(nil, []byte(src), n, false)
 		require.NoError(t, err)
-		require.Equal(t, src, string(dst))
+		if string(dst) == src {
+			require.True(t, validStringValue(mem.S(src), n))
+		} else {
+			require.False(t, validStringValue(mem.S(src), n))
+		}
 	})
 }
-*/
 
 func TestAppendValidStringValue_UTF16(t *testing.T) {
 	// We have a lot of java people converting strings using str.getBytes()
@@ -118,6 +133,11 @@ func TestAppendValidStringValue_UTF16(t *testing.T) {
 	dst, err = AppendValidStringValue(nil, []byte("\x00b\x00e\x00t\x00a"))
 	require.NoError(t, err)
 	require.Equal(t, "�b�e�t�a", string(dst))
+	// Zero-Width Space (U+200B) or Zero-Width No-Break Space / BOM (U+FEFF) do not have the Unicode White_Space property.
+	// Therefore, unicode.IsSpace will return false for them
+	dst, err = AppendValidStringValue(nil, []byte(" \u200B\uFEFF "))
+	require.NoError(t, err)
+	require.Equal(t, "��", string(dst))
 }
 
 func TestBytePrint(t *testing.T) {
@@ -134,30 +154,53 @@ func BenchmarkAppendValidStringValueFastPath(b *testing.B) {
 	in := make([]byte, MaxStringLen/8)
 	for i := range in {
 		in[i] = 'a'
+		if i == 10 {
+			in[i] = ' '
+		}
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		in, _ = AppendValidStringValue(in[:0], in)
 	}
-	fmt.Printf("result: %d\n", len(in)) // do not allow to optimize out
+	sideEffect = len(in)
 }
 
 func BenchmarkAppendValidStringValueCollapseSpacesFastPath(b *testing.B) {
 	in := make([]byte, MaxStringLen/8)
 	for i := range in {
 		in[i] = 'a'
+		if i > 10 && i < 15 {
+			in[i] = ' '
+		}
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		in, _ = AppendValidStringValue(in[:0], in)
 	}
-	fmt.Printf("result: %d\n", len(in)) // do not allow to optimize out
+	sideEffect = len(in)
+}
+
+func BenchmarkValidStringValueFastPath(b *testing.B) {
+	in := make([]byte, MaxStringLen/8)
+	for i := range in {
+		in[i] = 'a'
+		if i == 10 {
+			in[i] = ' '
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if ValidStringValueBytes(in) {
+			sideEffect++
+		}
+	}
 }
 
 func BenchmarkAppendValidStringValueSlowPath(b *testing.B) {
-	in := make([]byte, MaxStringLen/2)
+	in := make([]byte, MaxStringLen/8)
 	for i := range in {
 		in[i] = 'a'
 	}
@@ -167,11 +210,11 @@ func BenchmarkAppendValidStringValueSlowPath(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		in, _ = AppendValidStringValue(in[:0], in)
 	}
-	fmt.Printf("result: %d\n", len(in)) // do not allow to optimize out
+	sideEffect = len(in)
 }
 
 func BenchmarkAppendValidStringValueCollapseSpacesSlowPath(b *testing.B) {
-	in := make([]byte, MaxStringLen/2)
+	in := make([]byte, MaxStringLen/8)
 	for i := range in {
 		in[i] = 'a'
 		if i > 10 && i < 15 {
@@ -184,11 +227,29 @@ func BenchmarkAppendValidStringValueCollapseSpacesSlowPath(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		in, _ = AppendValidStringValue(in[:0], in)
 	}
-	fmt.Printf("result: %d\n", len(in)) // do not allow to optimize out
+	sideEffect = len(in)
+}
+
+func BenchmarkValidStringValueSlowPath(b *testing.B) {
+	in := make([]byte, MaxStringLen/8)
+	for i := range in {
+		in[i] = 'a'
+		if i == 10 {
+			in[i] = ' '
+		}
+	}
+	in = append(in, "Ёж"...)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if ValidStringValueBytes(in) {
+			sideEffect++
+		}
+	}
 }
 
 func BenchmarkAppendHexValue(b *testing.B) {
-	in := make([]byte, MaxStringLen/2)
+	in := make([]byte, MaxStringLen/8)
 	for i := range in {
 		in[i] = 'a'
 	}
@@ -197,7 +258,7 @@ func BenchmarkAppendHexValue(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		in = AppendHexStringValue(in[:0], in)
 	}
-	fmt.Printf("result: %d\n", len(in)) // do not allow to optimize out
+	sideEffect = len(in)
 }
 
 func TestAllowedResolution(t *testing.T) {
@@ -214,26 +275,20 @@ func TestAllowedResolution(t *testing.T) {
 }
 
 func BenchmarkAllowedResolutionSwitch(b *testing.B) {
-	allowed := 0
 	for i := 0; i < b.N; i++ {
 		if allowedResolutionSwitch(i&63) == i&63 {
-			allowed++
+			sideEffect++
 		}
 	}
-	fmt.Printf("result: %d\n", allowed) // do not allow to optimize out
 }
 
 func BenchmarkAllowedResolutionTable(b *testing.B) {
-	allowed := 0
 	for i := 0; i < b.N; i++ {
 		if allowedResolutionTable(i&63) == i&63 {
-			allowed++
+			sideEffect++
 		}
 	}
-	fmt.Printf("result: %d\n", allowed) // do not allow to optimize out
 }
-
-var sum int32
 
 func TestName2Tag(t *testing.T) {
 	meta := &MetricMetaValue{
@@ -272,7 +327,7 @@ func BenchmarkName2Tag(b *testing.B) {
 	_ = meta.RestoreCachedInfo()
 	for i := 0; i < b.N; i++ {
 		if t := meta.name2Tag[TagID(i&15)]; t != nil {
-			sum += t.Index
+			sideEffect += int(t.Index)
 		}
 	}
 }
@@ -287,7 +342,7 @@ func BenchmarkName2TagX(b *testing.B) {
 	_ = meta.RestoreCachedInfo()
 	for i := 0; i < b.N; i++ {
 		if t := meta.Name2Tag(TagID(i & 15)); t != nil {
-			sum += t.Index
+			sideEffect += int(t.Index)
 		}
 	}
 }
@@ -309,7 +364,7 @@ func BenchmarkName2TagAgentCanonical(b *testing.B) {
 	}
 	for i := 0; i < b.N; i++ {
 		if t, _ := meta.Name2TagAgentFastBytes(tags[i&3]); t != nil {
-			sum += t.Index
+			sideEffect += int(t.Index)
 		}
 	}
 }
@@ -330,7 +385,7 @@ func BenchmarkName2TagAgentCustom(b *testing.B) {
 	}
 	for i := 0; i < b.N; i++ {
 		if t, _ := meta.Name2TagAgentFastBytes(tags[i&3]); t != nil {
-			sum += t.Index
+			sideEffect += int(t.Index)
 		}
 	}
 }
@@ -350,7 +405,7 @@ func BenchmarkName2TagAgentLegacy(b *testing.B) {
 	}
 	for i := 0; i < b.N; i++ {
 		if t, _ := meta.Name2TagAgentFastBytes(tags[i&3]); t != nil {
-			sum += t.Index
+			sideEffect += int(t.Index)
 		}
 	}
 }
@@ -388,4 +443,49 @@ func TestMetricMetaJson(t *testing.T) {
 	jsonB, err := easyjson.Marshal(mm)
 	require.NoError(t, err)
 	require.Equal(t, "{}", string(jsonB))
+}
+
+func TestContainsCorruptedBalancerValue(t *testing.T) {
+	batch := tlstatshouse.AddMetricsBatch{}
+	in := append(batch.WriteTL1Boxed([]byte("prefix")), "suffix"...)
+
+	require.True(t, ContainsCorruptedBalancerValue(in))
+	require.True(t, ContainsCorruptedBalancerValueFastPath(in))
+
+	in = bytes.ReplaceAll(in, []byte{'9'}, []byte{'0'})
+
+	require.False(t, ContainsCorruptedBalancerValue(in))
+	require.False(t, ContainsCorruptedBalancerValueFastPath(in))
+}
+
+func BenchmarkContainsCorruptedBalancerValueFastPath(b *testing.B) {
+	in := make([][]byte, b.N)
+	for i := range in {
+		le := rand.Intn(64)
+		in[i] = make([]byte, le)
+		_, _ = rand.Read(in[i])
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if ContainsCorruptedBalancerValueFastPath(in[i]) {
+			sideEffect++
+		}
+	}
+}
+
+func BenchmarkContainsCorruptedBalancerValue(b *testing.B) {
+	in := make([][]byte, b.N)
+	for i := range in {
+		le := rand.Intn(64)
+		in[i] = make([]byte, le)
+		_, _ = rand.Read(in[i])
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if ContainsCorruptedBalancerValue(in[i]) {
+			sideEffect++
+		}
+	}
 }

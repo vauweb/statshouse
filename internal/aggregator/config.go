@@ -12,11 +12,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/VKCOM/tl/pkg/rpc"
 
 	"github.com/VKCOM/statshouse/internal/agent"
 	"github.com/VKCOM/statshouse/internal/data_model"
 	"github.com/VKCOM/statshouse/internal/data_model/gen2/tlstatshouse"
-	"github.com/VKCOM/statshouse/internal/vkgo/rpc"
 )
 
 // ConfigChangeNotifier notify getConfigResult3Locked if ConfigAggregatorRemote.ClusterShardsAddrs was updated
@@ -26,22 +28,26 @@ type ConfigChangeNotifier struct {
 }
 
 type ConfigAggregatorRemote struct {
-	ShortWindow          int
-	InsertBudget         int         // for single replica, in bytes per contributor, when many contributors
-	ShardInsertBudget    map[int]int // pre shard overrides, if not set buget is equal to InsertBudget
-	StringTopCountInsert int
-	SampleNamespaces     bool
-	SampleGroups         bool
-	SampleKeys           bool
-	DenyOldAgents        bool
-	V3InsertSettings     string
-	MappingCacheSize     int64
-	MappingCacheTTL      int
-	BufferedInsertAgeSec int    // age in seconds of data that should be sent to buffer table
-	MigrationTimeRange   string // format: "{begin timestamp}-{end timestamp}"
-	MigrationDelaySec    int    // delay in seconds between migration steps
-	ClusterShardsAddrs   []string
-	EnableMappingStorage bool
+	ShortWindow                int
+	InsertBudget               int // for single replica, in bytes per contributor, when many contributors
+	MinInsertBudget            int64
+	ShardInsertBudget          map[int]int // pre shard overrides, if not set buget is equal to InsertBudget
+	ReceiveSampleBudget        int         // total pre-aggregator receive budget per shard, in bytes per second
+	StringTopCountInsert       int
+	SampleNamespaces           bool
+	SampleGroups               bool
+	SampleKeys                 bool
+	DenyOldAgents              bool
+	V3InsertSettings           string
+	MappingCacheSize           int64
+	MappingCacheTTL            int
+	MigrationTimeRange         string // format: "{begin timestamp}-{end timestamp}"
+	MigrationV3DisabledShards  map[int32]struct{}
+	MigrationDelaySec          int // delay in seconds between migration steps
+	ClusterShardsAddrs         []string
+	DisableReceiveSampleBudget bool
+	OriginalSizeDecayHalfLife  time.Duration
+	ReceiveBudgetWarming       time.Duration
 
 	RQLiteAddrs string // comma-separated list
 
@@ -93,25 +99,30 @@ func DefaultConfigAggregator() ConfigAggregator {
 		LocalShard:           1,
 
 		RemoteInitial: ConfigAggregatorRemote{
-			ShortWindow:          data_model.MaxShortWindow,
-			InsertBudget:         400,
-			StringTopCountInsert: 20,
-			SampleNamespaces:     true,
-			SampleGroups:         true,
-			SampleKeys:           true,
-			DenyOldAgents:        true,
-			MappingCacheSize:     1 << 30,
-			MappingCacheTTL:      86400 * 7,
-			MigrationTimeRange:   "", // empty means migration disabled
-			MigrationDelaySec:    30, // 30 seconds delay between migration steps
+			ShortWindow:               data_model.MaxShortWindow,
+			InsertBudget:              400,
+			MinInsertBudget:           data_model.InsertBudgetFixed,
+			ReceiveSampleBudget:       500000,
+			StringTopCountInsert:      20,
+			SampleNamespaces:          true,
+			SampleGroups:              true,
+			SampleKeys:                true,
+			DenyOldAgents:             true,
+			MappingCacheSize:          1 << 30,
+			MappingCacheTTL:           86400 * 7,
+			MigrationTimeRange:        "",                          // empty means migration disabled
+			MigrationV3DisabledShards: make(map[int32]struct{}, 1), // empty means no disabled shards
+			MigrationDelaySec:         30,                          // 30 seconds delay between migration steps
+			OriginalSizeDecayHalfLife: data_model.ExpDecayMetricsHalfLife,
+			ReceiveBudgetWarming:      15 * time.Minute,
 
 			configTagsMapper3: configTagsMapper3{
-				MaxUnknownTagsInBucket:    1024,
 				MaxCreateTagsPerIteration: 128,
-				MaxLoadTagsPerIteration:   128,
-				TagHitsToCreate:           10,
+				TagHitsToCreate:           80, // minute+, so tags that change every minute do not get into DB
+				TagTotalToCreate:          1000,
 				MaxUnknownTagsToKeep:      1_000_000,
-				MaxSendTagsToAgent:        256,
+				KeepTime:                  3600,
+				MaxSendTagsToAgent:        1024,
 			},
 		},
 	}
@@ -146,9 +157,36 @@ func (c *ConfigAggregatorRemote) setClusterShardsHosts(param string) error {
 	return nil
 }
 
+func (c *ConfigAggregatorRemote) setMigrationV3DisabledShards(param string) error {
+	if param == "" {
+		// no shards disabled
+		c.MigrationV3DisabledShards = make(map[int32]struct{})
+		return nil
+	}
+
+	disabledShardsTokens := strings.Split(param, ",")
+	disabledShardsMap := make(map[int32]struct{}, len(disabledShardsTokens))
+
+	for _, shardStr := range disabledShardsTokens {
+		parsedShard, err := strconv.ParseInt(shardStr, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid input format for --migration-v3-disabled-shards, expected integer, got %s: %v", shardStr, err)
+		}
+		shardKey := int32(parsedShard)
+		if shardKey < 1 || shardKey > 18 {
+			return fmt.Errorf("incorrect shard value in --migration-v3-disabled-shards, expected 1-18, got %s", shardStr)
+		}
+		disabledShardsMap[shardKey] = struct{}{}
+	}
+	c.MigrationV3DisabledShards = disabledShardsMap // overwrite old value
+	return nil
+}
+
 func (c *ConfigAggregatorRemote) Bind(f *flag.FlagSet, d ConfigAggregatorRemote, legacyVerb bool) {
 	f.IntVar(&c.ShortWindow, "short-window", d.ShortWindow, "Short admission window. Shorter window reduces latency, but also reduces recent stats quality as more agents come too late")
 	f.IntVar(&c.InsertBudget, "insert-budget", d.InsertBudget, "Aggregator will sample data before inserting into clickhouse. Bytes per contributor when # >> 100.")
+	f.Int64Var(&c.MinInsertBudget, "min-insert-budget", d.MinInsertBudget, "Should put average insert budget here. If CH freezes, we lose contributors, budget falls, so sample factor extremely rises.")
+	f.IntVar(&c.ReceiveSampleBudget, "receive-sample-budget", d.ReceiveSampleBudget, "Total per-shard pre-aggregator receive budget, in bytes per second, to be divided between active contributors.")
 	f.Func("shard-insert-budget", "1:200 override budget for 1 shard with 200, shards start with 1", c.setShardBudget)
 	f.IntVar(&c.StringTopCountInsert, "string-top-insert", d.StringTopCountInsert, "How many different strings per key is inserted by aggregator in string tops.")
 	if !legacyVerb {
@@ -156,29 +194,23 @@ func (c *ConfigAggregatorRemote) Bind(f *flag.FlagSet, d ConfigAggregatorRemote,
 		f.BoolVar(&c.SampleGroups, "sample-groups", d.SampleGroups, "Statshouse will sample at group level.")
 		f.BoolVar(&c.SampleKeys, "sample-keys", d.SampleKeys, "Statshouse will sample at key level.")
 		f.BoolVar(&c.DenyOldAgents, "deny-old-agents", d.DenyOldAgents, "Statshouse will ignore data from outdated agents")
-		var mirrorChWrite bool  // TODO - remove after deploying aggregators
-		var writeToV3First bool // TODO - remove after deploying aggregators
-		f.BoolVar(&mirrorChWrite, "mirror-ch-writes", false, "Write metrics into both v3 and v2 tables. Not used.")
-		f.BoolVar(&writeToV3First, "write-to-v3-first", false, "Write metrics into v3 table first. Not used.")
-		var v2InsertSettings string // TODO - remove after deploying aggregators
-		f.StringVar(&v2InsertSettings, "v2-insert-settings", "", "Settings when inserting into v2 table. Not used.")
 		f.StringVar(&c.V3InsertSettings, "v3-insert-settings", d.V3InsertSettings, "Settings when inserting into v3 table")
 		f.Int64Var(&c.MappingCacheSize, "mappings-cache-size-agg", d.MappingCacheSize, "Mappings cache size both in memory and on disk for aggregator.")
 		f.IntVar(&c.MappingCacheTTL, "mappings-cache-ttl-agg", d.MappingCacheTTL, "Mappings cache item TTL since last used for aggregator.")
-		var mapStringTop bool // TODO - remove after deploying aggregators
-		f.BoolVar(&mapStringTop, "map-string-top", false, "Map string top. Not used.")
-		f.IntVar(&c.BufferedInsertAgeSec, "buffered-insert-age-sec", d.BufferedInsertAgeSec, "Age in seconds of data that should be inserted via buffer table")
 		f.StringVar(&c.MigrationTimeRange, "migration", d.MigrationTimeRange, "Migration time range: \"{start timestamp}-{end timestamp}\" (start > end because of backwards migration)")
+		f.Func("migration-v3-disabled-shards", "List of disabled shards for migration v3", c.setMigrationV3DisabledShards)
 		f.IntVar(&c.MigrationDelaySec, "migration-delay-sec", d.MigrationDelaySec, "Delay in seconds between migration steps")
 
-		f.BoolVar(&c.EnableMappingStorage, "enable-mapping-storage", d.EnableMappingStorage, "Enable full mapping inmemory&disk storage")
-		f.IntVar(&c.MaxUnknownTagsInBucket, "mapping-queue-max-unknown-tags-in-bucket", d.MaxUnknownTagsInBucket, "Max unknown tags per bucket to add to mapping queue.")
 		f.IntVar(&c.MaxCreateTagsPerIteration, "mapping-queue-create-tags-per-iteration", d.MaxCreateTagsPerIteration, "Mapping queue will create no more tags per iteration (roughly second).")
-		f.IntVar(&c.MaxLoadTagsPerIteration, "mapping-queue-load-tags-per-iteration", d.MaxLoadTagsPerIteration, "Mapping queue will load no more tags per iteration (roughly second).")
 		f.IntVar(&c.TagHitsToCreate, "mapping-queue-hits-to-create", d.TagHitsToCreate, "Tag mapping will be created if it is used in so many different seconds.")
+		f.IntVar(&c.TagTotalToCreate, "mapping-queue-total-to-create", d.TagTotalToCreate, "Tag mapping will be created if it is used so many times.")
 		f.IntVar(&c.MaxUnknownTagsToKeep, "mapping-queue-max-unknown-tags-to-keep", d.MaxUnknownTagsToKeep, "Mapping queue will remember and collect hits on so many different strings.")
-		f.IntVar(&c.MaxSendTagsToAgent, "mapping-queue-max-send-tags-to-agent", d.MaxUnknownTagsInBucket, "Max tags to send in response to agent.")
+		f.IntVar(&c.KeepTime, "mapping-queue-keep-time", d.KeepTime, "Mapping queue will forget string if not seen for this time.")
+		f.IntVar(&c.MaxSendTagsToAgent, "mapping-queue-max-send-tags-to-agent", d.MaxSendTagsToAgent, "Max tags to send in response to agent.")
 		f.Func("cluster-shards-addrs", "List of cluster shards with 3 comma-separated addresses on each line", c.setClusterShardsHosts)
+		f.BoolVar(&c.DisableReceiveSampleBudget, "disable-receive-sample-budget", d.DisableReceiveSampleBudget, "Disable dynamic distribution receive-sample-budget, agent-farm friendly ff.")
+		f.DurationVar(&c.OriginalSizeDecayHalfLife, "original-size-decay-half-life", d.OriginalSizeDecayHalfLife, "Half-life for per-metric original size from agent (exponential decay).")
+		f.DurationVar(&c.ReceiveBudgetWarming, "receive-budget-warming", d.ReceiveBudgetWarming, "After aggregator start, ramp receive-sample-budget as (t/T)^6 over this duration; 0 disables. Protection from slow contributor's accumulation")
 	}
 	f.StringVar(&c.RQLiteAddrs, "rqlite-addrs", d.RQLiteAddrs, "Comma-separated addresses of rqlite cluster")
 }
@@ -235,11 +267,23 @@ func (c *ConfigAggregatorRemote) Validate() error {
 	if c.InsertBudget < 1 {
 		return fmt.Errorf("insert-budget (%d) must be >= 1", c.InsertBudget)
 	}
+	if c.ReceiveSampleBudget < 1 {
+		return fmt.Errorf("receive-sample-budget (%d) must be >= 1", c.ReceiveSampleBudget)
+	}
+	if c.MinInsertBudget < 1 {
+		return fmt.Errorf("min-insert-budget (%d) must be >= 1", c.MinInsertBudget)
+	}
 	if c.StringTopCountInsert < data_model.MinStringTopInsert {
 		return fmt.Errorf("--string-top-insert (%d) must be >= %d", c.StringTopCountInsert, data_model.MinStringTopInsert)
 	}
 	if c.MigrationDelaySec < 1 {
 		return fmt.Errorf("--migration-delay-sec (%d) must be >= 1", c.MigrationDelaySec)
+	}
+	if c.OriginalSizeDecayHalfLife <= 0 {
+		return fmt.Errorf("--original-size-decay-half-life (%s) must be > 0", c.OriginalSizeDecayHalfLife)
+	}
+	if c.ReceiveBudgetWarming < 0 {
+		return fmt.Errorf("--receive-budget-warming (%s) must be >= 0", c.ReceiveBudgetWarming)
 	}
 
 	return nil
@@ -277,7 +321,7 @@ func (c *ConfigChangeNotifier) notifyConfigChange(connectedTo string, cc tlstats
 			cc.AgentIp = agent.ConfigAddrIPs(hctx.RemoteAddr())
 			cc.ConnectedTo = connectedTo
 			var err error
-			hctx.Response, err = args.WriteResult(hctx.Response, cc)
+			hctx.Response, err = args.WriteResultTL1(hctx.Response, cc)
 			hctx.SendLongpollResponse(err)
 		}
 	}

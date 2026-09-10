@@ -30,6 +30,10 @@ type cache2 struct {
 	shutdownF bool
 	shutdownG sync.WaitGroup
 
+	inflightBytes int64
+	inflightReqID uint32
+	inflightReqM  map[uint32]*cache2InflightReq
+
 	// readonly after init
 	shards    map[time.Duration]*cache2Shard // by step
 	loader    tsLoadFunc
@@ -71,6 +75,11 @@ type cache2Loader struct {
 	mode      int // play mode indicator
 	waitN     int // number of values to read from "waitC"
 	forceLoad bool
+}
+
+type cache2InflightReq struct {
+	bytes  int64
+	cancel context.CancelFunc
 }
 
 type cache2LoaderChunk struct {
@@ -196,13 +205,14 @@ func newCache2(h *Handler, chunkSize int, loader tsLoadFunc) *cache2 {
 		info: cache2RuntimeInfo{
 			minChunkAccessTime: time.Now().UnixNano(),
 		},
-		infoM:     make(map[string]map[string]*cache2RuntimeInfo),
-		chunkSize: chunkSize,
+		infoM:        make(map[string]map[string]*cache2RuntimeInfo),
+		chunkSize:    chunkSize,
+		inflightReqM: make(map[uint32]*cache2InflightReq),
 	}
 	c.trimCond = sync.NewCond(&c.mu)
 	c.allocCond = sync.NewCond(&c.mu)
-	c.shards = make(map[time.Duration]*cache2Shard, len(data_model.LODTables[Version3]))
-	for stepSec := range data_model.LODTables[Version3] {
+	c.shards = make(map[time.Duration]*cache2Shard, len(data_model.LODTables[Version6]))
+	for stepSec := range data_model.LODTables[Version6] {
 		step := time.Duration(stepSec) * time.Second
 		size, duration := cache2ChunkSizeDuration(chunkSize, step)
 		c.shards[step] = &cache2Shard{
@@ -232,26 +242,67 @@ func (c *cache2) Get(ctx context.Context, h *requestHandler, q *queryBuilder, lo
 	}()
 	shard := c.shards[time.Duration(lod.StepSec)*time.Second]
 	if h.cacheDisabled() {
-		c.tryNotExceedMemoryHardLimit()
-		res = make(cache2Data, lodSize)
-		_, err = c.loader(ctx, h, q, lod, res, 0)
-		if err == nil {
-			cache2MapStringTags(h, q, res)
-			info := cache2UpdateInfo{}
-			mode := cache2BucketMode(time.Duration(q.play) * time.Second)
-			info.hitSizeS[mode][0] += sizeofCache2Data(res) // cache miss
-			c.updateRuntimeInfo(shard.stepS, h.accessInfo.user, &info)
-		}
+		res, err = c.loadWithoutCache(ctx, h, q, lod, shard, lodSize)
 	} else {
 		res, err = c.newLoader(h, q, lod, lodSize, forceLoad, shard).run(ctx)
 	}
 	return res, err
 }
 
+func (c *cache2) loadWithoutCache(ctx context.Context, h *requestHandler, q *queryBuilder, lod data_model.LOD, shard *cache2Shard, lodSize int) (cache2Data, error) {
+	c.tryNotExceedMemoryHardLimit()
+	res := make(cache2Data, lodSize)
+	_, err := c.loader(contextWithCache2Inflight(ctx, c), h, q, lod, res, 0)
+	if err != nil {
+		return nil, err
+	}
+	cache2MapStringTags(h, q, res)
+	info := cache2UpdateInfo{}
+	mode := cache2BucketMode(time.Duration(q.play) * time.Second)
+	info.hitSizeS[mode][0] += sizeofCache2Data(res) // cache miss
+	c.updateRuntimeInfo(shard.stepS, h.accessInfo.user, &info)
+	return res, nil
+}
+
 func (c *cache2) tryNotExceedMemoryHardLimit() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for c.limits.maxSize != 0 && c.info.size() > c.limits.maxSize {
+	for c.limits.maxSize != 0 && c.info.size() > 0 && c.effectiveSizeLocked() > c.limits.maxSize {
+		c.allocCond.Wait()
+	}
+}
+
+// tryNotExceedMemoryHardLimitInflight
+// Freezing in case (size()==0 && inflightBytes > maxSize).
+// It happens, when one inflight consumes all memory, cancel it to save other requests.
+func (c *cache2) tryNotExceedMemoryHardLimitInflight() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for c.limits.maxSize != 0 && c.effectiveSizeLocked() > c.limits.maxSize {
+		if c.info.size() <= 0 {
+			if len(c.inflightReqM) == 0 {
+				return
+			}
+			maxI, maxB := -1, int64(-1)
+			for i, r := range c.inflightReqM {
+				if r.bytes > maxB {
+					maxI, maxB = int(i), r.bytes
+				}
+			}
+			c.removeReqLocked(uint32(maxI))
+			continue
+		}
+		c.allocCond.Wait()
+	}
+}
+
+// tryNotExceedMemorySoftLimitInflight
+// Freezing in case (size()==0 && inflightBytes > maxSizeSoft).
+// SELECT not started yet. Wait inflight's end, so it doesn't get any worse than it already is.
+func (c *cache2) tryNotExceedMemorySoftLimitInflight() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for c.limits.maxSize != 0 && c.effectiveSizeLocked() > c.limits.maxSizeSoft {
 		c.allocCond.Wait()
 	}
 }
@@ -271,7 +322,7 @@ func (c *cache2) setLimits(v cache2Limits) {
 		return
 	}
 	c.limits = v
-	size := c.info.size()
+	size := c.effectiveSizeLocked()
 	if c.limits.maxSizeSoft < size {
 		c.trimCond.Signal()
 	}
@@ -299,7 +350,7 @@ func (c *cache2) updateRuntimeInfo(step, user string, info *cache2UpdateInfo) {
 func (c *cache2) updateRuntimeInfoUnlocked(step, user string, info *cache2UpdateInfo) {
 	c.info.update(info)
 	if c.limits.maxSize != 0 {
-		size := c.info.size()
+		size := c.effectiveSizeLocked()
 		if c.limits.maxSizeSoft < size {
 			c.trimCond.Signal()
 		}
@@ -326,7 +377,7 @@ func (c *cache2) sendMetrics(client *statshouse.Client) {
 	tags := [2][2]statshouse.NamedTags{
 		{ // default mode
 			statshouse.NamedTags{
-				{"1", srvfunc.HostnameForStatshouse()},
+				{"1", srvfunc.Hostname()},
 				{"2"},  // default mode
 				{"3"},  // miss
 				{"4"},  // step
@@ -334,7 +385,7 @@ func (c *cache2) sendMetrics(client *statshouse.Client) {
 				{"_s"}, // user name
 			},
 			statshouse.NamedTags{
-				{"1", srvfunc.HostnameForStatshouse()},
+				{"1", srvfunc.Hostname()},
 				{"2"},      // default mode
 				{"3", "1"}, // hit
 				{"4"},      // step
@@ -344,7 +395,7 @@ func (c *cache2) sendMetrics(client *statshouse.Client) {
 		},
 		{ // play mode
 			statshouse.NamedTags{
-				{"1", srvfunc.HostnameForStatshouse()},
+				{"1", srvfunc.Hostname()},
 				{"2", "1"}, // play mode
 				{"3"},      // miss
 				{"4"},      // step
@@ -352,7 +403,7 @@ func (c *cache2) sendMetrics(client *statshouse.Client) {
 				{"_s"},     // user name
 			},
 			statshouse.NamedTags{
-				{"1", srvfunc.HostnameForStatshouse()},
+				{"1", srvfunc.Hostname()},
 				{"2", "1"}, // play mode
 				{"3", "1"}, // hit
 				{"4"},      // step
@@ -364,9 +415,23 @@ func (c *cache2) sendMetrics(client *statshouse.Client) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.info.normalizeWaterLevel()
+	cacheSize := c.info.size()
+	effectiveSize := c.effectiveSizeLocked()
+	inflightSize := effectiveSize - cacheSize
+	if inflightSize < 0 {
+		inflightSize = 0
+	}
+	sizeTags := statshouse.NamedTags{
+		{"1", srvfunc.Hostname()},
+		{"2"},
+	}
 	// TODO: replace with builtins
 	client.NamedValue("statshouse_api_cache_age", tags[0][0], c.info.age().Seconds())
 	client.NamedCount("statshouse_api_cache_waiting", tags[0][0], float64(c.waitN.Load()))
+	sizeTags[1][1] = "size"
+	client.NamedValue("statshouse_api_cache_memory_size", sizeTags, float64(cacheSize))
+	sizeTags[1][1] = "inflight_size"
+	client.NamedValue("statshouse_api_cache_memory_size", sizeTags, float64(inflightSize))
 	for i := 0; i < 2; i++ {
 		client.NamedValue("statshouse_api_cache_sum_size", tags[i][0], float64(c.info.sizeS[i]))
 		client.NamedCount("statshouse_api_cache_sum_bucket_count", tags[i][0], float64(c.info.bucketCountS[i]))
@@ -659,7 +724,7 @@ func (l *cache2Loader) loadChunks() {
 	c, b := l.cache, l.bucket
 	data := l.data[first.chunkStart:last.chunkEnd]
 
-	ctx, cancel := context.WithTimeout(context.Background(), QuerySelectTimeoutDefault)
+	ctx, cancel := context.WithTimeout(contextWithCache2Inflight(context.Background(), c), QuerySelectTimeoutDefault)
 	defer cancel()
 	_, err := c.loader(ctx, h, q, lod, data, 0)
 	if err == nil {
@@ -715,7 +780,7 @@ func (l *cache2Loader) loadChunks() {
 		// copy data to awaiters
 		for _, a := range awaiters {
 			if err == nil {
-				i := a.chunkOffset + a.loadStart
+				i := a.loadStart
 				j := a.chunkOffset
 				for i < a.loadEnd {
 					a.loaderData[i] = append(a.loaderData[i][:0], chunkData[j]...)
@@ -810,7 +875,7 @@ func (c *cache2LoaderChunk) copy(l *cache2Loader, info *cache2UpdateInfo) {
 	// update runtime info and send metrics
 	bucket, mode := l.bucket, 0
 	tags := statshouse.NamedTags{
-		{"1", srvfunc.HostnameForStatshouse()},
+		{"1", srvfunc.Hostname()},
 		{"2", "0"}, // mode
 		{"4", l.shard.stepS},
 		{"5", getStatTokenName(bucket.fau)},

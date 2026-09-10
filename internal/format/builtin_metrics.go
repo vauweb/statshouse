@@ -203,42 +203,38 @@ This metric uses sampling budgets of metric it refers to, so flooding by errors 
 		Description: "status",
 		ValueComments: convertToValueComments(map[int32]string{
 			TagValueIDSrcIngestionStatusOKCached:                      "ok_cached",
-			TagValueIDSrcIngestionStatusOKUncached:                    "ok_uncached",
 			TagValueIDSrcIngestionStatusErrMetricNotFound:             "err_metric_not_found",
 			TagValueIDSrcIngestionStatusErrNanInfValue:                "err_nan_inf_value",
 			TagValueIDSrcIngestionStatusErrNanInfCounter:              "err_nan_inf_counter",
 			TagValueIDSrcIngestionStatusErrNegativeCounter:            "err_negative_counter",
-			TagValueIDSrcIngestionStatusErrMapOther:                   "err_map_other",
 			TagValueIDSrcIngestionStatusWarnMapTagNameNotFound:        "warn_tag_not_found",
 			TagValueIDSrcIngestionStatusErrMapInvalidRawTagValue:      "err_map_invalid_raw_tag_value",
 			TagValueIDSrcIngestionStatusErrMapTagValueCached:          "err_map_tag_value_cached",
 			TagValueIDSrcIngestionStatusErrMapTagValue:                "err_map_tag_value",
-			TagValueIDSrcIngestionStatusErrMapGlobalQueueOverload:     "err_map_global_queue_overload",
-			TagValueIDSrcIngestionStatusErrMapPerMetricQueueOverload:  "err_map_per_metric_queue_overload",
 			TagValueIDSrcIngestionStatusErrMapTagValueEncoding:        "err_validate_tag_value_utf8",
-			TagValueIDSrcIngestionStatusOKLegacy:                      "ok_legacy_protocol",
-			TagValueIDSrcIngestionStatusErrMetricNonCanonical:         "non_canonical_name",
 			TagValueIDSrcIngestionStatusErrMetricDisabled:             "err_metric_disabled",
-			TagValueIDSrcIngestionStatusErrLegacyProtocol:             "err_legacy_protocol",
-			TagValueIDSrcIngestionStatusWarnDeprecatedT:               "warn_deprecated_field_t",
-			TagValueIDSrcIngestionStatusWarnDeprecatedStop:            "warn_deprecated_field_stop",
 			TagValueIDSrcIngestionStatusWarnMapTagSetTwice:            "warn_map_tag_set_twice",
 			TagValueIDSrcIngestionStatusWarnDeprecatedKeyName:         "warn_deprecated_tag_name",
 			TagValueIDSrcIngestionStatusErrMetricNameEncoding:         "err_validate_metric_utf8",
 			TagValueIDSrcIngestionStatusErrMapTagNameEncoding:         "err_validate_tag_name_utf8",
 			TagValueIDSrcIngestionStatusErrValueUniqueBothSet:         "err_value_unique_both_set",
-			TagValueIDSrcIngestionStatusWarnOldCounterSemantic:        "warn_deprecated_counter_semantic",
 			TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue:     "warn_map_invalid_raw_tag_value",
 			TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft:      "warn_tag_draft_found",
 			TagValueIDSrcIngestionStatusErrShardingFailed:             "err_metric_sharding_failed",
 			TagValueIDSrcIngestionStatusWarnTimestampClampedPast:      "warn_timestamp_clamped_past",
 			TagValueIDSrcIngestionStatusWarnTimestampClampedFutureAgg: "warn_timestamp_clamped_future_agg",
 			TagValueIDSrcIngestionStatusErrMetricBuiltin:              "err_metric_builtin",
-			TagValueIDSrcIngestionStatusOKDup:                         "ok_dup",
 			TagValueIDSrcIngestionStatusWarnTimestampClampedFuture:    "warn_timestamp_clamped_future",
+			TagValueIDSrcIngestionStatusErrTooBigCounter:              "err_too_big_counter",
+			TagValueIDSrcIngestionStatusErrTooBigValue:                "err_too_big_value",
+			TagValueIDSrcIngestionStatusErrZeroCounter:                "err_zero_counter",
+			TagValueIDSrcIngestionStatusErrMapTagValueCorrupted:       "err_map_tag_value_corrupted",
 		}),
 	}, {
 		Description: "tag_id",
+	}, {
+		Description:   "component",
+		ValueComments: convertToValueComments(componentToValue),
 	}},
 	PreKeyTagID:   "1",
 	ShardStrategy: ShardBuiltinDist, // sharded the same way as metrtic it describes
@@ -625,7 +621,8 @@ var BuiltinMetricMetaAggMappingCreated = &MetricMetaValue{
 	Kind: MetricKindValue,
 	Description: `Status of mapping string tags to integer values.
 Value is actual integer value created (by incrementing global counter).
-Set by aggregator.`,
+Set by aggregator. Mapping flood or errors here do not prevent event from being written,
+so serves only as a warning/information for statshouse developers.`,
 	StringTopDescription:    "Tag Values",
 	NoSampleAgent:           false,
 	BuiltinAllowedToReceive: false,
@@ -640,10 +637,10 @@ Set by aggregator.`,
 			TagValueIDAggMappingCreatedStatusOK:                    "ok",
 			TagValueIDAggMappingCreatedStatusCreated:               "created",
 			TagValueIDAggMappingCreatedStatusFlood:                 "mapping_flood",
-			TagValueIDAggMappingCreatedStatusErrorPMC:              "err_pmc",
-			TagValueIDAggMappingCreatedStatusErrorInvariant:        "err_pmc_invariant",
+			TagValueIDAggMappingCreatedStatusErrorRPCFailed:        "err_rpc_failed",
+			TagValueIDAggMappingCreatedStatusErrorInvariant:        "err_invariant", // Must be never, if appears, we should investigate why
 			TagValueIDAggMappingCreatedStatusErrorNotAskedToCreate: "err_not_asked_to_create",
-			TagValueIDAggMappingCreatedStatusErrorInvalidValue:     "err_invalid_value",
+			TagValueIDAggMappingCreatedStatusErrorInvalidString:    "err_invalid_string", // Must be never because all strings are validated, if appears, we should investigate why
 		}),
 	}, {
 		Description: "tag_id",
@@ -684,12 +681,13 @@ var BuiltinMetricMetaVersions = &MetricMetaValue{
 	}, {}},
 }
 
-const BuiltinMetricIDBadges = -35 // copy of some other metrics for efficient show of errors and warnings
+const BuiltinMetricIDBadges = -35       // copy of some other metrics for efficient show of errors and warnings
+const BuiltinMetricBadgesResolution = 5 // we do lots of SELECTs with this metric, so we keep it smaller
 var BuiltinMetricMetaBadges = &MetricMetaValue{
 	Name:                    "__badges",
 	Kind:                    MetricKindValue,
 	Description:             "System metric used to display UI badges above plot. Stores stripped copy of some other builtin metrics.",
-	Resolution:              5,
+	Resolution:              BuiltinMetricBadgesResolution,
 	NoSampleAgent:           false, // marshalled by aggregator to the same shard metric is
 	BuiltinAllowedToReceive: false,
 	WithAgentEnvRouteArch:   false, // this metric must be extremely lightweight
@@ -701,7 +699,7 @@ var BuiltinMetricMetaBadges = &MetricMetaValue{
 			TagValueIDBadgeAggSamplingFactor:   "aggregator_sampling_factor",
 			TagValueIDBadgeIngestionErrors:     "ingestion_errors",
 			TagValueIDBadgeIngestionWarnings:   "ingestion_warnings",
-			TagValueIDBadgeAggMappingErrors:    "mapping_errors",
+			TagValueIDBadgeAggMappingErrors:    "mapping_errors", // not used since mapping errors do not affect metrics
 			TagValueIDBadgeContributors:        "contributors",
 		}),
 	}, {
@@ -1024,6 +1022,7 @@ var BuiltinMetricMetaRPCRequests = &MetricMetaValue{
 			0x75a7f68e: "statshouse.getTagMappingBootstrap",
 			0x41df72a3: "statshouse.getTargets2",
 			0x4285ff53: "statshouse.sendKeepAlive2",
+			0x4285ff54: "statshouse.sendKeepAlive3",
 			0x44575940: "statshouse.sendSourceBucket2",
 			0x0d04aa3f: "statshouse.sendSourceBucket3",
 			0x4285ff58: "statshouse.testConnection2",
@@ -1614,6 +1613,11 @@ var BuiltinMetricMetaSrcSamplingSizeBytes = &MetricMetaValue{
 			BuiltinGroupIDHost:    "host",
 			BuiltinGroupIDMissing: "missing",
 		}),
+	}, {
+		Name: "version",
+		ValueComments: convertToValueComments(map[int32]string{
+			1: "from_agg",
+		}),
 	}},
 }
 
@@ -1741,6 +1745,13 @@ var BuiltinMetricMetaSrcSamplingBudget = &MetricMetaValue{
 	Tags: []MetricMetaTag{{
 		Name:          "component",
 		ValueComments: convertToValueComments(componentToValue),
+	}, {
+		Description: "type",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDSrcSamplingBudget:       "budget",
+			TagValueIDSrcSamplingBudgetUsed:   "used",
+			TagValueIDSrcSamplingBudgetComing: "coming",
+		}),
 	}},
 }
 
@@ -1795,6 +1806,11 @@ var BuiltinMetricMetaSrcSamplingGroupBudget = &MetricMetaValue{
 			BuiltinGroupIDBuiltin: "builtin",
 			BuiltinGroupIDHost:    "host",
 			BuiltinGroupIDMissing: "missing",
+		}),
+	}, {
+		Name: "version",
+		ValueComments: convertToValueComments(map[int32]string{
+			1: "from_agg",
 		}),
 	}},
 }
@@ -2507,6 +2523,8 @@ var BuiltinMetricMetaClientWriteError = &MetricMetaValue{
 			1: "golang",
 			2: "python",
 			3: "rust",
+			4: "php",
+			5: "cpp",
 		}),
 	}, {
 		Description: "cause",
@@ -2549,6 +2567,7 @@ var BuiltinMetricMetaAggBucketInfo = &MetricMetaValue{
 			TagValueIDAggBucketInfoNewKeys:            "new_keys",
 			TagValueIDAggBucketInfoMetrics:            "metrics",
 			TagValueIDAggBucketInfoOutdatedRows:       "outdated_rows",
+			TagValueIDAggBucketInfoMappingSent:        "sent_to_agent",
 		}),
 	}, {}},
 }
@@ -2633,21 +2652,9 @@ var BuiltinMetricMetaMappingCacheEvent = &MetricMetaValue{
 	}},
 }
 
-var BuiltinMetricMetaMappingQueueSize = &MetricMetaValue{
-	Name:                    "__mapping_queue_size",
-	Kind:                    MetricKindValue,
-	Description:             "Elements in aggregator new conveyor mapping queue",
-	NoSampleAgent:           true, // low cardinality
-	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
-	WithAggregatorID:        true,
-	Tags:                    []MetricMetaTag{{ // reserve for component
-	}},
-}
-
 var BuiltinMetricMetaMappingQueueEvent = &MetricMetaValue{
 	Name:                    "__mapping_queue_events",
-	Kind:                    MetricKindCounter,
+	Kind:                    MetricKindValue,
 	Description:             "Events in aggregator new conveyor mapping queue",
 	NoSampleAgent:           true, // generated on aggregators, must be delivered without losses
 	BuiltinAllowedToReceive: false,
@@ -2660,22 +2667,10 @@ var BuiltinMetricMetaMappingQueueEvent = &MetricMetaValue{
 			TagValueIDMappingQueueEventUnknownMapRemove:  "uknown_map_remove",
 			TagValueIDMappingQueueEventUnknownMapAdd:     "unknown_map_add",
 			TagValueIDMappingQueueEventUnknownListRemove: "unknown_list_remove",
-			TagValueIDMappingQueueEventUnknownListAdd:    "unknown_list_add",
+			TagValueIDMappingQueueEventUnknownListAdd:    "unknown_list_add", // historic value, never written
 			TagValueIDMappingQueueEventCreateMapAdd:      "create_map_add",
 			TagValueIDMappingQueueEventCreateMapRemove:   "create_map_remove",
 		}),
-	}},
-}
-
-var BuiltinMetricMetaMappingQueueRemovedHitsAvg = &MetricMetaValue{
-	Name:                    "__mapping_queue_removed_hits_avg",
-	Kind:                    MetricKindValue,
-	Description:             "When aggregator new conveyor mapping queue is full, elements will be removed. Their average hit counter is reported here.",
-	NoSampleAgent:           true, // generated on aggregators, must be delivered without losses
-	BuiltinAllowedToReceive: false,
-	WithAgentEnvRouteArch:   false,
-	WithAggregatorID:        true,
-	Tags:                    []MetricMetaTag{{ // reserve for component
 	}},
 }
 
@@ -2848,11 +2843,9 @@ var BuiltinMetricMetaApiChRequests = &MetricMetaValue{
 	}},
 }
 
-const BuiltinMetricIDMigrationLog = -141
-
 var BuiltinMetricMetaMigrationLog = &MetricMetaValue{
 	Name:                    "__migration_log",
-	Kind:                    MetricKindCounter,
+	Kind:                    MetricKindValue,
 	Description:             "Number of rows migrated in successful migration step",
 	NoSampleAgent:           true, // because we need to know exact number of migrated rows
 	BuiltinAllowedToReceive: false,
@@ -2867,6 +2860,7 @@ var BuiltinMetricMetaMigrationLog = &MetricMetaValue{
 			TagValueIDMigrationSourceV2:   "v2",
 			TagValueIDMigrationSourceV1:   "v1",
 			TagValueIDMigrationSourceStop: "stop",
+			TagValueIDMigrationSourceV3:   "v3",
 		}),
 	}},
 }
@@ -2956,7 +2950,6 @@ var BuiltinMetricMetaIngestionStatusNoShard = &MetricMetaValue{
 		Description: "status",
 		ValueComments: convertToValueComments(map[int32]string{
 			TagValueIDSrcIngestionStatusErrMetricNotFound:     "err_metric_not_found",
-			TagValueIDSrcIngestionStatusErrMetricNonCanonical: "non_canonical_name",
 			TagValueIDSrcIngestionStatusErrMetricDisabled:     "err_metric_disabled",
 			TagValueIDSrcIngestionStatusErrMetricNameEncoding: "err_validate_metric_utf8",
 			TagValueIDSrcIngestionStatusErrShardingFailed:     "err_metric_sharding_failed",
@@ -3095,5 +3088,110 @@ var BuiltinMetricMetaHeartbeatVersionIngress = &MetricMetaValue{
 		Description: "arg_l",
 	}, 45: {
 		Description: "arg_other",
+	}},
+}
+
+var BuiltinMetricMetaAggReceiveSrcOriginalSize = &MetricMetaValue{
+	Name:                    "__agg_receive_src_original_size",
+	Kind:                    MetricKindValue,
+	Description:             "Total original size reported by agents before budget split, per metric.",
+	MetricType:              MetricByte,
+	Resolution:              60,
+	NoSampleAgent:           true, // bounded by metrics
+	BuiltinAllowedToReceive: false,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description: "metric",
+		BuiltinKind: BuiltinKindMetric,
+	}},
+}
+
+var BuiltinMetricMetaAggSendSrcBudget = &MetricMetaValue{
+	Name:                    "__agg_send_src_budget",
+	Kind:                    MetricKindValue,
+	Description:             "Total receive budget allocated by aggregator for each metric.",
+	MetricType:              MetricByte,
+	Resolution:              60,
+	NoSampleAgent:           true, // bounded by metrics
+	BuiltinAllowedToReceive: false,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description: "metric",
+		BuiltinKind: BuiltinKindMetric,
+	}},
+}
+
+var BuiltinMetricMetaMappingUsage = &MetricMetaValue{
+	Name: "__mapping_usage",
+	Kind: MetricKindCounter,
+	Description: `Tracks the usage of flagged mappings (currently redundant mappings - candidates for deletion are flagged).
+Emitted by aggregators, metadata and api once per second per (component, mapping_id) pair when the redundant set is non-empty.
+A value present means the mapping is still in use and should not be deleted.`,
+	NoSampleAgent:           true, // we must not lose data: zero counts are the signal that a mapping is unused
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{
+		Description:   "component",
+		ValueComments: convertToValueComments(componentToValue),
+	}, {
+		Description: "mapping_id",
+		RawKind:     "int",
+	}},
+}
+
+var BuiltinMetricMetaAggTagMapperInfo = &MetricMetaValue{
+	Name:                    "__agg_tag_mapper_info",
+	Kind:                    MetricKindValue,
+	Description:             "Tag mapper string top status.",
+	NoSampleAgent:           true, // generated on aggregators, must be delivered without losses
+	BuiltinAllowedToReceive: false,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        true,
+	Tags: []MetricMetaTag{{ // reserve for component
+	}, {
+		Description: "measurement",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDAggTagMapperInfoElements:       "elements",
+			TagValueIDAggTagMapperInfoSamplingFactor: "sampling_factor",
+			TagValueIDAggTagMapperInfoHitsAvg:        "hits_avg",
+			TagValueIDAggTagMapperInfoTotalAvg:       "total_avg",
+			TagValueIDAggTagMapperInfoTimeAvg:        "time_avg",
+		}),
+	}},
+}
+
+const BuiltinMetricIDAPIDashboardUsage = -157
+
+var BuiltinMetricMetaAPIDashboardUsage = &MetricMetaValue{
+	Name:                    "__api_dashboard_usage",
+	Kind:                    MetricKindCounter,
+	Description:             "Dashboard usage",
+	NoSampleAgent:           false,
+	BuiltinAllowedToReceive: true,
+	WithAgentEnvRouteArch:   false,
+	WithAggregatorID:        false,
+	Tags: []MetricMetaTag{{
+		Description: "protocol",
+		ValueComments: convertToValueComments(map[int32]string{
+			TagValueIDRPC:  "RPC",
+			TagValueIDHTTP: "http",
+		}),
+	}, {
+		Description: "method",
+	}, {
+		Description: "host",
+	}, {
+		Description: "token-short",
+	}, {
+		Description: "token-long",
+	}, {
+		Description: "dashboard",
+	}, {
+		Description:   "token_source",
+		RawKind:       "int",
+		ValueComments: convertToValueComments(tokenSourceToValue),
 	}},
 }

@@ -27,6 +27,7 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 		var createMetricEvent tlmetadata.CreateMetricEvent
 		var putMappingEvent tlmetadata.PutMappingEvent
 		var createMappingEvent tlmetadata.CreateMappingEvent
+		var deleteMappingsEvent tlmetadata.DeleteMappingsEvent
 		var editEntityEvent tlmetadata.EditEntityEvent
 		var createEntityEvent tlmetadata.CreateEntityEvent
 		var putBootstrapEvent tlmetadata.PutBootstrapEvent
@@ -42,7 +43,7 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 
 			switch tag {
 			case editMetricEvent.TLTag():
-				tail, err = editMetricEvent.Read(data)
+				tail, err = editMetricEvent.ReadTL1(data)
 				if err != nil {
 					return fsbinlog.AddPadding(readCount), err
 				}
@@ -53,7 +54,7 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 					}
 				}
 			case editEntityEvent.TLTag():
-				tail, err = editEntityEvent.Read(data)
+				tail, err = editEntityEvent.ReadTL1(data)
 				if err != nil {
 					return fsbinlog.AddPadding(readCount), err
 				}
@@ -64,7 +65,7 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 					}
 				}
 			case createMetricEvent.TLTag():
-				tail, err = createMetricEvent.Read(data)
+				tail, err = createMetricEvent.ReadTL1(data)
 				if err != nil {
 					return fsbinlog.AddPadding(readCount), err
 				}
@@ -75,7 +76,7 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 					}
 				}
 			case createEntityEvent.TLTag():
-				tail, err = createEntityEvent.Read(data)
+				tail, err = createEntityEvent.ReadTL1(data)
 				if err != nil {
 					return fsbinlog.AddPadding(readCount), err
 				}
@@ -86,7 +87,7 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 					}
 				}
 			case putMappingEvent.TLTag():
-				tail, err = putMappingEvent.Read(data)
+				tail, err = putMappingEvent.ReadTL1(data)
 				if err != nil {
 					return fsbinlog.AddPadding(readCount), err
 				}
@@ -97,7 +98,7 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 					}
 				}
 			case createMappingEvent.TLTag():
-				tail, err = createMappingEvent.Read(data)
+				tail, err = createMappingEvent.ReadTL1(data)
 				if err != nil {
 					return fsbinlog.AddPadding(readCount), err
 				}
@@ -107,8 +108,19 @@ func applyScanEvent(scanOnly bool) func(conn sqlite.Conn, offset int64, data []b
 						return fsbinlog.AddPadding(readCount), fmt.Errorf("can't apply binlog event MetadataCreateMappingEvent: %w", err)
 					}
 				}
+			case deleteMappingsEvent.TLTag():
+				tail, err = deleteMappingsEvent.ReadTL1(data)
+				if err != nil {
+					return fsbinlog.AddPadding(readCount), err
+				}
+				if !scanOnly {
+					err = applyDeleteMappingsEvent(conn, deleteMappingsEvent)
+					if err != nil {
+						return fsbinlog.AddPadding(readCount), fmt.Errorf("can't apply binlog event MetadataDeleteMappingsEvent: %w", err)
+					}
+				}
 			case putBootstrapEvent.TLTag():
-				tail, err = putBootstrapEvent.Read(data)
+				tail, err = putBootstrapEvent.ReadTL1(data)
 				if err != nil {
 					return fsbinlog.AddPadding(readCount), err
 				}
@@ -196,6 +208,16 @@ func applyCreateMappingEvent(conn sqlite.Conn, event tlmetadata.CreateMappingEve
 		sqlite.BlobString("$name", event.Key),
 		sqlite.Int64("$id", int64(event.Id)),
 	)
+	return err
+}
+
+func applyDeleteMappingsEvent(conn sqlite.Conn, event tlmetadata.DeleteMappingsEvent) error {
+	idsInt64 := make([]int64, len(event.Ids))
+	for i, v := range event.Ids {
+		idsInt64[i] = int64(v)
+	}
+	_, err := conn.Exec("delete_mappings", "DELETE FROM mappings WHERE id in ($ids$)",
+		sqlite.Int64Slice("$ids$", idsInt64))
 	return err
 }
 
@@ -298,7 +320,7 @@ func getOrCreateMapping(conn sqlite.Conn, cache []byte, metricName, key string, 
 		Budget:    countToInsert,
 	}
 	event.SetCreate(!metricLimitIsExists)
-	eventBytes := event.WriteBoxed(cache)
+	eventBytes := event.WriteTL1Boxed(cache)
 	return tlmetadata.GetMappingResponseCreated{Id: id}.AsUnion(), eventBytes, nil
 }
 
@@ -314,24 +336,13 @@ func putMapping(conn sqlite.Conn, cache []byte, ks []string, vs []int32) ([]byte
 		Keys:  ks,
 		Value: vs,
 	}
-	cache = event.WriteBoxed(cache)
+	cache = event.WriteTL1Boxed(cache)
 	return cache, nil
 }
 
 func applyPutBootstrap(conn sqlite.Conn, cache []byte, mappings []tlstatshouse.Mapping) (int32, []byte, error) {
-	filteredMappings := make([]tlstatshouse.Mapping, 0, len(mappings))
-	for _, m := range mappings {
-		k, isExists, err := getMappingByID(conn, m.Value)
-		if err != nil {
-			return 0, cache, err
-		}
-		if !isExists || k != m.Str {
-			continue
-		}
-		filteredMappings = append(filteredMappings, m)
-	}
-	res := tlstatshouse.GetTagMappingBootstrapResult{Mappings: filteredMappings}
-	bytes := res.Write(nil)
+	res := tlstatshouse.GetTagMappingBootstrapResult{Mappings: mappings}
+	bytes := res.WriteTL1(nil)
 	_, err := conn.Exec("upsert_bootstrap", "INSERT OR REPLACE INTO property (name, data) VALUES ($name, $data)",
 		sqlite.BlobString("$name", bootstrapFieldName),
 		sqlite.Blob("$data", bytes))
@@ -339,8 +350,8 @@ func applyPutBootstrap(conn sqlite.Conn, cache []byte, mappings []tlstatshouse.M
 		return 0, cache, err
 	}
 	event := tlmetadata.PutBootstrapEvent{
-		Mappings: filteredMappings,
+		Mappings: mappings,
 	}
-	cache = event.WriteBoxed(cache)
-	return int32(len(filteredMappings)), cache, nil
+	cache = event.WriteTL1Boxed(cache)
+	return int32(len(mappings)), cache, nil
 }

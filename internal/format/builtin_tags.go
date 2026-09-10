@@ -98,39 +98,33 @@ const (
 	TagValueIDDiskCacheErrorCompressFailed    = 6
 
 	TagValueIDSrcIngestionStatusOKCached                      = 10
-	TagValueIDSrcIngestionStatusOKUncached                    = 11
 	TagValueIDSrcIngestionStatusErrMetricNotFound             = 21
 	TagValueIDSrcIngestionStatusErrNanInfValue                = 23
 	TagValueIDSrcIngestionStatusErrNanInfCounter              = 24
 	TagValueIDSrcIngestionStatusErrNegativeCounter            = 25
-	TagValueIDSrcIngestionStatusErrMapOther                   = 30 // never written, for historic data
 	TagValueIDSrcIngestionStatusWarnMapTagNameNotFound        = 33
 	TagValueIDSrcIngestionStatusErrMapInvalidRawTagValue      = 34 // warning now, for historic data
 	TagValueIDSrcIngestionStatusErrMapTagValueCached          = 35
 	TagValueIDSrcIngestionStatusErrMapTagValue                = 36
-	TagValueIDSrcIngestionStatusErrMapGlobalQueueOverload     = 37
-	TagValueIDSrcIngestionStatusErrMapPerMetricQueueOverload  = 38
 	TagValueIDSrcIngestionStatusErrMapTagValueEncoding        = 39
-	TagValueIDSrcIngestionStatusOKLegacy                      = 40 // never written, for historic data
-	TagValueIDSrcIngestionStatusErrMetricNonCanonical         = 41 // never written, for historic data
 	TagValueIDSrcIngestionStatusErrMetricDisabled             = 42
-	TagValueIDSrcIngestionStatusErrLegacyProtocol             = 43 // we stopped adding metrics to conveyor via legacy protocol
-	TagValueIDSrcIngestionStatusWarnDeprecatedT               = 44 // never written, for historic data
-	TagValueIDSrcIngestionStatusWarnDeprecatedStop            = 45 // never written, for historic data
 	TagValueIDSrcIngestionStatusWarnMapTagSetTwice            = 46
-	TagValueIDSrcIngestionStatusWarnDeprecatedKeyName         = 47
+	TagValueIDSrcIngestionStatusWarnDeprecatedKeyName         = 47 // "key0".."key15", "skey".
 	TagValueIDSrcIngestionStatusErrMetricNameEncoding         = 48
 	TagValueIDSrcIngestionStatusErrMapTagNameEncoding         = 49
 	TagValueIDSrcIngestionStatusErrValueUniqueBothSet         = 50
-	TagValueIDSrcIngestionStatusWarnOldCounterSemantic        = 51 // never written, for historic data
 	TagValueIDSrcIngestionStatusWarnMapInvalidRawTagValue     = 52
 	TagValueIDSrcIngestionStatusWarnMapTagNameFoundDraft      = 53
 	TagValueIDSrcIngestionStatusErrShardingFailed             = 54
 	TagValueIDSrcIngestionStatusWarnTimestampClampedPast      = 55
 	TagValueIDSrcIngestionStatusWarnTimestampClampedFutureAgg = 56
 	TagValueIDSrcIngestionStatusErrMetricBuiltin              = 57
-	TagValueIDSrcIngestionStatusOKDup                         = 58 // TODO - remove after we do not need to investigate conveyor duplication code
 	TagValueIDSrcIngestionStatusWarnTimestampClampedFuture    = 59
+	TagValueIDSrcIngestionStatusErrTooBigCounter              = 60
+	TagValueIDSrcIngestionStatusErrTooBigValue                = 61
+	TagValueIDSrcIngestionStatusErrZeroCounter                = 62
+	TagValueIDSrcIngestionStatusErrMapTagValueCorrupted       = 63
+	// when adding here, do not forget to modify switch in format.MapErrorFromHeader()
 
 	TagValueIDPacketFormatLegacy   = 1
 	TagValueIDPacketFormatTL       = 2
@@ -203,10 +197,10 @@ const (
 	TagValueIDAggMappingCreatedStatusOK                    = 1
 	TagValueIDAggMappingCreatedStatusCreated               = 2
 	TagValueIDAggMappingCreatedStatusFlood                 = 3
-	TagValueIDAggMappingCreatedStatusErrorPMC              = 4
+	TagValueIDAggMappingCreatedStatusErrorRPCFailed        = 4
 	TagValueIDAggMappingCreatedStatusErrorInvariant        = 5
 	TagValueIDAggMappingCreatedStatusErrorNotAskedToCreate = 6
-	TagValueIDAggMappingCreatedStatusErrorInvalidValue     = 7
+	TagValueIDAggMappingCreatedStatusErrorInvalidString    = 7
 
 	TagValueIDAggMappingCreatedConveyorOld = 1
 	TagValueIDAggMappingCreatedConveyorNew = 2
@@ -286,6 +280,7 @@ const (
 	TagValueIDMigrationSourceV2   = 1
 	TagValueIDMigrationSourceV1   = 2
 	TagValueIDMigrationSourceStop = 3
+	TagValueIDMigrationSourceV3   = 4
 )
 
 var insertKindToValue = map[int32]string{
@@ -353,6 +348,10 @@ const (
 	TagValueIDSamplingDecisionKeep    = -1
 	TagValueIDSamplingDecisionDiscard = -2
 
+	TagValueIDSrcSamplingBudget       = 1
+	TagValueIDSrcSamplingBudgetUsed   = 2
+	TagValueIDSrcSamplingBudgetComing = 3
+
 	TagValueIDDMESGParseError = 1
 	TagValueIDAPIPanicError   = 2
 
@@ -385,6 +384,7 @@ const (
 	TagValueIDAggBucketInfoNewKeys            = 12
 	TagValueIDAggBucketInfoMetrics            = 13
 	TagValueIDAggBucketInfoOutdatedRows       = 14
+	TagValueIDAggBucketInfoMappingSent        = 15
 
 	TagValueIDMappingCacheEventHit                 = 1
 	TagValueIDMappingCacheEventMiss                = 2
@@ -393,12 +393,12 @@ const (
 	TagValueIDMappingCacheEventAdd                 = 5
 	TagValueIDMappingCacheEventEvict               = 6
 
-	TagValueIDMappingQueueEventUnknownMapRemove  = 1
+	TagValueIDMappingQueueEventUnknownMapRemove  = 1 // legacy, remove later
 	TagValueIDMappingQueueEventUnknownMapAdd     = 2
-	TagValueIDMappingQueueEventUnknownListRemove = 3
-	TagValueIDMappingQueueEventUnknownListAdd    = 4
+	TagValueIDMappingQueueEventUnknownListRemove = 3 // legacy, remove later
+	TagValueIDMappingQueueEventUnknownListAdd    = 4 // legacy, remove later
 	TagValueIDMappingQueueEventCreateMapAdd      = 5
-	TagValueIDMappingQueueEventCreateMapRemove   = 6
+	TagValueIDMappingQueueEventCreateMapRemove   = 6 // legacy, remove later
 
 	TagValueIDMappingStorageVersionCurrent   = 1
 	TagValueIDMappingStorageVersionLastKnown = 2
@@ -413,6 +413,12 @@ const (
 
 	TagSourceTokenFromClient = 1
 	TagSourceTokenFromVkuth  = 2
+
+	TagValueIDAggTagMapperInfoElements       = 1
+	TagValueIDAggTagMapperInfoSamplingFactor = 2
+	TagValueIDAggTagMapperInfoHitsAvg        = 3
+	TagValueIDAggTagMapperInfoTotalAvg       = 4
+	TagValueIDAggTagMapperInfoTimeAvg        = 5
 )
 
 var (

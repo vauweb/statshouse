@@ -8,7 +8,6 @@ package data_model
 
 import (
 	"bytes"
-	"math"
 
 	"github.com/hrissan/tdigest"
 	"pgregory.net/rand"
@@ -38,7 +37,7 @@ func (k *Key) STagSlice() []string {
 }
 
 // does not copy strings, we need max efficiency so want to look up in local map before converting []byte to string
-func KeyFromStatshouseMultiItem(item *tlstatshouse.MultiItemBytes, bucketTimestamp uint32) (key Key, clampedTimestampTag int32) {
+func KeyFromStatshouseMultiItem(item *tlstatshouse.MultiItemBytes, bucketTimestamp uint32) (key Key, ingestionWarning int32) {
 	key.Timestamp = bucketTimestamp
 	if item.IsSetT() {
 		key.Timestamp = item.T
@@ -49,11 +48,11 @@ func KeyFromStatshouseMultiItem(item *tlstatshouse.MultiItemBytes, bucketTimesta
 			// aggregator must clamp anyway for protecting clickhouse.
 			// We set timestamp to bucketTimestamp so ingestion warning of such event corresponds to event itself
 			key.Timestamp = bucketTimestamp
-			clampedTimestampTag = format.TagValueIDSrcIngestionStatusWarnTimestampClampedFutureAgg
+			ingestionWarning = format.TagValueIDSrcIngestionStatusWarnTimestampClampedFutureAgg
 		} else if int64(key.Timestamp) < int64(bucketTimestamp)-BelieveTimestampWindow {
 			// We set timestamp to bucketTimestamp so ingestion warning of such event corresponds to event itself
 			key.Timestamp = bucketTimestamp
-			clampedTimestampTag = format.TagValueIDSrcIngestionStatusWarnTimestampClampedPast
+			ingestionWarning = format.TagValueIDSrcIngestionStatusWarnTimestampClampedPast
 		}
 		// above checks can be moved below }, but they will always be NOP as bucketTimestamp is both <= newestTime and in believe window
 	}
@@ -156,20 +155,20 @@ func (s *MultiValue) MultiValueToTL(metricInfo *format.MetricMetaValue, item *tl
 	if s.Value.MaxHostTag.I != 0 {
 		item.SetMaxHostTag(s.Value.MaxHostTag.I, fieldsMask)
 	} else if len(s.Value.MaxHostTag.S) > 0 {
-		item.SetMaxHostStag(string(s.Value.MaxHostTag.S), fieldsMask)
+		item.SetMaxHostStag(s.Value.MaxHostTag.S, fieldsMask)
 	}
 	if s.Value.MinHostTag != s.Value.MaxHostTag {
 		if s.Value.MinHostTag.I != 0 {
 			item.SetMinHostTag(s.Value.MinHostTag.I, fieldsMask)
 		} else if len(s.Value.MinHostTag.S) > 0 {
-			item.SetMinHostStag(string(s.Value.MinHostTag.S), fieldsMask)
+			item.SetMinHostStag(s.Value.MinHostTag.S, fieldsMask)
 		}
 	}
 	if s.Value.MaxCounterHostTag != s.Value.MaxHostTag {
 		if s.Value.MaxCounterHostTag.I != 0 {
-			item.SetMaxHostTag(s.Value.MaxCounterHostTag.I, fieldsMask)
+			item.SetMaxCounterHostTag(s.Value.MaxCounterHostTag.I, fieldsMask)
 		} else if len(s.Value.MaxCounterHostTag.S) > 0 {
-			item.SetMaxHostStag(string(s.Value.MaxCounterHostTag.S), fieldsMask)
+			item.SetMaxCounterHostStag(s.Value.MaxCounterHostTag.S, fieldsMask)
 		}
 	}
 	if s.HLL.ItemsCount() != 0 {
@@ -230,15 +229,15 @@ func (s *ItemValue) MergeWithTLItem2(s2 *tlstatshouse.MultiValueBytes, fields_ma
 	s.ValueSet = true
 }
 
-func (s *MultiItem) MergeWithTLMultiItem(rng *rand.Rand, capacity int, s2 *tlstatshouse.MultiItemBytes, hostTag TagUnion) {
+func (s *MultiItem) MergeWithTLMultiItem(rng *rand.Rand, capacity int, s2 *tlstatshouse.MultiItemBytes, hostTag TagUnion) (ingestionError int32) {
 	for _, v := range s2.Top {
-		v.Stag, _ = format.AppendValidStringValue(v.Stag[:0], v.Stag) // TODO - report this error via builtin metrics
+		// Stag is validated in caller
 		mi := s.MapStringTopBytes(rng, capacity, TagUnionBytes{S: v.Stag, I: v.Tag}, v.Value.Counter)
-		// We want to validate all incoming strings. In case of encoding error,
-		// v.Stag will be truncated to empty string, merging Value into 'other' strings
-		mi.MergeWithTL2(rng, &v.Value, v.FieldsMask, hostTag, AggregatorPercentileCompression)
+		if ingestionError = mi.MergeWithTL2(rng, &v.Value, v.FieldsMask, hostTag, AggregatorPercentileCompression); ingestionError != 0 {
+			return
+		}
 	}
-	s.Tail.MergeWithTL2(rng, &s2.Tail, s2.FieldsMask, hostTag, AggregatorPercentileCompression)
+	return s.Tail.MergeWithTL2(rng, &s2.Tail, s2.FieldsMask, hostTag, AggregatorPercentileCompression)
 }
 
 func (s *MultiItem) TLSizeEstimate() int {
@@ -249,16 +248,16 @@ func (s *MultiItem) TLSizeEstimate() int {
 	return size
 }
 
-func (s *MultiValue) MergeWithTL2(rng *rand.Rand, s2 *tlstatshouse.MultiValueBytes, fields_mask uint32, hostTag TagUnion, compression float64) {
+func (s *MultiValue) MergeWithTL2(rng *rand.Rand, s2 *tlstatshouse.MultiValueBytes, fields_mask uint32, hostTag TagUnion, compression float64) (ingestionError int32) {
 	// 1. restore and check cuunter
 	if s2.IsSetCounterEq1(fields_mask) {
 		s2.Counter = 1
 	}
-	if s2.Counter <= 0 || math.IsNaN(s2.Counter) { // sanity check/check for empty String Top tail
+	if s2.Counter == 0 { // Tail can have 0 count, while Top has some
 		return
-	} // TODO - write metric
-	if s2.Counter > math.MaxFloat32 { // agents do similar check, but this is so cheap, we repeat on aggregators.
-		s2.Counter = math.MaxFloat32
+	}
+	if ingestionError = format.ValidateCounter(s2.Counter); ingestionError != 0 {
+		return
 	}
 	// 2. restore hosts
 	if !s2.IsSetMaxHostTag(fields_mask) && !s2.IsSetMaxHostStag(fields_mask) {
@@ -284,12 +283,30 @@ func (s *MultiValue) MergeWithTL2(rng *rand.Rand, s2 *tlstatshouse.MultiValueByt
 		return
 	}
 	// 4. aggregate value
+	if ingestionError = format.ValidateValue(s2.ValueMin); ingestionError != 0 {
+		return
+	}
+	if ingestionError = format.ValidateValue(s2.ValueMax); ingestionError != 0 {
+		return
+	}
+	if ingestionError = format.ValidateValue(s2.ValueSum); ingestionError != 0 {
+		return
+	}
 	s.Value.MergeWithTLItem2(s2, fields_mask)
 	if len(s2.Centroids) != 0 {
 		if s.ValueTDigest == nil {
 			s.ValueTDigest = tdigest.NewWithCompression(compression)
 		}
 		for _, c := range s2.Centroids {
+			if c.Count == 0 {
+				continue
+			}
+			if ingestionError = format.ValidateCounter(float64(c.Count)); ingestionError != 0 {
+				return
+			}
+			if ingestionError = format.ValidateValue(float64(c.Value)); ingestionError != 0 {
+				return
+			}
 			s.ValueTDigest.Add(float64(c.Value), float64(c.Count))
 		}
 	}
@@ -297,6 +314,8 @@ func (s *MultiValue) MergeWithTL2(rng *rand.Rand, s2 *tlstatshouse.MultiValueByt
 		if s.ValueTDigest == nil {
 			s.ValueTDigest = tdigest.NewWithCompression(compression)
 		}
+		// values checked above
 		s.ValueTDigest.Add(float64(s2.ValueMin), float64(s2.Counter))
 	}
+	return
 }
